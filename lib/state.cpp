@@ -2,7 +2,7 @@
 
 using namespace ari_exe;
 
-SymbolTable State::summaries;
+SymbolTable<Summary> State::summaries;
 
 z3::expr
 State::evaluate(llvm::Value* v) {

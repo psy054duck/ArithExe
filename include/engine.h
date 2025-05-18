@@ -80,20 +80,20 @@ namespace ari_exe {
             void run();
 
             // run the engine from the given state
-            void run(State &state);
+            void run(State* state);
 
             // run the engine from the given state one step
             // when branching, it will return two states if both branches are feasible
-            virtual std::vector<State> step(State &state);
+            std::vector<State*> step(State* state);
 
             // build initial state
-            State build_initial_state();
+            State* build_initial_state();
 
             // verity the current state
-            VeriResult verify(State &state);
+            VeriResult verify(State* state);
 
             // test the feasibility of the current state
-            TestResult test(State &state);
+            TestResult test(State* state);
 
         private:
 
@@ -126,7 +126,7 @@ namespace ari_exe {
             llvm::Function* entry = nullptr;
 
             // queue of states
-            std::queue<State> states;
+            std::queue<State*> states;
 
             // z3 solver
             z3::solver solver;

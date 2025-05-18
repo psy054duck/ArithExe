@@ -27,7 +27,7 @@ namespace ari_exe {
             virtual ~AInstruction() = default;
 
             // Execute the instruction on the given state and return the new state(s)
-            virtual std::vector<State> execute(State& state) = 0;
+            virtual std::vector<State*> execute(State* state) = 0;
 
             // Get the next instruction in the same basic block,
             // or nullptr if there is no next instruction in the block.
@@ -49,25 +49,25 @@ namespace ari_exe {
         public:
             AInstructionBinary(llvm::Instruction* inst): AInstruction(inst) {};
             ~AInstructionBinary() = default;
-            std::vector<State> execute(State& state) override;
+            std::vector<State*> execute(State* state) override;
     };
 
     class AInstructionICmp: public AInstruction {
         public:
             AInstructionICmp(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<State> execute(State& state) override;
+            std::vector<State*> execute(State* state) override;
     };
 
     class AInstructionCall: public AInstruction {
         public:
             AInstructionCall(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<State> execute(State& state) override;
+            std::vector<State*> execute(State* state) override;
 
             // This method should only be called when we are doing function summarization.
             // execute the called function if it is not the given function.
             // if the called function is the given one,
             // do not execute it, just save the function application as the value
-            std::vector<State> execute_if_not_target(State& state, llvm::Function* target);
+            std::vector<State*> execute_if_not_target(State* state, llvm::Function* target);
 
             // summarize the called function completely
             // That is, no path condition is given for summarization
@@ -77,40 +77,40 @@ namespace ari_exe {
             bool is_recursive(llvm::Function* target);
 
         private:
-            State execute_unknown(State& state);
-            State execute_assert(State& state);
-            State execute_assume(State& state);
-            State execute_normal(State& state);
+            State* execute_unknown(State* state);
+            State* execute_assert(State* state);
+            State* execute_assume(State* state);
+            State* execute_normal(State* state);
     };
 
     class AInstructionBranch: public AInstruction {
         public:
             AInstructionBranch(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<State> execute(State& state) override;
+            std::vector<State*> execute(State* state) override;
     };
 
     class AInstructionReturn: public AInstruction {
         public:
             AInstructionReturn(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<State> execute(State& state) override;
+            std::vector<State*> execute(State* state) override;
     };
 
     class AInstructionZExt: public AInstruction {
         public:
             AInstructionZExt(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<State> execute(State& state) override;
+            std::vector<State*> execute(State* state) override;
     };
 
     class AInstructionPhi: public AInstruction {
         public:
             AInstructionPhi(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<State> execute(State& state) override;
+            std::vector<State*> execute(State* state) override;
     };
 
     class AInstructionSelect: public AInstruction {
         public:
             AInstructionSelect(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<State> execute(State& state) override;
+            std::vector<State*> execute(State* state) override;
     };
 }
 #endif

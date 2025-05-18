@@ -9,9 +9,9 @@ Engine::Engine(std::unique_ptr<llvm::Module>& mod): mod(std::move(mod)), solver(
     analyze_module();
 }
 
-std::vector<State>
-Engine::step(State &state) {
-    auto pc = state.pc;
+std::vector<State*>
+Engine::step(State* state) {
+    auto pc = state->pc;
     return pc->execute(state);
 }
 
@@ -21,16 +21,16 @@ Engine::set_entry(llvm::Function* entry) {
 }
 
 void
-Engine::run(State &state) {
+Engine::run(State* state) {
     // set the default entry point if not set
     set_default_entry();
     states.push(state);
     while (!states.empty()) {
         auto cur_state = states.front();
         states.pop();
-        if (cur_state.status == State::TERMINATED) {
+        if (cur_state->status == State::TERMINATED) {
             continue;
-        } else if (cur_state.status == State::VERIFYING) {
+        } else if (cur_state->status == State::VERIFYING) {
             auto res = verify(cur_state);
             if (res == HOLD) {
                 llvm::errs() << "HOLD\n";
@@ -39,20 +39,20 @@ Engine::run(State &state) {
             } else if (res == VERIUNKNOWN) {
                 llvm::errs() << "UNKNOWN\n";
             }
-            cur_state.path_condition = cur_state.path_condition
-                                    && cur_state.verification_condition;
-            cur_state.status = State::RUNNING;
+            cur_state->path_condition = cur_state->path_condition
+                                      && cur_state->verification_condition;
+            cur_state->status = State::RUNNING;
             states.push(cur_state);
             continue;
-        } else if (cur_state.status == State::TESTING) {
+        } else if (cur_state->status == State::TESTING) {
             auto res = test(cur_state);
             if (res == FEASIBLE) {
-                cur_state.status = State::RUNNING;
+                cur_state->status = State::RUNNING;
                 states.push(cur_state);
                 continue;
             }
             // TODO: what to do with unknown path?
-        } else if (cur_state.status == State::RUNNING) {
+        } else if (cur_state->status == State::RUNNING) {
             auto new_states = step(cur_state);
             for (auto& new_state : new_states) states.push(new_state);
         }
@@ -65,16 +65,16 @@ Engine::run() {
     llvm::errs() << "Running the engine...\n";
     set_default_entry();
     llvm::errs() << "Entry point: " << entry->getName() << "\n";
-    State initial_state = build_initial_state();
-    llvm::errs() << "Initial Instruction: " << *initial_state.pc->inst << "\n";
+    State* initial_state = build_initial_state();
+    llvm::errs() << "Initial Instruction: " << *initial_state->pc->inst << "\n";
     return run(initial_state);
 }
 
 Engine::VeriResult
-Engine::verify(State &state) {
+Engine::verify(State* state) {
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state.path_condition);
-    assumptions.push_back(!state.verification_condition);
+    assumptions.push_back(state->path_condition);
+    assumptions.push_back(!state->verification_condition);
     auto res = solver.check(assumptions);
     Engine::VeriResult result;
     switch (res) {
@@ -92,9 +92,9 @@ Engine::verify(State &state) {
 }
 
 Engine::TestResult
-Engine::test(State &state) {
+Engine::test(State* state) {
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state.path_condition);
+    assumptions.push_back(state->path_condition);
     auto res = solver.check(assumptions);
     Engine::TestResult result;
     switch (res) {
@@ -111,7 +111,7 @@ Engine::test(State &state) {
     return result;
 }
 
-State
+State*
 Engine::build_initial_state() {
     // build the initial state
     // this state should record global variables
@@ -154,7 +154,7 @@ Engine::build_initial_state() {
         auto arg_value = z3ctx.int_const(arg.getName().str().c_str());
         stack.insert_or_assign_value(&arg, arg_value);
     }
-    auto initial_state = State(z3ctx, AInstruction::create(pc), nullptr,
+    auto initial_state = new State(z3ctx, AInstruction::create(pc), nullptr,
                                globals, stack, z3ctx.bool_val(true), {});
     return initial_state;
 }

@@ -35,7 +35,7 @@ is_simple_rec(z3::func_decl func_decl, z3::expr rhs) {
     return true;
 }
 
-static void
+void
 rec_solver::set_ind_var(z3::expr var) {
     ind_var = var;
 }
@@ -98,7 +98,7 @@ is_one_stride_simple_rec(z3::expr lhs, z3::expr rhs) {
     z3::expr lhs_arg = lhs.arg(0);
 }
 
-static void
+void
 rec_solver::add_assumption(z3::expr e) {
     assumption  = assumption && e;
 }

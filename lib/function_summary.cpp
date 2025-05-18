@@ -90,3 +90,18 @@ function_summary::get_summary() {
     }
     return summary;
 }
+
+z3::expr
+function_summary::function_app_z3(llvm::Function* f) {
+    z3::expr_vector args(rec_s.z3ctx);
+    for (auto& arg : f->args()) {
+        auto arg_value = rec_s.z3ctx.int_const(arg.getName().str().c_str());
+        args.push_back(arg_value);
+    }
+    z3::sort_vector domain(rec_s.z3ctx);
+    for (int i = 0; i < f->arg_size(); i++) {
+        domain.push_back(rec_s.z3ctx.int_sort());
+    }
+    z3::func_decl func = rec_s.z3ctx.function(f->getName().str().c_str(), domain, rec_s.z3ctx.int_sort());
+    return func(args);
+}
