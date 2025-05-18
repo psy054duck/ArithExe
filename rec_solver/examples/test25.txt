@@ -1,0 +1,9 @@
+if (n == 0) {
+    isOdd(n) = 0;
+} else if (n - 1 == 0) {
+    isOdd(n) = 1;
+} else if (n - 1 == 1) {
+    isOdd(n) = 0;
+} else {
+    isOdd(n) = isOdd(n - 2);
+}

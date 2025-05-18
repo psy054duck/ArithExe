@@ -1,0 +1,7 @@
+if (n <= 0) {
+    f(u, n) = g(u);
+} else if (u == n + 1) {
+    f(u, n) = f(u - 1, n - 1) + f(u - 2, n - 1);
+} else {
+    f(u, n) = f(u, n - 1);
+}

@@ -1,0 +1,7 @@
+if (!((0) <= (sarg1))) {
+	smult((sarg), (sarg1)) = smult((sarg), ((0) - (sarg1)));
+} else if (And(((0) <= (sarg1)), ((sarg1) == (0)))) {
+	smult((sarg), (sarg1)) = 0;
+} else if (And(((0) <= (sarg1)), (!((sarg1) == (0))))) {
+	smult((sarg), (sarg1)) = (sarg) + (smult((sarg), ((sarg1) - (1))));
+} 

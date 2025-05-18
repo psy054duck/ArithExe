@@ -1,0 +1,7 @@
+if (n == 0) {
+    addition(m, n) = m;
+} else if (n > 0) {
+    addition(m, n) = addition(m + 1, n - 1);
+} else {
+    addition(m, n) = addition(m - 1, n + 1);
+}

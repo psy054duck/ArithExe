@@ -1,0 +1,7 @@
+if (z <= 0) {
+    f(c, z) = g(c);
+} else if (c == z - 1) {
+    f(c, z) = f(c - 1, z - 1) + f(c - 2, z - 1);
+} else {
+    f(c, z) = f(c, z - 1);
+}
