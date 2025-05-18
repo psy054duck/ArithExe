@@ -7,6 +7,8 @@
 #ifndef ENGINE_H
 #define ENGINE_H
 
+#include <cassert>
+
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -70,30 +72,66 @@ namespace ari_exe {
                 TESTUNKNOWN, // the state is unknown
             };
 
-            Engine();
-            Engine(std::unique_ptr<llvm::Module>& mod);
+            Engine(z3::context& z3ctx);
+            
+            /**
+             * @brief Construct a new Engine object with the given module
+             */
+            Engine(std::unique_ptr<llvm::Module>& mod, z3::context& z3ctx);
 
-            // set the entry point of the module
+            /**
+             * @brief Load a C file and create a llvm module
+             * @param filename The name of C file to load
+             */
+            Engine(const std::string& c_filename, z3::context& z3ctx);
+
+
+            /** 
+             * @brief Run clang to compile C into llvm ir
+             * @param filename The name of the C source file to compile
+             * @return The LLVM IR as a string
+             */
+            static std::string generateLLVMIR(const std::string& c_filename);
+
+            /**
+             * @brief Parse the LLVM IR string into a Module
+             * @param ir_content The LLVM IR as a string
+             * @param context The LLVM context to use for parsing
+             * @return A unique pointer to the parsed Module
+             */
+            static std::unique_ptr<llvm::Module> parseLLVMIR(const std::string& ir_content, llvm::LLVMContext& context);
+
+
+            /**
+             * @brief set the entry point of the module
+             * @param entry the entry point of the module
+             */
             void set_entry(llvm::Function* entry);
 
             // run the engine from empty state
             void run();
 
             // run the engine from the given state
-            void run(State* state);
+            void run(std::shared_ptr<State> state);
 
             // run the engine from the given state one step
             // when branching, it will return two states if both branches are feasible
-            std::vector<State*> step(State* state);
+            std::vector<std::shared_ptr<State>> step(std::shared_ptr<State> state);
 
             // build initial state
-            State* build_initial_state();
+            std::shared_ptr<State> build_initial_state();
 
             // verity the current state
-            VeriResult verify(State* state);
+            VeriResult verify(std::shared_ptr<State> state);
 
             // test the feasibility of the current state
-            TestResult test(State* state);
+            TestResult test(std::shared_ptr<State> state);
+
+            /**
+             * @brief Verify if the program is correct
+             * @return The result of the verification
+             */
+            VeriResult verify();
 
         private:
 
@@ -116,8 +154,11 @@ namespace ari_exe {
             std::map<llvm::Function*, llvm::DominatorTree> DTs;
             std::map<llvm::Function*, llvm::PostDominatorTree> PDTs;
 
+            // LLVM context for keeping the module
+            llvm::LLVMContext context;
+
             // Z3 related
-            z3::context z3ctx;
+            z3::context& z3ctx;
 
             // symbol table
 
@@ -126,11 +167,13 @@ namespace ari_exe {
             llvm::Function* entry = nullptr;
 
             // queue of states
-            std::queue<State*> states;
+            std::queue<std::shared_ptr<State>> states;
 
             // z3 solver
             z3::solver solver;
 
+            // store all verification results for all paths
+            std::vector<VeriResult> results;
     };
 }
 

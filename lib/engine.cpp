@@ -2,15 +2,73 @@
 #include "SymbolTable.h"
 
 #include <fstream>
+#include <sstream>
+#include <algorithm>
+
+#include <spdlog/spdlog.h>
 
 using namespace ari_exe;
 
-Engine::Engine(std::unique_ptr<llvm::Module>& mod): mod(std::move(mod)), solver(z3ctx) {
+Engine::Engine(z3::context& z3ctx): mod(nullptr), z3ctx(z3ctx), solver(z3ctx) {}
+
+Engine::Engine(std::unique_ptr<llvm::Module>& mod, z3::context& z3ctx): mod(std::move(mod)), z3ctx(z3ctx), solver(z3ctx) {
     analyze_module();
 }
 
-std::vector<State*>
-Engine::step(State* state) {
+Engine::Engine(const std::string& c_filename, z3::context& z3ctx): mod(nullptr), z3ctx(z3ctx), solver(z3ctx) {
+    std::string ir_content = generateLLVMIR(c_filename);
+    mod = parseLLVMIR(ir_content, context);
+    analyze_module();
+}
+
+Engine::VeriResult
+Engine::verify() {
+    run();
+    auto res = VERIUNKNOWN;
+    if (std::all_of(results.begin(), results.end(), [](VeriResult veri_res) { return veri_res == HOLD; })) {
+        res = HOLD;
+    } else if (std::any_of(results.begin(), results.end(), [](VeriResult veri_res) { return veri_res == FAIL; })) {
+        res = FAIL;
+    }
+    return res;
+}
+
+std::string
+Engine::generateLLVMIR(const std::string& c_filename) {
+    std::ostringstream clang_cmd;
+    clang_cmd << "clang -emit-llvm -S -O0 -Xclang -disable-O0-optnone "
+              << c_filename << " -o -";
+    FILE* pipe = popen(clang_cmd.str().c_str(), "r");
+    if (!pipe) {
+        throw std::runtime_error("Failed to run clang");
+    }
+
+    std::string ir_content;
+    char buffer[8192];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        ir_content += buffer;
+    }
+    int clang_ret = pclose(pipe);
+    if (clang_ret != 0) {
+        throw std::runtime_error("Fail to convert " + c_filename + " into LLVM IR");
+    }
+    return ir_content;
+}
+
+std::unique_ptr<llvm::Module>
+Engine::parseLLVMIR(const std::string& ir_content, llvm::LLVMContext& context) {
+    llvm::SMDiagnostic err;
+    auto memBuffer = llvm::MemoryBuffer::getMemBuffer(ir_content, "in-memory.ll");
+    auto module = llvm::parseIR(memBuffer->getMemBufferRef(), err, context);
+    if (!module) {
+        err.print("driver", llvm::errs());
+        throw std::runtime_error("Failed to parse LLVM IR");
+    }
+    return module;
+}
+
+std::vector<std::shared_ptr<State>>
+Engine::step(std::shared_ptr<State> state) {
     auto pc = state->pc;
     return pc->execute(state);
 }
@@ -21,7 +79,7 @@ Engine::set_entry(llvm::Function* entry) {
 }
 
 void
-Engine::run(State* state) {
+Engine::run(std::shared_ptr<State> state) {
     // set the default entry point if not set
     set_default_entry();
     states.push(state);
@@ -32,13 +90,7 @@ Engine::run(State* state) {
             continue;
         } else if (cur_state->status == State::VERIFYING) {
             auto res = verify(cur_state);
-            if (res == HOLD) {
-                llvm::errs() << "HOLD\n";
-            } else if (res == FAIL) {
-                llvm::errs() << "FAIL\n";
-            } else if (res == VERIUNKNOWN) {
-                llvm::errs() << "UNKNOWN\n";
-            }
+            results.push_back(res);
             cur_state->path_condition = cur_state->path_condition
                                       && cur_state->verification_condition;
             cur_state->status = State::RUNNING;
@@ -49,7 +101,6 @@ Engine::run(State* state) {
             if (res == FEASIBLE) {
                 cur_state->status = State::RUNNING;
                 states.push(cur_state);
-                continue;
             }
             // TODO: what to do with unknown path?
         } else if (cur_state->status == State::RUNNING) {
@@ -65,13 +116,13 @@ Engine::run() {
     llvm::errs() << "Running the engine...\n";
     set_default_entry();
     llvm::errs() << "Entry point: " << entry->getName() << "\n";
-    State* initial_state = build_initial_state();
+    std::shared_ptr<State> initial_state = build_initial_state();
     llvm::errs() << "Initial Instruction: " << *initial_state->pc->inst << "\n";
     return run(initial_state);
 }
 
 Engine::VeriResult
-Engine::verify(State* state) {
+Engine::verify(std::shared_ptr<State> state) {
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->path_condition);
     assumptions.push_back(!state->verification_condition);
@@ -92,7 +143,7 @@ Engine::verify(State* state) {
 }
 
 Engine::TestResult
-Engine::test(State* state) {
+Engine::test(std::shared_ptr<State> state) {
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->path_condition);
     auto res = solver.check(assumptions);
@@ -111,7 +162,7 @@ Engine::test(State* state) {
     return result;
 }
 
-State*
+std::shared_ptr<State>
 Engine::build_initial_state() {
     // build the initial state
     // this state should record global variables
@@ -151,11 +202,12 @@ Engine::build_initial_state() {
     auto stack = AStack();
     stack.push_frame();
     for (auto& arg : entry->args()) {
-        auto arg_value = z3ctx.int_const(arg.getName().str().c_str());
+        auto name = "ari_" + arg.getName().str();
+        auto arg_value = z3ctx.int_const(name.c_str());
         stack.insert_or_assign_value(&arg, arg_value);
     }
-    auto initial_state = new State(z3ctx, AInstruction::create(pc), nullptr,
-                               globals, stack, z3ctx.bool_val(true), {});
+    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr,
+                               globals, stack, z3ctx.bool_val(true), {}));
     return initial_state;
 }
 
@@ -168,10 +220,10 @@ void Engine::set_default_entry() {
 
 void Engine::analyze_module() {
     // record the original module
-    std::error_code ec;
-    llvm::raw_fd_ostream before_fd("tmp/before.ll", ec);
-    mod->print(before_fd, NULL);
-    before_fd.close();
+    // std::error_code ec;
+    // llvm::raw_fd_ostream before_fd("tmp/before.ll", ec);
+    // mod->print(before_fd, NULL);
+    // before_fd.close();
 
     LAM = llvm::LoopAnalysisManager();
     FAM = llvm::FunctionAnalysisManager();
@@ -219,9 +271,9 @@ void Engine::analyze_module() {
             // MSSAs.emplace(&*F, MSSA);
         }
     }
-    
-    // record the transformed module
-    llvm::raw_fd_ostream output_fd("tmp/tmp.ll", ec);
-    mod->print(output_fd, NULL);
-    output_fd.close();
+
+    std::string ir_str;
+    llvm::raw_string_ostream rso(ir_str);
+    mod->print(rso, nullptr);
+    spdlog::info("The IR that being analyzed:\n{}", ir_str);
 }

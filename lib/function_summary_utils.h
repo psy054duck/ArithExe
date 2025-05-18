@@ -7,6 +7,7 @@ namespace ari_exe {
 
     // Store the summary of the function
     class Summary {
+
         public:
             Summary() = delete;
             Summary(const z3::expr_vector& params, const z3::expr& summary);

@@ -78,7 +78,7 @@ namespace ari_exe {
             z3::expr verification_condition = z3ctx.bool_val(true);
 
             // summarization result shared by all states
-            static SymbolTable<Summary> summaries;
+            static SymbolTable<Summary>* summaries;
     };
 }
 

@@ -25,30 +25,45 @@ namespace ari_exe {
     // to get recurrence for the function
     class RecExecution {
         public:
+            enum TestResult {
+                FEASIBLE,
+                UNFEASIBLE,
+                TESTUNKNOWN,
+            };
             RecExecution(z3::context& z3ctx, llvm::Function* F);
+            ~RecExecution();
     
             // execute one instruction
-            std::vector<State*> step(State* state);
+            std::vector<std::shared_ptr<State>> step(std::shared_ptr<State> state);
     
             // execute the function
             // return a list of final states
-            std::vector<State*> run();
+            std::vector<std::shared_ptr<State>> run();
     
             // build the initial state
             // assuming the function do not access global variables
-            State* build_initial_state();
+            std::shared_ptr<State> build_initial_state();
+
+            /**
+             * @brief Test the feasibility of the current state
+             * @param state The current state
+             */
+            TestResult test(std::shared_ptr<State> state);
+
         private:
             z3::context& z3ctx;
             llvm::Function* F;
+
+            z3::solver solver;
     
-            std::queue<State*> states;
+            std::queue<std::shared_ptr<State>> states;
     };
 
     class function_summary {
         public:
             // function_summary(): F(nullptr), llvm2z3(F), rec_s(llvm2z3.get_context()) {}
             function_summary() = delete;
-            function_summary(llvm::Function* F, z3::context* _z3ctx);
+            function_summary(llvm::Function* F, z3::context& _z3ctx);
             // function_summary(const function_summary& other);
             // function_summary operator=(const function_summary& other);
             std::optional<Summary> get_summary();

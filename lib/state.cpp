@@ -1,8 +1,9 @@
 #include "state.h"
+#include "spdlog/spdlog.h"
 
 using namespace ari_exe;
 
-SymbolTable<Summary> State::summaries;
+SymbolTable<Summary>* State::summaries = new SymbolTable<Summary>();
 
 z3::expr
 State::evaluate(llvm::Value* v) {
@@ -20,7 +21,7 @@ State::evaluate(llvm::Value* v) {
     if (const_val) {
         return z3ctx.int_val(const_val->getSExtValue());
     }
-    llvm::errs() << "Value not found in state: " << *v << "\n";
+    spdlog::error("Value {} not found in state", v->getName().str());
     assert(false);
 }
 

@@ -240,7 +240,16 @@ void rec_solver::apply_initial_values() {
 }
 
 void rec_solver::rec2file() {
+    // if tmp oflder does not exist, create it
+    if (system("mkdir -p tmp") == -1) {
+        std::cerr << "Error creating tmp directory\n";
+        assert(false);
+    }
     std::ofstream out("tmp/recurrence.txt", std::ios::out);
+    if (!out.is_open()) {
+        std::cerr << "Error opening file for writing\n";
+        assert(false);
+    }
     _rec2file(out);
     out.close();
 }
