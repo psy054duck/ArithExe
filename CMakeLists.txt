@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # uncomment the following line to enable debug symbols and detect memory errors
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,8 +52,12 @@ set(ARITHEXEC_LIBS
     engine
     state
     rec_solver
-    function_summary
-    function_summary_utils
+    FunctionSummarizer
+    FunctionSummary
+    LoopSummarizer
+    LoopSummary
+    AnalysisManager
+    logics
 )
 
 add_subdirectory(lib)

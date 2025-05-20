@@ -48,7 +48,8 @@ def t_NUMBER(t):
     return t
 
 def t_ID(t):
-    r'[a-zA-Z_][a-zA-Z_0-9]*'
+    r'[%|@]?(?:[a-zA-Z_][a-zA-Z0-9_\.]*|[0-9]+)'
+    # r'[a-zA-Z_][a-zA-Z_0-9]*'
     t.type = reserved.get(t.value, 'ID')    # Check for reserved words
     if t.value == 'true':
         t.type = 'TRUE'

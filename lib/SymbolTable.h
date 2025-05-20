@@ -32,6 +32,12 @@ namespace ari_exe {
             // get the value of a variable
             std::optional<value_t> get_value(llvm::Value* symbol) const;
 
+            void print() const {
+                for (const auto& [key, value] : variables) {
+                    llvm::errs() << key->getName() << " = " << value.to_string() << "\n";
+                }
+            }
+
         private:
             std::map<llvm::Value*, value_t> variables;
     };

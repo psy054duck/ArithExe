@@ -49,7 +49,8 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include "state.h"
-#include "function_summary.h"
+#include "FunctionSummarizer.h"
+#include "AnalysisManager.h"
 
 #include <vector>
 #include <queue>
@@ -72,36 +73,21 @@ namespace ari_exe {
                 TESTUNKNOWN, // the state is unknown
             };
 
-            Engine(z3::context& z3ctx);
+            Engine();
             
-            /**
-             * @brief Construct a new Engine object with the given module
-             */
-            Engine(std::unique_ptr<llvm::Module>& mod, z3::context& z3ctx);
+            // /**
+            //  * @brief Construct a new Engine object with the given module
+            //  */
+            // Engine(std::unique_ptr<llvm::Module>& mod, z3::context& z3ctx);
 
             /**
              * @brief Load a C file and create a llvm module
              * @param filename The name of C file to load
              */
-            Engine(const std::string& c_filename, z3::context& z3ctx);
+            Engine(const std::string& c_filename);
 
 
-            /** 
-             * @brief Run clang to compile C into llvm ir
-             * @param filename The name of the C source file to compile
-             * @return The LLVM IR as a string
-             */
-            static std::string generateLLVMIR(const std::string& c_filename);
-
-            /**
-             * @brief Parse the LLVM IR string into a Module
-             * @param ir_content The LLVM IR as a string
-             * @param context The LLVM context to use for parsing
-             * @return A unique pointer to the parsed Module
-             */
-            static std::unique_ptr<llvm::Module> parseLLVMIR(const std::string& ir_content, llvm::LLVMContext& context);
-
-
+            
             /**
              * @brief set the entry point of the module
              * @param entry the entry point of the module
@@ -135,33 +121,16 @@ namespace ari_exe {
 
         private:
 
-            // Transform and analyze the module
-            void analyze_module();
-
             // Set the default entry point of the module if not set
             void set_default_entry();
 
-            // pass managers
-            llvm::ModulePassManager MPM;
-            llvm::LoopAnalysisManager LAM;
-            llvm::FunctionAnalysisManager FAM;
-            llvm::CGSCCAnalysisManager CGAM;
-            llvm::ModuleAnalysisManager MAM;
-            llvm::PassBuilder PB;
-
-            // analysis results
-            std::map<llvm::Function*, llvm::LoopInfo&> LIs;
-            std::map<llvm::Function*, llvm::DominatorTree> DTs;
-            std::map<llvm::Function*, llvm::PostDominatorTree> PDTs;
-
-            // LLVM context for keeping the module
-            llvm::LLVMContext context;
+            /**
+             * @brief check if the state just reach a loop
+             */
+            bool reach_loop(std::shared_ptr<State> state);
 
             // Z3 related
-            z3::context& z3ctx;
-
-            // symbol table
-
+            z3::context& z3ctx = AnalysisManager::get_instance()->get_z3ctx();
 
             std::unique_ptr<llvm::Module> mod;
             llvm::Function* entry = nullptr;

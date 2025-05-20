@@ -1,5 +1,6 @@
 #include "engine.h"
 #include "SymbolTable.h"
+#include "AnalysisManager.h"
 
 #include <fstream>
 #include <sstream>
@@ -9,16 +10,12 @@
 
 using namespace ari_exe;
 
-Engine::Engine(z3::context& z3ctx): mod(nullptr), z3ctx(z3ctx), solver(z3ctx) {}
+Engine::Engine(): mod(nullptr), solver(z3ctx) {}
 
-Engine::Engine(std::unique_ptr<llvm::Module>& mod, z3::context& z3ctx): mod(std::move(mod)), z3ctx(z3ctx), solver(z3ctx) {
-    analyze_module();
-}
-
-Engine::Engine(const std::string& c_filename, z3::context& z3ctx): mod(nullptr), z3ctx(z3ctx), solver(z3ctx) {
-    std::string ir_content = generateLLVMIR(c_filename);
-    mod = parseLLVMIR(ir_content, context);
-    analyze_module();
+Engine::Engine(const std::string& c_filename): mod(nullptr), solver(z3ctx) {
+    auto manager = AnalysisManager::get_instance();
+    assert(manager->get_z3ctx() == z3ctx && "The z3 context is not the same as the analysis manager");
+    mod = manager->get_module(c_filename, z3ctx);
 }
 
 Engine::VeriResult
@@ -33,39 +30,7 @@ Engine::verify() {
     return res;
 }
 
-std::string
-Engine::generateLLVMIR(const std::string& c_filename) {
-    std::ostringstream clang_cmd;
-    clang_cmd << "clang -emit-llvm -S -O0 -Xclang -disable-O0-optnone "
-              << c_filename << " -o -";
-    FILE* pipe = popen(clang_cmd.str().c_str(), "r");
-    if (!pipe) {
-        throw std::runtime_error("Failed to run clang");
-    }
 
-    std::string ir_content;
-    char buffer[8192];
-    while (fgets(buffer, sizeof(buffer), pipe)) {
-        ir_content += buffer;
-    }
-    int clang_ret = pclose(pipe);
-    if (clang_ret != 0) {
-        throw std::runtime_error("Fail to convert " + c_filename + " into LLVM IR");
-    }
-    return ir_content;
-}
-
-std::unique_ptr<llvm::Module>
-Engine::parseLLVMIR(const std::string& ir_content, llvm::LLVMContext& context) {
-    llvm::SMDiagnostic err;
-    auto memBuffer = llvm::MemoryBuffer::getMemBuffer(ir_content, "in-memory.ll");
-    auto module = llvm::parseIR(memBuffer->getMemBufferRef(), err, context);
-    if (!module) {
-        err.print("driver", llvm::errs());
-        throw std::runtime_error("Failed to parse LLVM IR");
-    }
-    return module;
-}
 
 std::vector<std::shared_ptr<State>>
 Engine::step(std::shared_ptr<State> state) {
@@ -82,10 +47,12 @@ void
 Engine::run(std::shared_ptr<State> state) {
     // set the default entry point if not set
     set_default_entry();
+
     states.push(state);
     while (!states.empty()) {
         auto cur_state = states.front();
         states.pop();
+
         if (cur_state->status == State::TERMINATED) {
             continue;
         } else if (cur_state->status == State::VERIFYING) {
@@ -103,11 +70,23 @@ Engine::run(std::shared_ptr<State> state) {
                 states.push(cur_state);
             }
             // TODO: what to do with unknown path?
-        } else if (cur_state->status == State::RUNNING) {
-            auto new_states = step(cur_state);
-            for (auto& new_state : new_states) states.push(new_state);
-        }
+            continue;
+        } 
+        assert(cur_state->status == State::RUNNING);
+        auto new_states = step(cur_state);
+        for (auto& new_state : new_states) states.push(new_state);
     }
+}
+
+bool
+Engine::reach_loop(std::shared_ptr<State> state) {
+    auto pc = state->pc;
+    auto cur_block = pc->get_block();
+    auto func = cur_block->getParent();
+    auto& LI = AnalysisManager::get_instance()->get_LI(func);
+    auto loop = LI.getLoopFor(cur_block);
+    if (loop == nullptr) return false;
+    return cur_block == loop->getHeader() && pc->inst == &*cur_block->begin();
 }
 
 void
@@ -207,7 +186,7 @@ Engine::build_initial_state() {
         stack.insert_or_assign_value(&arg, arg_value);
     }
     auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr,
-                               globals, stack, z3ctx.bool_val(true), {}));
+                               globals, stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}));
     return initial_state;
 }
 
@@ -215,65 +194,4 @@ void Engine::set_default_entry() {
     if (entry == nullptr) {
         entry = mod->getFunction(ari_exe::default_entry_function_name);
     }
-}
-
-
-void Engine::analyze_module() {
-    // record the original module
-    // std::error_code ec;
-    // llvm::raw_fd_ostream before_fd("tmp/before.ll", ec);
-    // mod->print(before_fd, NULL);
-    // before_fd.close();
-
-    LAM = llvm::LoopAnalysisManager();
-    FAM = llvm::FunctionAnalysisManager();
-    CGAM = llvm::CGSCCAnalysisManager();
-    MAM = llvm::ModuleAnalysisManager();
-    PB = llvm::PassBuilder();
-    PB.registerModuleAnalyses(MAM);
-    PB.registerCGSCCAnalyses(CGAM);
-    PB.registerFunctionAnalyses(FAM);
-    PB.registerLoopAnalyses(LAM);
-    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
-    MPM.addPass(llvm::ModuleInlinerPass());
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LowerSwitchPass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::PromotePass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::SROAPass(llvm::SROAOptions::ModifyCFG)));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LoopSimplifyPass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LCSSAPass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::SimplifyCFGPass()));
-
-    // MPM.addPass(createModuleToFunctionPassAdaptor(createFunctionToLoopPassAdaptor(LoopRotatePass())));
-    // MPM.addPass(createModuleToFunctionPassAdaptor(LoopFusePass()));
-    // MPM.addPass(createModuleToFunctionPassAdaptor(createFunctionToLoopPassAdaptor(IndVarSimplifyPass())));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::SCCPPass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::GVNPass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::DCEPass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::InstructionNamerPass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::AggressiveInstCombinePass()));
-    // MPM.addPass(createModuleToFunctionPassAdaptor(RegToMemPass()));
-    // MPM.addPass(createModuleToFunctionPassAdaptor(MemorySSAPrinterPass(output_fd, true)));
-    // MPM.addPass(createModuleToFunctionPassAdaptor(MemorySSAWrapperPass()));
-
-    MPM.run(*mod, MAM);
-    auto &fam = MAM.getResult<llvm::FunctionAnalysisManagerModuleProxy>(*mod).getManager();
-    for (auto F = mod->begin(); F != mod->end(); F++) {
-        if (!F->isDeclaration()) {
-            llvm::LoopInfo& LI = fam.getResult<llvm::LoopAnalysis>(*F);
-            // llvm::MemorySSA& MSSA = fam.getResult<llvm::MemorySSAAnalysis>(*F).getMSSA();
-            llvm::DominatorTree DT = llvm::DominatorTree(*F);
-            llvm::PostDominatorTree PDT = llvm::PostDominatorTree(*F);
-            // LIs[&*F] = LI;
-            LIs.emplace(&*F, LI);
-            DTs.emplace(&*F, llvm::DominatorTree(*F));
-            PDTs.emplace(&*F, llvm::PostDominatorTree(*F));
-            // MSSAs.emplace(&*F, MSSA);
-        }
-    }
-
-    std::string ir_str;
-    llvm::raw_string_ostream rso(ir_str);
-    mod->print(rso, nullptr);
-    spdlog::info("The IR that being analyzed:\n{}", ir_str);
 }

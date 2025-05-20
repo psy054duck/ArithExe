@@ -1,17 +1,17 @@
-#ifndef FUNCTION_SUMMARY_UTILS_H
-#define FUNCTION_SUMMARY_UTILS_H
+#ifndef FUNCTIONSUMMARY_H
+#define FUNCTIONSUMMARY_H
 
 #include "z3++.h"
 
 namespace ari_exe {
 
     // Store the summary of the function
-    class Summary {
+    class FunctionSummary {
 
         public:
-            Summary() = delete;
-            Summary(const z3::expr_vector& params, const z3::expr& summary);
-            Summary(const Summary& other);
+            FunctionSummary() = delete;
+            FunctionSummary(const z3::expr_vector& params, const z3::expr& summary);
+            FunctionSummary(const FunctionSummary& other);
             
             // evaluate the function with the given arguments
             z3::expr evaluate(const z3::expr_vector& args);

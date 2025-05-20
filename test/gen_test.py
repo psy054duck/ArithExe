@@ -25,8 +25,7 @@ for dir_path, _, filenames in os.walk(BENCHMARK_DIR):
             file_path = os.path.join(dir_path, filename)
             tests.append(f'''
 TEST({test_class.upper()}, {test_name}) {{
-    z3::context z3ctx;
-    auto engine = Engine("../../test/{file_path}", z3ctx);
+    auto engine = Engine("../../test/{file_path}");
     auto veri_res = engine.verify();
     EXPECT_EQ(veri_res, Engine::{expected_result}) << "Failed on: {file_path}";
 }}

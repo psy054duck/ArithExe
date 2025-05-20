@@ -1,4 +1,4 @@
-#include "function_summary.h"
+#include "FunctionSummarizer.h"
 
 using namespace ari_exe;
 
@@ -19,13 +19,13 @@ RecExecution::test(std::shared_ptr<State> state) {
     RecExecution::TestResult result;
     switch (res) {
         case z3::unsat:
-            result = UNFEASIBLE;
+            result = F_UNFEASIBLE;
             break;
         case z3::sat:
-            result = FEASIBLE;
+            result = F_FEASIBLE;
             break;
         case z3::unknown:
-            result = TESTUNKNOWN;
+            result = F_TESTUNKNOWN;
             break;
     }
     return result;
@@ -41,7 +41,7 @@ RecExecution::build_initial_state() {
         auto arg_value = z3ctx.int_const(name.c_str());
         stack.insert_or_assign_value(&arg, arg_value);
     }
-    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(&*F->begin()->begin()), nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), {}));
+    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(&*F->begin()->begin()), nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}));
     return initial_state;
 }
 
@@ -66,7 +66,7 @@ RecExecution::run() {
             continue;
         } else if (cur_state->status == State::TESTING) {
             auto res = test(cur_state);
-            if (res == FEASIBLE) {
+            if (res == F_FEASIBLE) {
                 cur_state->status = State::RUNNING;
                 states.push(cur_state);
             }
@@ -78,7 +78,7 @@ RecExecution::run() {
     return final_states;
 }
 
-function_summary::function_summary(llvm::Function* F, z3::context& _z3ctx): F(F), rec_s(_z3ctx) {
+FunctionSummarizer::FunctionSummarizer(llvm::Function* F, z3::context& _z3ctx): F(F), rec_s(_z3ctx) {
     llvm::LoopAnalysisManager LAM;
     llvm::FunctionAnalysisManager FAM;
     llvm::PassBuilder PB = llvm::PassBuilder();
@@ -91,7 +91,7 @@ function_summary::function_summary(llvm::Function* F, z3::context& _z3ctx): F(F)
 }
 
 void
-function_summary::summarize() {
+FunctionSummarizer::summarize() {
     RecExecution executor(rec_s.z3ctx, F);
     auto final_states = executor.run();
     // all states are TERMINATED and pc is ret
@@ -115,11 +115,11 @@ function_summary::summarize() {
         return pair.first.decl().name().str() == func.decl().name().str();
     });
     assert(it != closed.end());
-    summary = Summary(func.args(), it->second);
+    summary = FunctionSummary(func.args(), it->second);
 }
 
-std::optional<Summary>
-function_summary::get_summary() {
+std::optional<FunctionSummary>
+FunctionSummarizer::get_summary() {
     if (!summary.has_value()) {
         summarize();
     }
@@ -127,7 +127,7 @@ function_summary::get_summary() {
 }
 
 z3::expr
-function_summary::function_app_z3(llvm::Function* f) {
+FunctionSummarizer::function_app_z3(llvm::Function* f) {
     z3::expr_vector args(rec_s.z3ctx);
     for (auto& arg : f->args()) {
         auto name = "ari_" + arg.getName().str();

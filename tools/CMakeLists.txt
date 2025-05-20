@@ -11,13 +11,7 @@ add_executable(
 
 target_link_libraries(
     arith_exe 
-    AStack 
-    AInstruction 
-    engine 
-    function_summary_utils 
-    function_summary 
-    state 
-    rec_solver 
+    ${ARITHEXEC_LIBS}
     ${Z3_LIBRARIES} 
     ${llvm_libs}
     spdlog::spdlog

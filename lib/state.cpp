@@ -3,7 +3,9 @@
 
 using namespace ari_exe;
 
-SymbolTable<Summary>* State::summaries = new SymbolTable<Summary>();
+SymbolTable<FunctionSummary>* State::func_summaries = new SymbolTable<FunctionSummary>();
+
+SymbolTable<LoopSummary>* State::loop_summaries = new SymbolTable<LoopSummary>();
 
 z3::expr
 State::evaluate(llvm::Value* v) {

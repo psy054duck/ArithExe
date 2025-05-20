@@ -36,6 +36,8 @@ namespace ari_exe {
 
                 // record the called site
                 AInstruction* prev_pc = nullptr;
+
+                void print() const { table.print(); };
             };
 
         public:

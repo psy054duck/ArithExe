@@ -1,5 +1,13 @@
-#ifndef FUNCTION_SUMMARY
-#define FUNCTION_SUMMARY
+//--------------------- FunctionSummarizer.h ---------------------
+//
+// This file contains the FunctionSummarizer class, which is used to summarize
+// recursion in LLVM IR. It uses a recurrence solver to analyze the
+// function and generate a summary of its behavior.
+//
+//----------------------------------------------------------------
+
+#ifndef FUNCTIONSUMMARIZER_H
+#define FUNCTIONSUMMARIZER_H
 
 #include <vector>
 #include <optional>
@@ -16,19 +24,19 @@
 
 #include "rec_solver.h"
 #include "state.h"
-#include "function_summary_utils.h"
+#include "FunctionSummary.h"
 
 namespace ari_exe {
     class State;
-    class Summary;
+    class FunctionSummary;
     // A tiny SE engine to symbolic execute a recursion
     // to get recurrence for the function
     class RecExecution {
         public:
             enum TestResult {
-                FEASIBLE,
-                UNFEASIBLE,
-                TESTUNKNOWN,
+                F_FEASIBLE,
+                F_UNFEASIBLE,
+                F_TESTUNKNOWN,
             };
             RecExecution(z3::context& z3ctx, llvm::Function* F);
             ~RecExecution();
@@ -59,14 +67,14 @@ namespace ari_exe {
             std::queue<std::shared_ptr<State>> states;
     };
 
-    class function_summary {
+    class FunctionSummarizer {
         public:
             // function_summary(): F(nullptr), llvm2z3(F), rec_s(llvm2z3.get_context()) {}
-            function_summary() = delete;
-            function_summary(llvm::Function* F, z3::context& _z3ctx);
+            FunctionSummarizer() = delete;
+            FunctionSummarizer(llvm::Function* F, z3::context& _z3ctx);
             // function_summary(const function_summary& other);
             // function_summary operator=(const function_summary& other);
-            std::optional<Summary> get_summary();
+            std::optional<FunctionSummary> get_summary();
             
             // get the function application in z3 based on the function signature
             z3::expr function_app_z3(llvm::Function* f);
@@ -74,7 +82,7 @@ namespace ari_exe {
         private:
             llvm::Function* F;
             rec_solver rec_s;
-            std::optional<Summary> summary;
+            std::optional<FunctionSummary> summary;
             void summarize();
     };
 }

@@ -12,14 +12,16 @@
 #include "AInstruction.h"
 #include "SymbolTable.h"
 #include "AStack.h"
-#include "function_summary_utils.h"
+#include "FunctionSummary.h"
+#include "LoopSummary.h"
 
 namespace ari_exe {
     class AInstruction;
     class AStack;
-    // class Summary;
+    class State;
 
     using trace_ty = std::vector<llvm::BasicBlock*>;
+    using state_list = std::vector<std::shared_ptr<State>>;
 
     class State {
         private:
@@ -35,8 +37,8 @@ namespace ari_exe {
             };
 
         public:
-            State(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const SymbolTable<z3::expr>& globals, const AStack& stack, z3::expr path_condition, const trace_ty& trace, Status status = RUNNING): z3ctx(z3ctx), pc(pc), prev_pc(prev_pc), globals(globals), stack(stack), path_condition(path_condition), trace(trace), status(status) {};
-            State(const State& state): z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), globals(state.globals), stack(state.stack), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition) {};
+            State(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const SymbolTable<z3::expr>& globals, const AStack& stack, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status = RUNNING, bool summarizing = false): z3ctx(z3ctx), pc(pc), prev_pc(prev_pc), globals(globals), stack(stack), path_condition(path_condition), path_condition_in_loop(path_condition_in_loop), trace(trace), status(status), summarizing(summarizing) {};
+            State(const State& state): z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), globals(state.globals), stack(state.stack), path_condition(state.path_condition), path_condition_in_loop(state.path_condition_in_loop), trace(state.trace), status(state.status), verification_condition(state.verification_condition), summarizing(state.summarizing) {};
 
             // step the pc
             void step_pc(AInstruction* next_pc = nullptr);
@@ -67,6 +69,10 @@ namespace ari_exe {
             // path condition collected so far
             z3::expr path_condition;
 
+            // path condition in loop body, loop guard is discarded
+            // should only be used when summarize a loop
+            z3::expr path_condition_in_loop;
+
             z3::expr evaluate(llvm::Value* v);
 
             trace_ty trace;
@@ -77,8 +83,18 @@ namespace ari_exe {
             // verification condition
             z3::expr verification_condition = z3ctx.bool_val(true);
 
-            // summarization result shared by all states
-            static SymbolTable<Summary>* summaries;
+            // Function summarization result shared by all states
+            static SymbolTable<FunctionSummary>* func_summaries;
+
+            // Loop summary result shared by all states
+            static SymbolTable<LoopSummary>* loop_summaries;
+
+            // flag to indicate if the state is being summarized
+            bool summarizing = false;
+
+            void print_top_stack() {
+                stack.top_frame().table.print();
+            }
     };
 }
 

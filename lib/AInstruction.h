@@ -8,16 +8,20 @@
 //
 //-----------------------------------------------------------------------------------------//
 
+#include <set>
+
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/InstrTypes.h"
 
 #include "state.h"
-#include "function_summary.h"
+#include "FunctionSummary.h"
+#include "LoopSummary.h"
+#include "AnalysisManager.h"
 
 namespace ari_exe {
     class State;
-    class Summary;
+    class FunctionSummary;
 
     // Abstract instruction, all instructions are derived from this class
     class AInstruction {
@@ -71,7 +75,7 @@ namespace ari_exe {
 
             // summarize the called function completely
             // That is, no path condition is given for summarization
-            std::optional<Summary> summarize_complete(z3::context& z3ctx);
+            std::optional<FunctionSummary> summarize_complete(z3::context& z3ctx);
 
             // check if the function is statically recursive
             bool is_recursive(llvm::Function* target);
@@ -105,6 +109,28 @@ namespace ari_exe {
         public:
             AInstructionPhi(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<std::shared_ptr<State>> execute(std::shared_ptr<State> state) override;
+
+            /**
+             * @brief symbolic execute the loop for get all possible paths of the loop body,
+             *        should be called only by LoopSummarizer
+             */
+            std::vector<std::shared_ptr<State>> execute_and_collect_trace(std::shared_ptr<State> state, llvm::Loop* loop);
+
+            /**
+             * @brief if reach a loop and the loop is summarizable, use the summary and skip the execution
+             */
+            std::vector<std::shared_ptr<State>> execute_if_summarizable(std::shared_ptr<State> state);
+    
+            // /**
+            //  * @brief Summary the loop completely, 
+            //  *        That is, no path condition is given for summarization
+            //  */
+            // std::optional<LoopSummary> summarize_complete();
+
+            /**
+             * @brief record all loops that are failed to be summarized
+             */
+            static std::set<llvm::Loop*> failed_loops;
     };
 
     class AInstructionSelect: public AInstruction {
