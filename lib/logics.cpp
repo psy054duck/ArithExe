@@ -9,7 +9,23 @@ using namespace ari_exe;
 #include <spdlog/spdlog.h>
 #include <iostream>
 
-using namespace z3;
+std::set<z3::expr, expr_compare>
+Logic::collect_vars(const z3::expr& e) {
+    std::set<z3::expr, expr_compare> vars;
+    collect_vars_rec(e, vars);
+    return vars;
+}
+
+void
+Logic::collect_vars_rec(const z3::expr& e, std::set<z3::expr, expr_compare>& vars) {
+    if (e.is_const() && e.num_args() == 0 && e.decl().decl_kind() == Z3_OP_UNINTERPRETED) {
+        vars.insert(e);
+        return;
+    }
+    for (unsigned i = 0; i < e.num_args(); ++i) {
+        collect_vars_rec(e.arg(i), vars);
+    }
+}
 
 std::optional<z3::expr>
 LinearLogic::solve_var(const z3::expr& constraints, z3::expr& var) {
@@ -218,6 +234,10 @@ LinearLogic::solve_var_linear(z3::expr& constraints, z3::expr& var) {
     bool found = false;
     for (auto literal : literals) {
         auto normalized = normalize(literal);
+        auto vars = collect_vars(normalized);
+        if (!vars.contains(var)) {
+            continue;
+        }
         s.push();
         s.add(normalized.arg(0) != 0);
         if (s.check() == z3::unsat) {

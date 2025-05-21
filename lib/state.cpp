@@ -7,6 +7,11 @@ SymbolTable<FunctionSummary>* State::func_summaries = new SymbolTable<FunctionSu
 
 SymbolTable<LoopSummary>* State::loop_summaries = new SymbolTable<LoopSummary>();
 
+void
+State::append_path_condition(z3::expr _path_condition) {
+    path_condition = path_condition && _path_condition;
+}
+
 z3::expr
 State::evaluate(llvm::Value* v) {
     auto stack_value = stack.evaluate(v);
@@ -65,4 +70,34 @@ State::push_frame() {
 AStack::StackFrame
 State::pop_frame() {
     return stack.pop_frame();
+}
+
+LoopState::LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const SymbolTable<z3::expr>& globals, const AStack& stack, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status):
+    State(z3ctx, pc, prev_pc, globals, stack, path_condition, trace, status),
+    path_condition_in_loop(path_condition_in_loop) {}
+
+
+void
+LoopState::append_path_condition(z3::expr _path_condition) {
+    State::append_path_condition(_path_condition);
+
+    auto manager = AnalysisManager::get_instance();
+    auto inst = pc->inst;
+    auto& LI = manager->get_LI(inst->getFunction());
+    auto loop = LI.getLoopFor(inst->getParent());
+    assert(loop);
+
+    if (auto branch = dyn_cast_or_null<llvm::BranchInst>(inst)) {
+        if (branch->isConditional()) {
+            auto true_block = branch->getSuccessor(0);
+            auto false_block = branch->getSuccessor(1);
+            if (loop->contains(true_block) && loop->contains(false_block)) {
+                path_condition_in_loop = path_condition_in_loop && _path_condition;
+            }
+        }
+    } else if (auto select = dyn_cast_or_null<llvm::SelectInst>(inst)) {
+        path_condition_in_loop = path_condition_in_loop && _path_condition;
+    } else {
+        assert(false && "Unsupported instruction type");
+    }
 }

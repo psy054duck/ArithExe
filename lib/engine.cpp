@@ -1,6 +1,4 @@
 #include "engine.h"
-#include "SymbolTable.h"
-#include "AnalysisManager.h"
 
 #include <fstream>
 #include <sstream>
@@ -32,8 +30,8 @@ Engine::verify() {
 
 
 
-std::vector<std::shared_ptr<State>>
-Engine::step(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+Engine::step(state_ptr state) {
     auto pc = state->pc;
     return pc->execute(state);
 }
@@ -44,7 +42,7 @@ Engine::set_entry(llvm::Function* entry) {
 }
 
 void
-Engine::run(std::shared_ptr<State> state) {
+Engine::run(state_ptr state) {
     // set the default entry point if not set
     set_default_entry();
 
@@ -58,8 +56,9 @@ Engine::run(std::shared_ptr<State> state) {
         } else if (cur_state->status == State::VERIFYING) {
             auto res = verify(cur_state);
             results.push_back(res);
-            cur_state->path_condition = cur_state->path_condition
-                                      && cur_state->verification_condition;
+            cur_state->append_path_condition(cur_state->verification_condition);
+            // cur_state->path_condition = cur_state->path_condition
+            //                           && cur_state->verification_condition;
             cur_state->status = State::RUNNING;
             states.push(cur_state);
             continue;
@@ -79,7 +78,7 @@ Engine::run(std::shared_ptr<State> state) {
 }
 
 bool
-Engine::reach_loop(std::shared_ptr<State> state) {
+Engine::reach_loop(state_ptr state) {
     auto pc = state->pc;
     auto cur_block = pc->get_block();
     auto func = cur_block->getParent();
@@ -95,15 +94,15 @@ Engine::run() {
     llvm::errs() << "Running the engine...\n";
     set_default_entry();
     llvm::errs() << "Entry point: " << entry->getName() << "\n";
-    std::shared_ptr<State> initial_state = build_initial_state();
+    state_ptr initial_state = build_initial_state();
     llvm::errs() << "Initial Instruction: " << *initial_state->pc->inst << "\n";
     return run(initial_state);
 }
 
 Engine::VeriResult
-Engine::verify(std::shared_ptr<State> state) {
+Engine::verify(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->path_condition);
+    assumptions.push_back(state->get_path_condition());
     assumptions.push_back(!state->verification_condition);
     auto res = solver.check(assumptions);
     Engine::VeriResult result;
@@ -122,9 +121,9 @@ Engine::verify(std::shared_ptr<State> state) {
 }
 
 Engine::TestResult
-Engine::test(std::shared_ptr<State> state) {
+Engine::test(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->path_condition);
+    assumptions.push_back(state->get_path_condition());
     auto res = solver.check(assumptions);
     Engine::TestResult result;
     switch (res) {
@@ -141,7 +140,7 @@ Engine::test(std::shared_ptr<State> state) {
     return result;
 }
 
-std::shared_ptr<State>
+state_ptr
 Engine::build_initial_state() {
     // build the initial state
     // this state should record global variables
@@ -186,7 +185,7 @@ Engine::build_initial_state() {
         stack.insert_or_assign_value(&arg, arg_value);
     }
     auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr,
-                               globals, stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}));
+                               globals, stack, z3ctx.bool_val(true), {}));
     return initial_state;
 }
 

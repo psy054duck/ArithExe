@@ -98,20 +98,20 @@ namespace ari_exe {
             void run();
 
             // run the engine from the given state
-            void run(std::shared_ptr<State> state);
+            void run(state_ptr state);
 
             // run the engine from the given state one step
             // when branching, it will return two states if both branches are feasible
-            std::vector<std::shared_ptr<State>> step(std::shared_ptr<State> state);
+            std::vector<state_ptr> step(state_ptr state);
 
             // build initial state
-            std::shared_ptr<State> build_initial_state();
+            state_ptr build_initial_state();
 
             // verity the current state
-            VeriResult verify(std::shared_ptr<State> state);
+            VeriResult verify(state_ptr state);
 
             // test the feasibility of the current state
-            TestResult test(std::shared_ptr<State> state);
+            TestResult test(state_ptr state);
 
             /**
              * @brief Verify if the program is correct
@@ -127,7 +127,7 @@ namespace ari_exe {
             /**
              * @brief check if the state just reach a loop
              */
-            bool reach_loop(std::shared_ptr<State> state);
+            bool reach_loop(state_ptr state);
 
             // Z3 related
             z3::context& z3ctx = AnalysisManager::get_instance()->get_z3ctx();
@@ -136,7 +136,7 @@ namespace ari_exe {
             llvm::Function* entry = nullptr;
 
             // queue of states
-            std::queue<std::shared_ptr<State>> states;
+            std::queue<state_ptr> states;
 
             // z3 solver
             z3::solver solver;

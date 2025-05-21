@@ -19,6 +19,11 @@ add_executable(
   test_engine.cpp
 )
 
+add_executable(
+  test_logic
+  test_logic.cpp
+)
+
 target_link_libraries(
   test_engine
   GTest::gtest_main
@@ -27,5 +32,14 @@ target_link_libraries(
   ${llvm_libs} 
 )
 
+target_link_libraries(
+  test_logic
+  GTest::gtest_main
+  logics
+  ${Z3_LIBRARIES}
+)
+
+
 include(GoogleTest)
 gtest_discover_tests(test_engine)
+gtest_discover_tests(test_logic)

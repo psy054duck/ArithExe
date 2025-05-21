@@ -25,11 +25,16 @@
 
 #include "rec_solver.h"
 #include "state.h"
+#include "AnalysisManager.h"
 #include "LoopSummary.h"
+#include "FunctionSummarizer.h"
 #include "common.h"
+#include "logics.h"
 
 namespace ari_exe {
     class LoopSummary;
+    class State;
+    class LoopState;
 
     // A tiny SE engine to symbolic execute a loop
     // to get recurrence for the loop
@@ -40,15 +45,15 @@ namespace ari_exe {
                 L_UNFEASIBLE,
                 L_TESTUNKNOWN,
             };
-            LoopExecution(llvm::Loop* loop, std::shared_ptr<State> parent_state);
+            LoopExecution(llvm::Loop* loop, state_ptr parent_state);
             ~LoopExecution();
     
             // execute one instruction
-            state_list step(std::shared_ptr<State> state);
+            loop_state_list step(loop_state_ptr state);
     
             // build the initial state
             // assuming the function do not access global variables
-            std::shared_ptr<State> build_initial_state();
+            loop_state_ptr build_initial_state();
 
             /**
              * @brief  execute the loop body
@@ -57,14 +62,13 @@ namespace ari_exe {
              *         a list of exit states, which are all states arriving at the
              *         exit blocks
              */
-            std::pair<state_list, state_list>
-            run();
+            std::pair<loop_state_list, loop_state_list> run();
 
             /**
              * @brief Test the feasibility of the current state
              * @param state The current state
              */
-            TestResult test(std::shared_ptr<State> state);
+            TestResult test(loop_state_ptr state);
 
         private:
             /**
@@ -73,30 +77,34 @@ namespace ari_exe {
              * @param state The current state
              * @return true if the current state is a final state
              */
-            bool is_final_state(std::shared_ptr<State> state);
+            bool is_final_state(loop_state_ptr state);
 
             /**
              * @brief Check if the given state is an exit state
              * @param state The current state
              * @return true if the current state is an exit state
              */
-            bool is_exit_state(std::shared_ptr<State> state);
+            bool is_exit_state(loop_state_ptr state);
 
             /**
              * @brief check if this state just took the back edge
              * @param state The current state
              * @return true if the current state just took the back edge
              */
-            bool back_edge_taken(std::shared_ptr<State> state);
+            bool back_edge_taken(loop_state_ptr state);
 
             llvm::Loop* loop;
 
             z3::solver solver;
     
-            std::queue<std::shared_ptr<State>> states;
+            std::queue<loop_state_ptr> states;
 
             // parent state, in which this loop execution is invoked
-            std::shared_ptr<State> parent_state;
+            state_ptr parent_state;
+
+            // loop invariants encountered in the loop
+            // must verify them if summarization succeeds
+            z3::expr_vector v_conditions;
     };
 
     /**
@@ -112,7 +120,7 @@ namespace ari_exe {
              * @param loop The loop to be summarized
              * @param z3ctx The Z3 context
              */
-            LoopSummarizer(llvm::Loop* loop, std::shared_ptr<State> parent_state): loop(loop), rec_s(AnalysisManager::get_instance()->get_z3ctx()), parent_state(parent_state) {};
+            LoopSummarizer(llvm::Loop* loop, state_ptr parent_state): loop(loop), rec_s(AnalysisManager::get_instance()->get_z3ctx()), parent_state(parent_state) {};
 
             std::optional<LoopSummary> get_summary();
 
@@ -126,7 +134,7 @@ namespace ari_exe {
              * @param state The final state
              * @return A list values corresponding to the header phis respectively
              */
-            std::vector<z3::expr> get_update(std::shared_ptr<State> state);
+            std::vector<z3::expr> get_update(loop_state_ptr state);
             
             /**
              * @brief Summarize the loop. This is where recurrence solving happens.
@@ -145,14 +153,14 @@ namespace ari_exe {
              * @param values The closed-form solution to the header phis
              * @return The loop guard condition
              */
-            std::optional<z3::expr> get_iterations(const state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values);
+            std::optional<z3::expr> get_iterations(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values);
 
             /**
              * @brief get the loop guard condition
              * @param exit_states The exit states
              * @return The loop guard condition
              */
-            z3::expr get_loop_guard_condition(const state_list& exit_states);
+            z3::expr get_loop_guard_condition(const loop_state_list& exit_states);
 
             /**
              * @brief get scalar version and function version of header phis
@@ -162,7 +170,7 @@ namespace ari_exe {
             /**
              * @brief extract conditions and update from final states
              */
-            std::pair<std::vector<z3::expr>, std::vector<rec_ty>> get_conditions_and_updates(const state_list& final_states);
+            std::pair<std::vector<z3::expr>, std::vector<rec_ty>> get_conditions_and_updates(const loop_state_list& final_states);
 
             /**
              * @brief get initial values for the loop
@@ -177,7 +185,7 @@ namespace ari_exe {
             /**
              * @brief parent state, in which this loop summarization is invoked
              */
-            std::shared_ptr<State> parent_state;
+            state_ptr parent_state;
     };
 }
 

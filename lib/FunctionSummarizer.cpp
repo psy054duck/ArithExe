@@ -12,9 +12,9 @@ RecExecution::~RecExecution() {
 }
 
 RecExecution::TestResult
-RecExecution::test(std::shared_ptr<State> state) {
+RecExecution::test(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->path_condition);
+    assumptions.push_back(state->get_path_condition());
     auto res = solver.check(assumptions);
     RecExecution::TestResult result;
     switch (res) {
@@ -31,7 +31,7 @@ RecExecution::test(std::shared_ptr<State> state) {
     return result;
 }
 
-std::shared_ptr<State>
+state_ptr
 RecExecution::build_initial_state() {
     // set up the stack
     auto stack = AStack();
@@ -41,12 +41,12 @@ RecExecution::build_initial_state() {
         auto arg_value = z3ctx.int_const(name.c_str());
         stack.insert_or_assign_value(&arg, arg_value);
     }
-    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(&*F->begin()->begin()), nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}));
+    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(&*F->begin()->begin()), nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), {}));
     return initial_state;
 }
 
-std::vector<std::shared_ptr<State>>
-RecExecution::step(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+RecExecution::step(state_ptr state) {
     auto pc = state->pc;
     if (auto call_inst = dynamic_cast<AInstructionCall*>(pc)) {
         auto call_states = call_inst->execute_if_not_target(state, F);
@@ -55,9 +55,9 @@ RecExecution::step(std::shared_ptr<State> state) {
     return pc->execute(state);
 }
 
-std::vector<std::shared_ptr<State>>
+std::vector<state_ptr>
 RecExecution::run() {
-    std::vector<std::shared_ptr<State>> final_states;
+    std::vector<state_ptr> final_states;
     while (!states.empty()) {
         auto cur_state = states.front();
         states.pop();
@@ -99,7 +99,7 @@ FunctionSummarizer::summarize() {
     std::vector<rec_ty> rec_eqs;
     z3::expr func = function_app_z3(F);
     for (auto state : final_states) {
-        path_conds.push_back(state->path_condition);
+        path_conds.push_back(state->get_path_condition());
         auto ret_inst = dyn_cast_or_null<llvm::ReturnInst>(state->pc->inst);
         assert(ret_inst);
         z3::expr one_case = state->evaluate(ret_inst->getReturnValue());

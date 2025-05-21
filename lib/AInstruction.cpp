@@ -1,8 +1,4 @@
-#include "AnalysisManager.h"
 #include "AInstruction.h"
-#include "state.h"
-#include "FunctionSummarizer.h"
-#include "LoopSummarizer.h"
 #include <spdlog/spdlog.h>
 
 #include "z3++.h"
@@ -44,6 +40,16 @@ AInstruction::create(llvm::Instruction* inst) {
     return res;
 }
 
+loop_state_list
+AInstruction::execute(loop_state_ptr state) {
+    auto new_states = execute(std::static_pointer_cast<State>(state));
+    loop_state_list new_base_states;
+    for (auto& new_state : new_states) {
+        new_base_states.push_back(std::make_shared<LoopState>(*new_state));
+    }
+    return new_base_states;
+}
+
 AInstruction*
 AInstruction::get_next_instruction() {
     auto next_inst = inst->getNextNonDebugInstruction();
@@ -53,15 +59,15 @@ AInstruction::get_next_instruction() {
     return nullptr;
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionBinary::execute(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+AInstructionBinary::execute(state_ptr state) {
     auto bin_inst = dyn_cast<llvm::BinaryOperator>(inst);
     auto opcode = bin_inst->getOpcode();
 
     // TODO:
     // Current implementation create new states every time.
     // In future, in-place update should be implemented.
-    std::vector<std::shared_ptr<State>> new_states;
+    std::vector<state_ptr> new_states;
 
     auto op0 = bin_inst->getOperand(0);
     auto op1 = bin_inst->getOperand(1);
@@ -91,15 +97,15 @@ AInstructionBinary::execute(std::shared_ptr<State> state) {
         throw std::runtime_error("Unsupported binary operation");
     }
 
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     new_state->insert_or_assign(inst, result);
     new_state->step_pc();
 
     return {new_state};
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionICmp::execute(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+AInstructionICmp::execute(state_ptr state) {
     auto cmp_inst = dyn_cast<llvm::ICmpInst>(inst);
     auto pred = cmp_inst->getPredicate();
 
@@ -127,21 +133,20 @@ AInstructionICmp::execute(std::shared_ptr<State> state) {
         assert(false);
     }
 
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     new_state->insert_or_assign(inst, result);
     new_state->step_pc();
     return {new_state};
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionCall::execute(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+AInstructionCall::execute(state_ptr state) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();
 
-    auto& z3ctx = state->path_condition.ctx();
+    auto& z3ctx = state->z3ctx;
 
     z3::expr result(z3ctx);
-    z3::expr new_path_condition = state->path_condition;
 
     if (called_func->getName().ends_with("assert")) {
         // verification. should check if the condition is true
@@ -156,23 +161,25 @@ AInstructionCall::execute(std::shared_ptr<State> state) {
     }
 }
 
-std::shared_ptr<State>
-AInstructionCall::execute_normal(std::shared_ptr<State> state) {
+state_ptr
+AInstructionCall::execute_normal(state_ptr state) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();
 
     // check if the function is recursive and not yet summarized
     if (is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
-        auto summary = summarize_complete(state->path_condition.ctx());
+        auto summary = summarize_complete(state->z3ctx);
         if (summary.has_value()) {
             State::func_summaries->insert_or_assign(called_func, *summary);
         }
     }
 
     auto summary = State::func_summaries->get_value(called_func);
+    auto& z3ctx = state->z3ctx;
+
     if (summary.has_value()) {
-        std::shared_ptr<State> new_state = std::make_shared<State>(*state);
-        z3::expr_vector args(state->path_condition.ctx());
+        state_ptr new_state = std::make_shared<State>(*state);
+        z3::expr_vector args(z3ctx);
         for (unsigned i = 0; i < call_inst->arg_size(); i++) {
             auto arg = call_inst->getArgOperand(i);
             auto arg_value = state->evaluate(arg);
@@ -182,11 +189,10 @@ AInstructionCall::execute_normal(std::shared_ptr<State> state) {
         new_state->step_pc();
         return new_state;
     }
-    auto& z3ctx = state->path_condition.ctx();
 
     z3::expr result(z3ctx);
 
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     new_state->push_frame();
     // push the arguments to the stack
     for (unsigned i = 0; i < call_inst->arg_size(); i++) {
@@ -201,19 +207,19 @@ AInstructionCall::execute_normal(std::shared_ptr<State> state) {
     return new_state;
 }
 
-std::shared_ptr<State>
-AInstructionCall::execute_assert(std::shared_ptr<State> state) {
+state_ptr
+AInstructionCall::execute_assert(state_ptr state) {
     // assert function, add the condition to the path condition
     // and check if the condition is true
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();
 
-    auto& z3ctx = state->path_condition.ctx();
+    auto& z3ctx = state->z3ctx;
 
     auto cond = call_inst->getArgOperand(0);
     auto cond_value = state->evaluate(cond);
     auto new_pc = state->pc->get_next_instruction();
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     new_state->step_pc();
     new_state->status = State::VERIFYING;
     if (cond_value.is_bool()) {
@@ -224,34 +230,32 @@ AInstructionCall::execute_assert(std::shared_ptr<State> state) {
     return new_state;
 }
 
-std::shared_ptr<State>
-AInstructionCall::execute_assume(std::shared_ptr<State> state) {
+state_ptr
+AInstructionCall::execute_assume(state_ptr state) {
     // assume function, add the condition to the path condition
     // and check if the condition is true
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();
 
-    auto& z3ctx = state->path_condition.ctx();
+    auto& z3ctx = state->z3ctx;
 
     auto cond = call_inst->getArgOperand(0);
     auto cond_value = state->evaluate(cond);
-    z3::expr new_path_condition = state->path_condition && cond_value;
 
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     new_state->step_pc();
     new_state->status = State::TESTING;
     return new_state;
 }
 
-std::shared_ptr<State>
-AInstructionCall::execute_unknown(std::shared_ptr<State> state) {
+state_ptr
+AInstructionCall::execute_unknown(state_ptr state) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();
 
-    auto& z3ctx = state->path_condition.ctx();
+    auto& z3ctx = state->z3ctx;
 
     z3::expr result(z3ctx);
-    z3::expr new_path_condition = state->path_condition;
 
     // external function value is unknown, so symbolic
     auto name = "ari_" + inst->getName();
@@ -267,18 +271,18 @@ AInstructionCall::execute_unknown(std::shared_ptr<State> state) {
         llvm::errs() << "Unsupported return type for call instruction\n";
         assert(false);
     }
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     new_state->insert_or_assign(inst, result);
     new_state->step_pc();
     return new_state;
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionCall::execute_if_not_target(std::shared_ptr<State> state, llvm::Function* target) {
+std::vector<state_ptr>
+AInstructionCall::execute_if_not_target(state_ptr state, llvm::Function* target) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();
 
-    auto& z3ctx = state->path_condition.ctx();
+    auto& z3ctx = state->z3ctx;
 
     if (called_func == target) {
         // TODO: assume all types are int
@@ -329,54 +333,53 @@ AInstructionCall::summarize_complete(z3::context& z3ctx) {
 }
 
 
-std::vector<std::shared_ptr<State>>
-AInstructionBranch::execute(std::shared_ptr<State> state) {
-    auto& z3ctx = state->path_condition.ctx();
+state_list
+AInstructionBranch::execute(state_ptr state) {
+    llvm::errs() << state->pc->inst->getName() << "\n";
+    return _execute(state);
+}
 
+loop_state_list
+AInstructionBranch::execute(loop_state_ptr state) {
+    return _execute(state);
+}
+
+template<typename state_ty>
+state_list_base<state_ty>
+AInstructionBranch::_execute(std::shared_ptr<state_ty> state) {
     auto branch_inst = dyn_cast<llvm::BranchInst>(inst);
     auto new_trace = state->trace;
     new_trace.push_back(branch_inst->getParent());
 
-    std::vector<std::shared_ptr<State>> new_states;
+    std::vector<state_ptr_base<state_ty>> new_states;
     if (branch_inst->isConditional()) {
         auto cond = branch_inst->getCondition();
         auto cond_value = state->evaluate(cond);
 
         auto true_block = branch_inst->getSuccessor(0);
         auto true_pc = AInstruction::create(&*true_block->begin());
-        std::shared_ptr<State> true_state = std::make_shared<State>(*state);
+        auto true_state = std::make_shared<state_ty>(*state);
         true_state->trace = new_trace;
         true_state->status = State::TESTING;
-        true_state->path_condition = state->path_condition && cond_value;
+        // true_state->path_condition = state->path_condition && cond_value;
+        true_state->append_path_condition(cond_value);
         true_state->step_pc(true_pc);
 
         auto false_block = branch_inst->getSuccessor(1);
         auto false_pc = AInstruction::create(&*false_block->begin());
-        std::shared_ptr<State> false_state = std::make_shared<State>(*state);
+        auto false_state = std::make_shared<state_ty>(*state);
         false_state->trace = new_trace;
         false_state->status = State::TESTING;
-        false_state->path_condition = state->path_condition && !cond_value;
+        // false_state->path_condition = state->path_condition && !cond_value;
+        false_state->append_path_condition(!cond_value);
         false_state->step_pc(false_pc);
-
-        // record the path condition in loop body
-        // disregard the loop guard
-        if (state->summarizing) {
-            auto manager = AnalysisManager::get_instance();
-            auto& LI = manager->get_LI(branch_inst->getFunction());
-            auto loop = LI.getLoopFor(branch_inst->getParent());
-            assert(loop);
-            if (loop->contains(true_block) && loop->contains(false_block)) {
-                true_state->path_condition_in_loop = state->path_condition_in_loop && cond_value;
-                false_state->path_condition_in_loop = state->path_condition_in_loop && !cond_value;
-            }
-        }
 
         new_states.push_back(true_state);
         new_states.push_back(false_state);
     } else {
         // unconditional branch
         auto next_pc = AInstruction::create(&*branch_inst->getSuccessor(0)->begin());
-        std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+        auto new_state = std::make_shared<state_ty>(*state);
         new_state->trace = new_trace;
         new_state->step_pc(next_pc);
         new_states.push_back(new_state);
@@ -384,8 +387,8 @@ AInstructionBranch::execute(std::shared_ptr<State> state) {
     return new_states;
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionReturn::execute(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+AInstructionReturn::execute(state_ptr state) {
     if (state->stack.size() == 1) {
         // no function call, just terminate
         state->status = State::TERMINATED;
@@ -396,7 +399,7 @@ AInstructionReturn::execute(std::shared_ptr<State> state) {
     // get the return value
     auto ret_expr = state->evaluate(ret_value);
 
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     auto frame = new_state->pop_frame();
     // go back to the called site
     new_state->step_pc(frame.prev_pc);
@@ -407,15 +410,15 @@ AInstructionReturn::execute(std::shared_ptr<State> state) {
     return {new_state};
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionZExt::execute(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+AInstructionZExt::execute(state_ptr state) {
     auto zext_inst = dyn_cast<llvm::ZExtInst>(inst);
     auto op = zext_inst->getOperand(0);
     auto op_value = state->evaluate(op);
     auto& z3ctx = op_value.ctx();
     z3::expr result(z3ctx);
 
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     new_state->insert_or_assign(inst, op_value);
     new_state->step_pc();
     return {new_state};
@@ -423,15 +426,15 @@ AInstructionZExt::execute(std::shared_ptr<State> state) {
 
 std::set<llvm::Loop*> AInstructionPhi::failed_loops;
 
-std::vector<std::shared_ptr<State>>
-AInstructionPhi::execute(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+AInstructionPhi::execute(state_ptr state) {
     auto phi_inst = dyn_cast<llvm::PHINode>(inst);
     auto manager = AnalysisManager::get_instance();
     auto& LI = manager->get_LI(phi_inst->getFunction());
     auto loop = LI.getLoopFor(phi_inst->getParent());
 
     if (loop && failed_loops.find(loop) == failed_loops.end()) {
-        if (!state->summarizing) {
+        if (!state->is_summarizing()) {
             auto accelarated_states = execute_if_summarizable(state);
             if (accelarated_states.size() > 0) {
                 return accelarated_states;
@@ -441,24 +444,24 @@ AInstructionPhi::execute(std::shared_ptr<State> state) {
         }
     }
 
-    auto& z3ctx = state->path_condition.ctx();
+    auto& z3ctx = state->z3ctx;
     auto prev_block = state->trace.back();
     llvm::Value* selected_value = phi_inst->getIncomingValueForBlock(prev_block);
     auto selected_value_expr = state->evaluate(selected_value);
 
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     new_state->insert_or_assign(inst, selected_value_expr);
     new_state->step_pc();
 
     return {new_state};
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionPhi::execute_and_collect_trace(std::shared_ptr<State> state, llvm::Loop* loop) {
+std::vector<state_ptr>
+AInstructionPhi::execute_and_collect_trace(state_ptr state, llvm::Loop* loop) {
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionPhi::execute_if_summarizable(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+AInstructionPhi::execute_if_summarizable(state_ptr state) {
     auto phi_inst = dyn_cast<llvm::PHINode>(inst);
     auto manager = AnalysisManager::get_instance();
     auto& LI = manager->get_LI(phi_inst->getFunction());
@@ -492,7 +495,7 @@ AInstructionPhi::execute_if_summarizable(std::shared_ptr<State> state) {
         args.push_back(phi_expr);
     }
     z3::expr_vector closed_forms = summary->evaluate(args);
-    std::shared_ptr<State> new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
     auto phi_it = header->phis().begin();
     for (int i = 0; i < closed_forms.size(); i++, phi_it++) {
         new_state->insert_or_assign(&*phi_it, closed_forms[i]);
@@ -500,43 +503,33 @@ AInstructionPhi::execute_if_summarizable(std::shared_ptr<State> state) {
     auto new_pc = AInstruction::create(&*exit_block->begin());
     new_state->trace.push_back(header);
     new_state->step_pc(new_pc);
-    new_state->print_top_stack();
     return {new_state};
 }
 
-std::vector<std::shared_ptr<State>>
-AInstructionSelect::execute(std::shared_ptr<State> state) {
+std::vector<state_ptr>
+AInstructionSelect::execute(state_ptr state) {
     auto select_inst = dyn_cast<llvm::SelectInst>(inst);
     auto cond = select_inst->getCondition();
     auto cond_value = state->evaluate(cond);
 
     auto true_value = select_inst->getTrueValue();
     auto true_value_expr = state->evaluate(true_value);
-    std::shared_ptr<State> true_state = std::make_shared<State>(*state);
+    state_ptr true_state = std::make_shared<State>(*state);
     true_state->insert_or_assign(inst, true_value_expr);
-    true_state->step_pc();
     true_state->status = State::TESTING;
-    true_state->path_condition = state->path_condition && cond_value;
+    // true_state->path_condition = state->path_condition && cond_value;
+    true_state->append_path_condition(cond_value);
+    true_state->step_pc();
 
     auto false_value = select_inst->getFalseValue();
     auto false_value_expr = state->evaluate(false_value);
-    std::shared_ptr<State> false_state = std::make_shared<State>(*state);
+    state_ptr false_state = std::make_shared<State>(*state);
     false_state->insert_or_assign(inst, false_value_expr);
-    false_state->step_pc();
     false_state->status = State::TESTING;
-    false_state->path_condition = state->path_condition && !cond_value;
+    // false_state->path_condition = state->path_condition && !cond_value;
+    false_state->append_path_condition(!cond_value);
+    false_state->step_pc();
 
-    // record the path condition in loop body
-    // disregard the loop guard
-    if (state->summarizing) {
-        // auto manager = AnalysisManager::get_instance();
-        // auto& LI = manager->get_LI(branch_inst->getFunction());
-        // auto loop = LI.getLoopFor(branch_inst->getParent());
-        // assert(loop);
-        true_state->path_condition_in_loop = state->path_condition_in_loop && cond_value;
-        false_state->path_condition_in_loop = state->path_condition_in_loop && !cond_value;
-    }
-    
     return {true_state, false_state};
 }
 

@@ -15,6 +15,17 @@
 
 namespace ari_exe {
 
+    /**
+     * @brief A comparator for z3 variables, not designed for general use.
+     * @details This is used to compare two z3::expr objects in a set.
+     *          The comparison is done by comparing the string representation of the expressions.
+     */
+    struct expr_compare {
+        bool operator()(const z3::expr& a, const z3::expr& b) const {
+            return a.to_string() < b.to_string();
+        }
+    };
+
     class Logic {
         public:
             /**
@@ -62,7 +73,15 @@ namespace ari_exe {
              */
             bool is_eq(const z3::expr& e);
 
+            /**
+             * @brief get all atoms in the formula
+             */
             z3::expr_vector atoms(const z3::expr& fml);
+
+            /**
+             * @brief get all variables in the formula
+             */
+            std::set<z3::expr, expr_compare> collect_vars(const z3::expr& e);
 
         private:
             void atoms_rec(const z3::expr& t, std::set<std::string>& visited, z3::expr_vector& atms);
@@ -78,17 +97,17 @@ namespace ari_exe {
              */
             z3::expr implicant(const z3::expr_vector& atoms, z3::solver& s, z3::solver& snot);
 
-            // /**
-            //  * @brief Convert clause to vector of literals
-            //  */
-            // z3::expr_vector clause2list(const z3::expr& clause);
-
             /**
              * @brief helper function of to_dnf
              * @param clauses the CNF formula
              * @return list of list of expr, each inner list is a conjunction of literals
              */
             std::vector<z3::expr_vector> dnf_rec(const z3::expr_vector& clauses);
+
+            /**
+             * @brief recursively collect all variables in the formula
+             */
+            void collect_vars_rec(const z3::expr& e, std::set<z3::expr, expr_compare>& vars);
     };
 
     class LinearLogic: public Logic {

@@ -42,21 +42,21 @@ namespace ari_exe {
             ~RecExecution();
     
             // execute one instruction
-            std::vector<std::shared_ptr<State>> step(std::shared_ptr<State> state);
+            std::vector<state_ptr> step(state_ptr state);
     
             // execute the function
             // return a list of final states
-            std::vector<std::shared_ptr<State>> run();
+            std::vector<state_ptr> run();
     
             // build the initial state
             // assuming the function do not access global variables
-            std::shared_ptr<State> build_initial_state();
+            state_ptr build_initial_state();
 
             /**
              * @brief Test the feasibility of the current state
              * @param state The current state
              */
-            TestResult test(std::shared_ptr<State> state);
+            TestResult test(state_ptr state);
 
         private:
             z3::context& z3ctx;
@@ -64,7 +64,7 @@ namespace ari_exe {
 
             z3::solver solver;
     
-            std::queue<std::shared_ptr<State>> states;
+            std::queue<state_ptr> states;
     };
 
     class FunctionSummarizer {

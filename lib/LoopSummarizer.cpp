@@ -1,27 +1,24 @@
 #include <spdlog/spdlog.h>
-
 #include "LoopSummarizer.h"
-#include "FunctionSummarizer.h"
-#include "AnalysisManager.h"
-#include "logics.h"
+
 
 using namespace ari_exe;
-
-LoopExecution::LoopExecution(llvm::Loop *loop, std::shared_ptr<State> parent_state): loop(loop), solver(AnalysisManager::get_instance()->get_z3ctx()), parent_state(parent_state) {
-    auto initial_state = build_initial_state();
-    states.push(initial_state);
-}
 
 LoopExecution::~LoopExecution() {
     assert(states.empty());
 }
 
+LoopExecution::LoopExecution(llvm::Loop *loop, state_ptr parent_state): loop(loop), solver(AnalysisManager::get_instance()->get_z3ctx()), parent_state(parent_state), v_conditions(AnalysisManager::get_instance()->get_z3ctx()) {
+    auto initial_state = build_initial_state();
+    states.push(initial_state);
+}
+
 LoopExecution::TestResult
-LoopExecution::test(std::shared_ptr<State> state) {
+LoopExecution::test(loop_state_ptr state) {
     auto manager = AnalysisManager::get_instance();
     auto& z3ctx = manager->get_z3ctx();
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->path_condition);
+    assumptions.push_back(state->get_path_condition());
     auto res = solver.check(assumptions);
     LoopExecution::TestResult result;
     switch (res) {
@@ -38,7 +35,7 @@ LoopExecution::test(std::shared_ptr<State> state) {
     return result;
 }
 
-std::shared_ptr<State>
+loop_state_ptr
 LoopExecution::build_initial_state() {
     // set up the stack
     auto stack = AStack();
@@ -55,24 +52,26 @@ LoopExecution::build_initial_state() {
         stack.insert_or_assign_value(&phi, phi_value);
     }
     auto initial_pc = AInstruction::create(loop->getHeader()->getFirstNonPHI());
-    auto initial_state = std::make_shared<State>(State(z3ctx, initial_pc, nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING, true));
+    auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
     return initial_state;
 }
 
-std::vector<std::shared_ptr<State>>
-LoopExecution::step(std::shared_ptr<State> state) {
+loop_state_list
+LoopExecution::step(loop_state_ptr state) {
     auto pc = state->pc;
-    // if (auto call_inst = dynamic_cast<AInstructionCall*>(pc)) {
-    //     auto call_states = call_inst->execute_if_not_target(state, F);
-    //     return call_states;
-    // }
-    return pc->execute(state);
+    loop_state_list new_states;
+    for (auto next_state : pc->execute(state)) {
+        auto next_loop_state = std::make_shared<LoopState>(LoopState(*next_state));
+        new_states.push_back(next_loop_state);
+    }
+
+    return new_states;
 }
 
-std::pair<state_list, state_list>
+std::pair<loop_state_list, loop_state_list>
 LoopExecution::run() {
-    state_list final_states;
-    state_list exit_states;
+    loop_state_list final_states;
+    loop_state_list exit_states;
 
     spdlog::debug("Tracing loop {}", loop->getHeader()->getName().str());
     while (!states.empty()) {
@@ -101,8 +100,7 @@ LoopExecution::run() {
             }
             continue;
         } else if (cur_state->status == State::VERIFYING) {
-            auto new_path_condition = cur_state->path_condition && cur_state->verification_condition;
-            cur_state->path_condition = new_path_condition;
+            cur_state->append_path_condition(cur_state->verification_condition);
             auto res = test(cur_state);
             states.push(cur_state);
             if (res == L_UNFEASIBLE) {
@@ -118,7 +116,7 @@ LoopExecution::run() {
 }
 
 bool
-LoopExecution::back_edge_taken(std::shared_ptr<State> state) {
+LoopExecution::back_edge_taken(loop_state_ptr state) {
     auto pc = state->pc;
     auto prev_pc = state->prev_pc;
     if (prev_pc == nullptr) return false;
@@ -234,7 +232,7 @@ LoopSummarizer::get_predecessor() {
 }
 
 std::pair<std::vector<z3::expr>, std::vector<rec_ty>>
-LoopSummarizer::get_conditions_and_updates(const state_list& final_states) {
+LoopSummarizer::get_conditions_and_updates(const loop_state_list& final_states) {
     auto manager = AnalysisManager::get_instance();
     std::vector<z3::expr> path_conds;
     std::vector<rec_ty> rec_eqs;
@@ -271,7 +269,7 @@ apply_result2expr(z3::apply_result result) {
 }
 
 std::optional<z3::expr>
-LoopSummarizer::get_iterations(const state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values) {
+LoopSummarizer::get_iterations(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values) {
     auto loop_guard = get_loop_guard_condition(exit_states);
     spdlog::info("Loop guard condition: {}", loop_guard.to_string());
     auto loop_guard_closed_form = loop_guard.substitute(params, values);
@@ -301,12 +299,12 @@ LoopSummarizer::get_iterations(const state_list& exit_states, const z3::expr_vec
 }
 
 z3::expr
-LoopSummarizer::get_loop_guard_condition(const state_list& exit_states) {
+LoopSummarizer::get_loop_guard_condition(const loop_state_list& exit_states) {
     auto& z3ctx = rec_s.z3ctx;
     z3::expr guard(z3ctx);
     z3::expr acc_exit_cond = z3ctx.bool_val(false);
     for (auto state : exit_states) {
-        auto path_cond = state->path_condition;
+        auto path_cond = state->get_path_condition();
         acc_exit_cond = acc_exit_cond || path_cond;
     }
     return !acc_exit_cond;
@@ -349,7 +347,7 @@ LoopSummarizer::get_header_phis_scalar_and_func() {
 }
 
 std::vector<z3::expr>
-LoopSummarizer::get_update(std::shared_ptr<State> state) {
+LoopSummarizer::get_update(loop_state_ptr state) {
     std::vector<z3::expr> updates;
     auto header = loop->getHeader();
     auto latch = state->pc->get_block();
@@ -366,7 +364,7 @@ LoopSummarizer::get_update(std::shared_ptr<State> state) {
 }
 
 bool
-LoopExecution::is_exit_state(std::shared_ptr<State> state) {
+LoopExecution::is_exit_state(loop_state_ptr state) {
     auto pc = state->pc;
     auto cur_block = pc->get_block();
     llvm::SmallVector<llvm::BasicBlock*> exits;
@@ -378,7 +376,7 @@ LoopExecution::is_exit_state(std::shared_ptr<State> state) {
 }
 
 bool
-LoopExecution::is_final_state(std::shared_ptr<State> state) {
+LoopExecution::is_final_state(loop_state_ptr state) {
     auto pc = state->pc;
     auto cur_block = pc->get_block();
     if (!loop->isLoopLatch(cur_block)) return false;
