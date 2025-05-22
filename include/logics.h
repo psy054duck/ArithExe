@@ -12,8 +12,11 @@
 #include "z3++.h"
 #include <set>
 #include <string>
+#include "AnalysisManager.h"
+#include "LinearAlgebra.h"
 
 namespace ari_exe {
+    using Matrix = ari_exe::Algebra::LinearAlgebra::Matrix<z3::expr>;
 
     /**
      * @brief A comparator for z3 variables, not designed for general use.
@@ -113,31 +116,52 @@ namespace ari_exe {
     class LinearLogic: public Logic {
         public:
             /**
-             * @brief Assuming var is a piecewise linear expression of other variables,
+             * @brief Assuming vars are piecewise linear expression of others,
              *        this function computes this expressions
              * @param constraints quantifer-free constraints
-             * @param var the variable to be solved
-             * @return the piecewise linear expression of var entailed by the constraints
+             * @param vars variables to be solved
+             * @return piecewise linear expressions of vars entailed by the constraints
              */
-            std::optional<z3::expr> solve_var(const z3::expr& constraints, z3::expr& var);
+            z3::expr_vector solve_vars(const z3::expr& constraints, const z3::expr_vector& vars);
 
             /**
              * @brief transform literal into normal form of e >= 0. Only applicable to LIA.
              */
             z3::expr normalize(z3::expr literal);
 
+            /**
+             * @brief solve linear equations for given variables
+             * @return solution to variables in order
+             */
+            z3::expr_vector solve_linear_equations(z3::expr_vector equations, z3::expr_vector vars);
+
         private:
             /**
-             * @brief Assumming var is a linear expression of other variables
+             * @brief Assumming vars are linear expressions of other variables
              *        entailed by the constraints, which is a conjunction of linear
-             *        inequalities, this function computes the linear expression
+             *        inequalities, this function computes these linear expressions
              */
-            std::optional<z3::expr> solve_var_linear(z3::expr& constraints, z3::expr& var);
+            z3::expr_vector solve_vars_linear(z3::expr constraints, z3::expr_vector var);
 
             /**
              * @brief given a linear expression, return the coefficients of the variable
              */
             z3::expr get_coeff(z3::expr expr, z3::expr var);
+
+            /**
+             * @brief preprocess the constraints to eliminate if-then-else terms
+             * @return the processed constraints and temporary variables introduced
+             *         due to the elimination
+             */
+            std::pair<z3::expr, z3::expr_vector> preprocess_constraints(z3::expr constraints);
+
+            /**
+             * @brief build Ax = b form of the linear equations
+             * @param equations the linear equations
+             * @param vars the variables x in the equations
+             * @return the matrix A and vector b
+             */
+            std::pair<Matrix, Matrix> build_matrix_form(z3::expr_vector equations, z3::expr_vector vars);
     };
 }
 

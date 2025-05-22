@@ -115,6 +115,7 @@ namespace ari_exe {
         public:
             LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const SymbolTable<z3::expr>& globals, const AStack& stack, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
             LoopState(const State& state): State(state), path_condition_in_loop(state.z3ctx.bool_val(true)) {};
+            LoopState(const LoopState& state): State(state), path_condition_in_loop(state.path_condition_in_loop) {};
 
             // if the state is in the process of summarizing a loop
             bool is_summarizing() const override { return true; }

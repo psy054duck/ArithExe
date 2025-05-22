@@ -45,7 +45,9 @@ AInstruction::execute(loop_state_ptr state) {
     auto new_states = execute(std::static_pointer_cast<State>(state));
     loop_state_list new_base_states;
     for (auto& new_state : new_states) {
-        new_base_states.push_back(std::make_shared<LoopState>(*new_state));
+        auto new_loop_state = std::make_shared<LoopState>(LoopState(*new_state));
+        new_loop_state->path_condition_in_loop = state->path_condition_in_loop;
+        new_base_states.push_back(new_loop_state);
     }
     return new_base_states;
 }
@@ -335,7 +337,6 @@ AInstructionCall::summarize_complete(z3::context& z3ctx) {
 
 state_list
 AInstructionBranch::execute(state_ptr state) {
-    llvm::errs() << state->pc->inst->getName() << "\n";
     return _execute(state);
 }
 
@@ -506,15 +507,16 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     return {new_state};
 }
 
-std::vector<state_ptr>
-AInstructionSelect::execute(state_ptr state) {
+template<typename state_ty>
+state_list_base<state_ty>
+AInstructionSelect::_execute(std::shared_ptr<state_ty> state) {
     auto select_inst = dyn_cast<llvm::SelectInst>(inst);
     auto cond = select_inst->getCondition();
     auto cond_value = state->evaluate(cond);
 
     auto true_value = select_inst->getTrueValue();
     auto true_value_expr = state->evaluate(true_value);
-    state_ptr true_state = std::make_shared<State>(*state);
+    auto true_state = std::make_shared<state_ty>(*state);
     true_state->insert_or_assign(inst, true_value_expr);
     true_state->status = State::TESTING;
     // true_state->path_condition = state->path_condition && cond_value;
@@ -523,7 +525,7 @@ AInstructionSelect::execute(state_ptr state) {
 
     auto false_value = select_inst->getFalseValue();
     auto false_value_expr = state->evaluate(false_value);
-    state_ptr false_state = std::make_shared<State>(*state);
+    auto false_state = std::make_shared<state_ty>(*state);
     false_state->insert_or_assign(inst, false_value_expr);
     false_state->status = State::TESTING;
     // false_state->path_condition = state->path_condition && !cond_value;
@@ -531,6 +533,16 @@ AInstructionSelect::execute(state_ptr state) {
     false_state->step_pc();
 
     return {true_state, false_state};
+}
+
+state_list
+AInstructionSelect::execute(state_ptr state) {
+    return _execute(state);
+}
+
+loop_state_list
+AInstructionSelect::execute(loop_state_ptr state) {
+    return _execute(state);
 }
 
 llvm::BasicBlock*

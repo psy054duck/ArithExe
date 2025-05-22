@@ -185,7 +185,7 @@ LoopSummarizer::summarize() {
     spdlog::info("Computing the number of iterations");
     auto N = get_iterations(exit_states, params, params_values);
     if (N.has_value()) {
-        spdlog::info("The number of iterations is {}", N.value().to_string());
+        spdlog::info("The number of iterations is {}", N.value().simplify().to_string());
     } else {
         spdlog::info("Cannot find the number of iterations");
         return;
@@ -294,8 +294,14 @@ LoopSummarizer::get_iterations(const loop_state_list& exit_states, const z3::exp
     z3::apply_result result = qe_tactic(g);
     auto linear_logic = LinearLogic();
     spdlog::info("Solving for N");
-    auto N_value = linear_logic.solve_var(apply_result2expr(result), N);
-    return N_value;
+    z3::expr_vector N_vec(z3ctx);
+    N_vec.push_back(N);
+    auto N_value = linear_logic.solve_vars(apply_result2expr(result), N_vec);
+    if (N_value.size() == 0) {
+        spdlog::debug("Cannot find the number of iterations");
+        return std::nullopt;
+    }
+    return N_value[0];
 }
 
 z3::expr

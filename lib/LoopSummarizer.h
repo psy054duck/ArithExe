@@ -24,8 +24,8 @@
 #include "z3++.h"
 
 #include "rec_solver.h"
-#include "state.h"
 #include "AnalysisManager.h"
+#include "state.h"
 #include "LoopSummary.h"
 #include "FunctionSummarizer.h"
 #include "common.h"

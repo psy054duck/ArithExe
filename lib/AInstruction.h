@@ -14,12 +14,12 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/InstrTypes.h"
 
+#include "AnalysisManager.h"
 #include "state.h"
 #include "FunctionSummary.h"
 #include "LoopSummary.h"
 #include "FunctionSummarizer.h"
 #include "LoopSummarizer.h"
-#include "AnalysisManager.h"
 
 namespace ari_exe {
     // class State;
@@ -146,7 +146,11 @@ namespace ari_exe {
     class AInstructionSelect: public AInstruction {
         public:
             AInstructionSelect(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<state_ptr> execute(state_ptr state) override;
+            state_list execute(state_ptr state) override;
+            loop_state_list execute(loop_state_ptr state) override;
+
+            template<typename state_ty>
+            state_list_base<state_ty> _execute(std::shared_ptr<state_ty> state);
     };
 }
 #endif

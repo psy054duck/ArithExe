@@ -48,9 +48,9 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
+#include "AnalysisManager.h"
 #include "state.h"
 #include "FunctionSummarizer.h"
-#include "AnalysisManager.h"
 
 #include <vector>
 #include <queue>

@@ -14,11 +14,11 @@ int main(){
 			y++;
 		}
 	}
-	while(y>0){
-		x--;
-		z++;
-		y=y-2;
-	}
+	// while(y>0){
+	// 	x--;
+	// 	z++;
+	// 	y=y-2;
+	// }
 	__VERIFIER_assert(z%2==0);
 	
 }

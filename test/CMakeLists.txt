@@ -10,8 +10,10 @@ FetchContent_Declare(
 )
 # For Windows: Prevent overriding the parent project's compiler/linker settings
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+
 FetchContent_MakeAvailable(googletest)
 
+include_directories(${CMAKE_SOURCE_DIR}/lib)
 enable_testing()
 
 add_executable(
@@ -22,6 +24,11 @@ add_executable(
 add_executable(
   test_logic
   test_logic.cpp
+)
+
+add_executable(
+  test_algebra
+  test_algebra.cpp
 )
 
 target_link_libraries(
@@ -35,11 +42,20 @@ target_link_libraries(
 target_link_libraries(
   test_logic
   GTest::gtest_main
-  logics
+  ${ARITHEXEC_LIBS}
   ${Z3_LIBRARIES}
+  ${llvm_libs} 
 )
 
+target_link_libraries(
+  test_algebra
+  GTest::gtest_main
+  ${ARITHEXEC_LIBS}
+  ${Z3_LIBRARIES}
+  ${llvm_libs} 
+)
 
 include(GoogleTest)
 gtest_discover_tests(test_engine)
 gtest_discover_tests(test_logic)
+gtest_discover_tests(test_algebra)
