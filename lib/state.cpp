@@ -26,6 +26,9 @@ State::evaluate(llvm::Value* v) {
     // TODO: support other types
     auto const_val = llvm::dyn_cast_or_null<llvm::ConstantInt>(v);
     if (const_val) {
+        if (const_val->getBitWidth() == 1) {
+            return const_val->isOne() ? z3ctx.bool_val(true) : z3ctx.bool_val(false);
+        }
         return z3ctx.int_val(const_val->getSExtValue());
     }
     spdlog::error("Value {} not found in state", v->getName().str());
