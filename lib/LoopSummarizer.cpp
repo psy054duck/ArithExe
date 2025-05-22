@@ -39,7 +39,9 @@ loop_state_ptr
 LoopExecution::build_initial_state() {
     // set up the stack
     auto stack = AStack();
-    stack.push_frame();
+    auto parent_top_frame = parent_state->stack.top_frame();
+    stack.push_frame(parent_top_frame);
+
     auto header = loop->getHeader();
     auto manager = AnalysisManager::get_instance();
     auto& z3ctx = manager->get_z3ctx();
@@ -52,7 +54,8 @@ LoopExecution::build_initial_state() {
         stack.insert_or_assign_value(&phi, phi_value);
     }
     auto initial_pc = AInstruction::create(loop->getHeader()->getFirstNonPHI());
-    auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
+    // auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
+    auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, parent_state->globals, stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
     return initial_state;
 }
 

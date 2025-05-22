@@ -83,7 +83,8 @@ LinearLogic::solve_vars(const z3::expr& constraints, const z3::expr_vector& vars
     
     // ask linear solver to solve for both given vars and tmp_vars
     // tmp_vars do not appear in the constraints so they cannot appear in solutions.
-    z3::expr_vector vars_and_tmp_vars(vars);
+    z3::expr_vector vars_and_tmp_vars(z3ctx);
+    for (const auto& var : vars) vars_and_tmp_vars.push_back(var);
     for (const auto& tmp_var : tmp_vars) vars_and_tmp_vars.push_back(tmp_var);
 
     // solve case by case
@@ -96,18 +97,28 @@ LinearLogic::solve_vars(const z3::expr& constraints, const z3::expr_vector& vars
         }
         complete_values.push_back(partial_value);
         z3::expr_vector dst(z3ctx);
-        for (auto v : partial_value) dst.push_back(v);
+        for (auto v : partial_value_with_tmp) dst.push_back(v);
         z3::expr cond = conjunct.substitute(vars_and_tmp_vars, dst);
         conds.push_back(cond.simplify());
     }
 
     // combine results uisng if-then-else
-    z3::expr_vector res = complete_values[0];
+    std::vector<z3::expr> res_vec;
+    for (int i = 0; i < complete_values[0].size(); ++i) {
+        res_vec.push_back(complete_values[0][i]);
+    }
     for (int i = 1; i < complete_values.size(); ++i) {
-        for (int j = 0; j < res.size(); ++j) {
-            res[j] = z3::ite(conds[i], complete_values[i][j], res[j]);
+        for (int j = 0; j < res_vec.size(); ++j) {
+            res_vec[j] = z3::ite(simplify(conds[i]), complete_values[i][j], res_vec[j]);
         }
     }
+
+    // prepare the result
+    z3::expr_vector res(z3ctx);
+    for (int i = 0; i < res_vec.size(); ++i) {
+        res.push_back(res_vec[i].simplify());
+    }
+
     return res;
 }
 
@@ -249,21 +260,6 @@ Logic::to_dnf(const z3::expr& fml) {
         res.push_back(z3::mk_and(neg_clause_list));
     }
     return res;
-    // auto atms = atoms(fml);
-    // z3::solver s_atoms(fml.ctx());
-    // s_atoms.add(atms);
-    // z3::expr_vector cnf_clauses = to_cnf(fml);
-    // spdlog::debug("CNF size: {}", cnf_clauses.size());
-    // std::vector<z3::expr_vector> dnf_conjuncts = dnf_rec(cnf_clauses);
-    // z3::expr_vector conjuncts(fml.ctx());
-    // for (const auto& conjunct : dnf_conjuncts) {
-    //     z3::expr dnf_clause = conjunct[0];
-    //     for (unsigned i = 1; i < conjunct.size(); ++i) {
-    //         dnf_clause = dnf_clause && conjunct[i];
-    //     }
-    //     conjuncts.push_back(dnf_clause);
-    // }
-    // return conjuncts;
 }
 
 std::vector<z3::expr_vector>
@@ -292,8 +288,6 @@ Logic::dnf_rec(const z3::expr_vector& clauses) {
     return dnf_conjuncts;
 }
 
-
-
 z3::expr_vector
 LinearLogic::solve_vars_linear(z3::expr constraints, z3::expr_vector vars) {
     auto& ctx = constraints.ctx();
@@ -317,14 +311,6 @@ LinearLogic::solve_vars_linear(z3::expr constraints, z3::expr_vector vars) {
         s.pop();
     }
     return solve_linear_equations(eqs, vars);
-    // get the coefficient of var
-    // z3::expr_vector src(var.ctx());
-    // z3::expr_vector dst(var.ctx());
-    // src.push_back(var);
-    // dst.push_back(var - 1);
-    // z3::expr coeff = (target_expr - target_expr.substitute(src, dst)).simplify();
-    // auto res = ((target_expr - coeff*var) / -coeff).simplify();
-    // return res;
 }
 
 z3::expr
@@ -404,4 +390,14 @@ LinearLogic::build_matrix_form(z3::expr_vector equations, z3::expr_vector vars) 
         b(i, 0) = (-b(i, 0)).simplify();
     }
     return {A, b};
+}
+
+z3::expr
+Logic::simplify(const z3::expr& fml) {
+    auto cnf = to_cnf(fml);
+    z3::expr_vector res(fml.ctx());
+    for (auto clause : cnf) {
+        res.push_back(clause.simplify());
+    }
+    return z3::mk_and(res);
 }

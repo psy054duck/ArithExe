@@ -360,7 +360,6 @@ namespace ari_exe {
                     if ((pivot == 0).simplify().is_true()) {
                         continue;
                     }
-                    std::cout << "pivot: " << pivot.to_string() << std::endl;
                     assert(pivot != 0 && "Matrix is singular and cannot be solved");
                     for (int j = 0; j < A.cols + b.cols; j++) {
                         augmented(i, j) = data_div(augmented(i, j), pivot);

@@ -231,7 +231,6 @@ def _set_up_constraints(rec: LoopRecurrence, closed_form: PiecewiseClosedForm, i
     ks = []
     constraint = True
     ind_var = closed_form.ind_var
-    closed_form.pprint()
     acc = z3.IntVal(0)
     k_cnt = 0
     for i, (seq, q) in enumerate(index_seq):

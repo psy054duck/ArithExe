@@ -52,6 +52,11 @@ namespace ari_exe {
             z3::expr_vector to_dnf(const z3::expr& fml);
 
             /**
+             * @brief simplify the formula using to_cnf
+             */
+            z3::expr simplify(const z3::expr& fml);
+
+            /**
              * @brief check if the formula is >=
              */
             bool is_ge(const z3::expr& e);
@@ -89,7 +94,6 @@ namespace ari_exe {
         private:
             void atoms_rec(const z3::expr& t, std::set<std::string>& visited, z3::expr_vector& atms);
             
-
             /**
              * @brief Given a model and an atom, return the literal satisfied by the model
              */

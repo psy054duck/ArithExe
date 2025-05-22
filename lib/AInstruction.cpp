@@ -150,13 +150,13 @@ AInstructionCall::execute(state_ptr state) {
 
     z3::expr result(z3ctx);
 
-    if (called_func->getName().ends_with("assert")) {
+    if (called_func && called_func->getName().ends_with("assert")) {
         // verification. should check if the condition is true
         return {execute_assert(state)};
-    } else if (called_func->getName().ends_with("assume")) {
+    } else if (called_func && called_func->getName().ends_with("assume")) {
         // assume function, add the condition to the path condition
         return {execute_assume(state)};
-    } else if (called_func->hasExactDefinition()) {
+    } else if (called_func && called_func->hasExactDefinition()) {
         return {execute_normal(state)};
     } else {
         return {execute_unknown(state)};

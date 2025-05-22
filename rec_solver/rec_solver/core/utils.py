@@ -556,7 +556,6 @@ def _solve_linear_expr_heuristic(constraints, x):
 
 def _get_possible_eqs(constraints, x):
     possible_formulas = get_all_atoms(z3.And(constraints))
-    print(possible_formulas)
     # for formula in constraints:
     #     all_vars = get_vars(formula)
     #     if any(str(v) in [str(var) for var in all_vars] for v in x):
