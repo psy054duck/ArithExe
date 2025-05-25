@@ -2,11 +2,11 @@
 
 using namespace ari_exe;
 
-LoopSummary::LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary): params(params), summary_exact(summary), is_over_approx(false) {}
+LoopSummary::LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary, const z3::expr& constraints): params(params), summary_exact(summary), is_over_approx(false), constraints(constraints) {}
 
-LoopSummary::LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary): params(params), summary_exact(params.ctx()), summary_over_approx(summary), is_over_approx(true) {}
+LoopSummary::LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary, const z3::expr& constraints): params(params), summary_exact(params.ctx()), summary_over_approx(summary), is_over_approx(true), constraints(constraints) {}
 
-LoopSummary::LoopSummary(const LoopSummary& other): params(other.params), summary_exact(other.summary_exact), summary_over_approx(other.summary_over_approx), is_over_approx(other.is_over_approx) {}
+LoopSummary::LoopSummary(const LoopSummary& other): params(other.params), summary_exact(other.summary_exact), summary_over_approx(other.summary_over_approx), is_over_approx(other.is_over_approx), constraints(other.constraints) {}
 
 z3::expr_vector
 LoopSummary::evaluate(const z3::expr_vector& args) {

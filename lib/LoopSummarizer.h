@@ -147,13 +147,13 @@ namespace ari_exe {
             std::vector<llvm::PHINode*> get_header_phis();
 
             /**
-             * @brief get number of iterations of the loop
+             * @brief get constraints on the number of iterations of the loop
              * @param exit_states The exit states
              * @param params header phis
              * @param values The closed-form solution to the header phis
-             * @return The loop guard condition
+             * @return constraints on the number of iterations of the loop and the symbol used to denote the number of iterations
              */
-            std::optional<z3::expr> get_iterations(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values);
+            std::pair<z3::expr, z3::expr> get_iterations_constraints(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values);
 
             /**
              * @brief get the loop guard condition

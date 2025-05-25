@@ -32,11 +32,7 @@ namespace ari_exe {
             // get the value of a variable
             std::optional<value_t> get_value(llvm::Value* symbol) const;
 
-            void print() const {
-                for (const auto& [key, value] : variables) {
-                    llvm::errs() << key->getName() << " = " << value.to_string() << "\n";
-                }
-            }
+            void print() const;
 
         private:
             std::map<llvm::Value*, value_t> variables;
@@ -68,6 +64,13 @@ namespace ari_exe {
             return it->second;
         }
         return std::nullopt;
+    }
+
+    template<typename value_t>
+    void SymbolTable<value_t>::print() const {
+        for (const auto& [key, value] : variables) {
+            llvm::errs() << key->getName() << " = " << value.to_string() << "\n";
+        }
     }
 }
 

@@ -28,8 +28,6 @@ Engine::verify() {
     return res;
 }
 
-
-
 std::vector<state_ptr>
 Engine::step(state_ptr state) {
     auto pc = state->pc;

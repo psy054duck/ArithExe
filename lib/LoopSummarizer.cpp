@@ -186,23 +186,25 @@ LoopSummarizer::summarize() {
     }
     spdlog::info("Closed-form solutions are computed successfully:");
     spdlog::info("Computing the number of iterations");
-    auto N = get_iterations(exit_states, params, params_values);
-    if (N.has_value()) {
-        spdlog::info("The number of iterations is {}", N.value().simplify().to_string());
-    } else {
-        spdlog::info("Cannot find the number of iterations");
-        return;
-    }
-    auto N_value = N.value();
+    auto [N_constraints, N] = get_iterations_constraints(exit_states, params, params_values);
     z3::expr_vector exit_values(rec_s.z3ctx);
-    z3::expr_vector src(z3ctx);
-    z3::expr_vector dst(z3ctx);
-    src.push_back(manager->get_ind_var());
-    dst.push_back(N_value);
-    for (auto expr : params_values) {
-        exit_values.push_back(expr.substitute(src, dst));
+    auto linear_logic = LinearLogic();
+    z3::expr_vector N_vec(z3ctx);
+    N_vec.push_back(N);
+    auto N_value = linear_logic.solve_vars(N_constraints, N_vec);
+    if (N_value.size() == 0) {
+        spdlog::info("fail to compute the number of iterations, record the constraints on it in path conditions");
+        N_constraints = z3ctx.bool_val(true);
+    } else {
+        z3::expr_vector src(z3ctx);
+        z3::expr_vector dst(z3ctx);
+        src.push_back(manager->get_ind_var());
+        dst.push_back(N_value[0]);
+        for (auto expr : params_values) {
+            exit_values.push_back(expr.substitute(src, dst));
+        }
     }
-    summary = LoopSummary(params, exit_values);
+    summary = LoopSummary(params, exit_values, N_constraints);
 }
 
 initial_ty
@@ -271,8 +273,8 @@ apply_result2expr(z3::apply_result result) {
     return res.simplify();
 }
 
-std::optional<z3::expr>
-LoopSummarizer::get_iterations(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values) {
+std::pair<z3::expr, z3::expr>
+LoopSummarizer::get_iterations_constraints(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values) {
     auto loop_guard = get_loop_guard_condition(exit_states);
     spdlog::info("Loop guard condition: {}", loop_guard.to_string());
     auto loop_guard_closed_form = loop_guard.substitute(params, values);
@@ -295,16 +297,11 @@ LoopSummarizer::get_iterations(const loop_state_list& exit_states, const z3::exp
     z3::goal g(z3ctx);
     g.add(constraints);
     z3::apply_result result = qe_tactic(g);
-    auto linear_logic = LinearLogic();
     spdlog::info("Solving for N");
     z3::expr_vector N_vec(z3ctx);
     N_vec.push_back(N);
-    auto N_value = linear_logic.solve_vars(apply_result2expr(result), N_vec);
-    if (N_value.size() == 0) {
-        spdlog::debug("Cannot find the number of iterations");
-        return std::nullopt;
-    }
-    return N_value[0];
+    auto N_constraints = apply_result2expr(result);
+    return {N_constraints, N};
 }
 
 z3::expr

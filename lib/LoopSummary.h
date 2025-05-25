@@ -22,8 +22,8 @@ namespace ari_exe {
              *               are symbolic initial values of the recurrence.
              * @param summary The exact summary of the loop
              */
-            LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary);
-            LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary);
+            LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary, const z3::expr& constraints);
+            LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary, const z3::expr& constraints);
             
             LoopSummary(const LoopSummary& other);
             
@@ -61,6 +61,12 @@ namespace ari_exe {
              *          closed-form solution.
              */
             std::map<z3::expr, z3::expr> summary_over_approx;
+
+            /**
+             * constraints of this loop, which may contains constraints on the number of iterations
+             * should be included in the path condition of parent state's
+             */
+            z3::expr constraints;
 
             /**
              * @brief indicates whether the loop is over-approximated or not.
