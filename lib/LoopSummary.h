@@ -3,6 +3,8 @@
 
 #include "z3++.h"
 
+#include "llvm/IR/Instructions.h"
+
 #include <utility>
 #include <map>
 
@@ -38,11 +40,16 @@ namespace ari_exe {
 
         private:
             /**
-             * @brief The parameters of the loop, which are header phis.
+             * @brief The parameters of the loop, which are header phis and global variables modified by the loop.
              *        When treating the loop as recurrence, the parameters are
-             *        are symbolic initial values of the recurrence.
+             *        symbolic initial values of the recurrence.
              */
             z3::expr_vector params;
+
+            /**
+             * @brief LLVM values that are modified by the loop.
+             */
+            std::vector<llvm::Value*> modified_values;
 
             /**
              * @brief The exact summary of the loop

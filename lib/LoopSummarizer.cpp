@@ -38,24 +38,27 @@ LoopExecution::test(loop_state_ptr state) {
 loop_state_ptr
 LoopExecution::build_initial_state() {
     // set up the stack
-    auto stack = AStack();
-    auto parent_top_frame = parent_state->stack.top_frame();
-    stack.push_frame(parent_top_frame);
+    // auto stack = AStack();
+    // auto parent_top_frame = parent_state->stack.top_frame();
+    // stack.push_frame(parent_top_frame);
+    auto memory = Memory(parent_state->memory);
 
-    auto header = loop->getHeader();
+    // auto header = loop->getHeader();
     auto manager = AnalysisManager::get_instance();
     auto& z3ctx = manager->get_z3ctx();
-    auto prev_block = parent_state->trace.back();
-    for (auto& phi : header->phis()) {
-        auto name = get_z3_name(phi.getName().str());
-        auto phi_value = z3ctx.int_const(name.c_str());
-        // auto phi_initial = phi.getIncomingValueForBlock(prev_block);
-        // auto phi_value = parent_state->evaluate(phi_initial);
-        stack.insert_or_assign_value(&phi, phi_value);
+    auto modified_values = get_modified_values();
+    // auto prev_block = parent_state->trace.back();
+    for (auto& m_value: modified_values) {
+        auto written_value = m_value;
+        if (auto store_inst = dyn_cast_or_null<llvm::StoreInst>(m_value)) {
+            written_value = store_inst->getValueOperand();
+        }
+        auto name = get_z3_name(written_value->getName().str());
+        auto z3_value = z3ctx.int_const(name.c_str());
+        memory.write(written_value, z3_value);
     }
     auto initial_pc = AInstruction::create(loop->getHeader()->getFirstNonPHI());
-    // auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
-    auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, parent_state->globals, stack, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
+    auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, memory, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
     return initial_state;
 }
 
@@ -191,6 +194,7 @@ LoopSummarizer::summarize() {
     auto linear_logic = LinearLogic();
     z3::expr_vector N_vec(z3ctx);
     N_vec.push_back(N);
+    llvm::errs() << N_constraints.to_string() << "\n";
     auto N_value = linear_logic.solve_vars(N_constraints, N_vec);
     if (N_value.size() == 0) {
         spdlog::info("fail to compute the number of iterations, record the constraints on it in path conditions");
@@ -223,6 +227,24 @@ LoopSummarizer::get_initial_values() {
     for (auto f : func) { func_0.push_back(f.decl()(0)); }
     return {func_0, values};
 }
+
+std::vector<llvm::Value*>
+LoopExecution::get_modified_values() {
+    std::vector<llvm::Value*> modified_values;
+    auto header = loop->getHeader();
+    for (auto& phi : header->phis()) {
+        modified_values.push_back(&phi);
+    }
+    for (auto& block : loop->blocks()) {
+        for (auto& inst : *block) {
+            if (auto store_inst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
+                modified_values.push_back(store_inst->getPointerOperand());
+            }
+        }
+    }
+    return modified_values;
+}
+
 
 llvm::BasicBlock*
 LoopSummarizer::get_predecessor() {
@@ -350,6 +372,37 @@ LoopSummarizer::get_header_phis_scalar_and_func() {
         dst.push_back(phi_dst(manager->get_ind_var()));
     }
     return {src, dst};
+}
+
+std::pair<z3::expr_vector, z3::expr_vector>
+LoopSummarizer::get_modified_values_and_functions() {
+    auto manager = AnalysisManager::get_instance();
+    auto& z3ctx = manager->get_z3ctx();
+
+    z3::expr_vector modified_values(z3ctx);
+    z3::expr_vector functions(z3ctx);
+
+    auto header = loop->getHeader();
+    for (auto& phi : header->phis()) {
+        auto name = get_z3_name(phi.getName().str());
+        auto z3_const = z3ctx.int_const(name.c_str());
+        auto z3_func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
+        modified_values.push_back(z3_const);
+        functions.push_back(z3_func(manager->get_ind_var()));
+    }
+    for (auto& block : loop->blocks()) {
+        for (auto& inst : *block) {
+            if (auto store_inst = dyn_cast_or_null<llvm::StoreInst>(&inst)) {
+                auto written_value = store_inst->getValueOperand();
+                auto name = get_z3_name(written_value->getName().str());
+                auto z3_const = z3ctx.int_const(name.c_str());
+                auto z3_func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
+                modified_values.push_back(z3_const);
+                functions.push_back(z3_func(manager->get_ind_var()));
+            }
+        }
+    }
+    return {modified_values, functions};
 }
 
 std::vector<z3::expr>

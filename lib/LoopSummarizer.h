@@ -93,6 +93,12 @@ namespace ari_exe {
              */
             bool back_edge_taken(loop_state_ptr state);
 
+            /**
+             * @brief get all values that modified by this loop,
+             *        for which wee need to summarize.
+             */
+            std::vector<llvm::Value*> get_modified_values();
+
             llvm::Loop* loop;
 
             z3::solver solver;
@@ -166,6 +172,11 @@ namespace ari_exe {
              * @brief get scalar version and function version of header phis
              */
             std::pair<z3::expr_vector, z3::expr_vector> get_header_phis_scalar_and_func();
+
+            /**
+             * @brief get llvm values that are modified by the loop and their z3 functions
+             */
+            std::pair<z3::expr_vector, z3::expr_vector> get_modified_values_and_functions();
 
             /**
              * @brief extract conditions and update from final states

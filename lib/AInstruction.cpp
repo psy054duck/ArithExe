@@ -32,6 +32,10 @@ AInstruction::create(llvm::Instruction* inst) {
         res = new AInstructionPhi(phi);
     } else if (auto select = llvm::dyn_cast_or_null<llvm::SelectInst>(inst)) {
         res = new AInstructionSelect(select);
+    } else if (auto load_inst = llvm::dyn_cast_or_null<llvm::LoadInst>(inst)) {
+        res = new AInstructionLoad(load_inst);
+    } else if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(inst)) {
+        res = new AInstructionStore(store_inst);
     } else {
         llvm::errs() << "Unsupported instruction type\n";
         assert(false);
@@ -100,7 +104,7 @@ AInstructionBinary::execute(state_ptr state) {
     }
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->insert_or_assign(inst, result);
+    new_state->write(inst, result);
     new_state->step_pc();
 
     return {new_state};
@@ -134,9 +138,8 @@ AInstructionICmp::execute(state_ptr state) {
         llvm::errs() << "Unsupported ICmp predicate\n";
         assert(false);
     }
-
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->insert_or_assign(inst, result);
+    new_state->write(inst, result);
     new_state->step_pc();
     return {new_state};
 }
@@ -187,7 +190,7 @@ AInstructionCall::execute_normal(state_ptr state) {
             auto arg_value = state->evaluate(arg);
             args.push_back(arg_value);
         }
-        new_state->insert_or_assign(inst, summary->evaluate(args));
+        new_state->write(inst, summary->evaluate(args));
         new_state->step_pc();
         return new_state;
     }
@@ -201,7 +204,7 @@ AInstructionCall::execute_normal(state_ptr state) {
         auto arg = call_inst->getArgOperand(i);
         auto arg_value = state->evaluate(arg);
         auto param = called_func->getArg(i);
-        new_state->insert_or_assign(param, arg_value);
+        new_state->write(param, arg_value);
     }
     auto called_first_inst = &*called_func->getEntryBlock().begin();
     auto next_pc = AInstruction::create(called_first_inst);
@@ -274,7 +277,7 @@ AInstructionCall::execute_unknown(state_ptr state) {
         assert(false);
     }
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->insert_or_assign(inst, result);
+    new_state->write(inst, result);
     new_state->step_pc();
     return new_state;
 }
@@ -300,7 +303,7 @@ AInstructionCall::execute_if_not_target(state_ptr state, llvm::Function* target)
             args.push_back(arg_value);
         }
         auto new_state = std::make_shared<State>(*state);
-        new_state->insert_or_assign(inst, f(args));
+        new_state->write(inst, f(args));
         new_state->step_pc();
         return {new_state};
     } else {
@@ -390,7 +393,7 @@ AInstructionBranch::_execute(std::shared_ptr<state_ty> state) {
 
 std::vector<state_ptr>
 AInstructionReturn::execute(state_ptr state) {
-    if (state->stack.size() == 1) {
+    if (state->memory.stack_size() == 1) {
         // no function call, just terminate
         state->status = State::TERMINATED;
         return {state};
@@ -406,7 +409,7 @@ AInstructionReturn::execute(state_ptr state) {
     new_state->step_pc(frame.prev_pc);
     auto call_inst = dyn_cast<llvm::CallInst>(new_state->pc->inst);
     assert(call_inst);
-    new_state->insert_or_assign(call_inst, ret_expr);
+    new_state->write(call_inst, ret_expr);
     new_state->step_pc();
     return {new_state};
 }
@@ -420,7 +423,7 @@ AInstructionZExt::execute(state_ptr state) {
     z3::expr result(z3ctx);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->insert_or_assign(inst, op_value);
+    new_state->write(inst, op_value);
     new_state->step_pc();
     return {new_state};
 }
@@ -451,7 +454,7 @@ AInstructionPhi::execute(state_ptr state) {
     auto selected_value_expr = state->evaluate(selected_value);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->insert_or_assign(inst, selected_value_expr);
+    new_state->write(inst, selected_value_expr);
     new_state->step_pc();
 
     return {new_state};
@@ -499,7 +502,7 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     state_ptr new_state = std::make_shared<State>(*state);
     auto phi_it = header->phis().begin();
     for (int i = 0; i < closed_forms.size(); i++, phi_it++) {
-        new_state->insert_or_assign(&*phi_it, closed_forms[i]);
+        new_state->write(&*phi_it, closed_forms[i]);
     }
     auto new_pc = AInstruction::create(&*exit_block->begin());
     new_state->trace.push_back(header);
@@ -517,7 +520,7 @@ AInstructionSelect::_execute(std::shared_ptr<state_ty> state) {
     auto true_value = select_inst->getTrueValue();
     auto true_value_expr = state->evaluate(true_value);
     auto true_state = std::make_shared<state_ty>(*state);
-    true_state->insert_or_assign(inst, true_value_expr);
+    true_state->write(inst, true_value_expr);
     true_state->status = State::TESTING;
     // true_state->path_condition = state->path_condition && cond_value;
     true_state->append_path_condition(cond_value);
@@ -526,7 +529,7 @@ AInstructionSelect::_execute(std::shared_ptr<state_ty> state) {
     auto false_value = select_inst->getFalseValue();
     auto false_value_expr = state->evaluate(false_value);
     auto false_state = std::make_shared<state_ty>(*state);
-    false_state->insert_or_assign(inst, false_value_expr);
+    false_state->write(inst, false_value_expr);
     false_state->status = State::TESTING;
     // false_state->path_condition = state->path_condition && !cond_value;
     false_state->append_path_condition(!cond_value);
@@ -548,4 +551,31 @@ AInstructionSelect::execute(loop_state_ptr state) {
 llvm::BasicBlock*
 AInstruction::get_block() {
     return inst->getParent();
+}
+
+std::vector<state_ptr>
+AInstructionLoad::execute(state_ptr state) {
+    auto load_inst = dyn_cast<llvm::LoadInst>(inst);
+    auto ptr = load_inst->getPointerOperand();
+    auto load_value = state->evaluate(ptr);
+    state_ptr new_state = std::make_shared<State>(*state);
+    new_state->write(inst, load_value);
+    new_state->step_pc();
+    return {new_state};
+    // auto ptr_value = state->evaluate(ptr);
+}
+
+std::vector<state_ptr>
+AInstructionStore::execute(state_ptr state) {
+    auto store_inst = dyn_cast<llvm::StoreInst>(inst);
+    auto ptr = store_inst->getPointerOperand();
+    auto value = store_inst->getValueOperand();
+    auto ptr_value = state->evaluate(ptr);
+    auto value_expr = state->evaluate(value);
+
+    state_ptr new_state = std::make_shared<State>(*state);
+    new_state->write(ptr, ptr_value);
+    new_state->write(inst, value_expr);
+    new_state->step_pc();
+    return {new_state};
 }

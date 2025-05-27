@@ -131,12 +131,6 @@ namespace ari_exe {
              */
             std::vector<state_ptr> execute_if_summarizable(state_ptr state);
     
-            // /**
-            //  * @brief Summary the loop completely, 
-            //  *        That is, no path condition is given for summarization
-            //  */
-            // std::optional<LoopSummary> summarize_complete();
-
             /**
              * @brief record all loops that are failed to be summarized
              */
@@ -151,6 +145,19 @@ namespace ari_exe {
 
             template<typename state_ty>
             state_list_base<state_ty> _execute(std::shared_ptr<state_ty> state);
+    };
+
+    class AInstructionLoad: public AInstruction {
+        public:
+            AInstructionLoad(llvm::Instruction* inst): AInstruction(inst) {};
+            std::vector<state_ptr> execute(state_ptr state) override;
+    };
+
+    class AInstructionStore: public AInstruction {
+        public:
+            AInstructionStore(llvm::Instruction* inst): AInstruction(inst) {};
+            // TODO: for now, only assume it is a write to a scalar variable
+            std::vector<state_ptr> execute(state_ptr state) override;
     };
 }
 #endif

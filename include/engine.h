@@ -86,8 +86,6 @@ namespace ari_exe {
              */
             Engine(const std::string& c_filename);
 
-
-            
             /**
              * @brief set the entry point of the module
              * @param entry the entry point of the module

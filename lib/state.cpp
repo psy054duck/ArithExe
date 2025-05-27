@@ -14,37 +14,43 @@ State::append_path_condition(z3::expr _path_condition) {
 
 z3::expr
 State::evaluate(llvm::Value* v) {
-    auto stack_value = stack.evaluate(v);
-    if (stack_value.has_value()) {
-        return *stack_value;
+    auto value = memory.read(v);
+    if (value.has_value()) {
+        return *value;
     }
-    auto globals_value = globals.get_value(v);
-    if (globals_value.has_value()) {
-        return *globals_value;
-    }
-    // if not found, assume it is a constant int
-    // TODO: support other types
-    auto const_val = llvm::dyn_cast_or_null<llvm::ConstantInt>(v);
-    if (const_val) {
-        if (const_val->getBitWidth() == 1) {
-            return const_val->isOne() ? z3ctx.bool_val(true) : z3ctx.bool_val(false);
-        }
-        return z3ctx.int_val(const_val->getSExtValue());
-    }
-    spdlog::error("Value {} not found in state", v->getName().str());
-    assert(false);
+    assert(false && "Value not found in memory");
+    // auto stack_value = stack.evaluate(v);
+    // if (stack_value.has_value()) {
+    //     return *stack_value;
+    // }
+    // auto globals_value = globals.read(v);
+    // if (globals_value.has_value()) {
+    //     return *globals_value;
+    // }
+    // // if not found, assume it is a constant int
+    // // TODO: support other types
+    // auto const_val = llvm::dyn_cast_or_null<llvm::ConstantInt>(v);
+    // if (const_val) {
+    //     if (const_val->getBitWidth() == 1) {
+    //         return const_val->isOne() ? z3ctx.bool_val(true) : z3ctx.bool_val(false);
+    //     }
+    //     return z3ctx.int_val(const_val->getSExtValue());
+    // }
+    // spdlog::error("Value {} not found in state", v->getName().str());
+    // assert(false);
 }
 
 void
-State::insert_or_assign(llvm::Value* v, z3::expr value) {
-    auto stack_value = stack.evaluate(v);
-    if (stack_value.has_value()) {
-        stack.insert_or_assign_value(v, value);
-    } else if (globals.get_value(v).has_value()) {
-        globals.insert_or_assign(v, value);
-    } else {
-        stack.insert_or_assign_value(v, value);
-    }
+State::write(llvm::Value* v, z3::expr value) {
+    memory.write(v, value);
+    // auto stack_value = stack.evaluate(v);
+    // if (stack_value.has_value()) {
+    //     stack.insert_or_assign_value(v, value);
+    // } else if (globals.read(v).has_value()) {
+    //     globals.insert_or_assign(v, value);
+    // } else {
+    //     stack.insert_or_assign_value(v, value);
+    // }
 }
 
 void
@@ -57,26 +63,26 @@ State::step_pc(AInstruction* next_pc) {
     }
 }
 
-void
-State::push_value(llvm::Value* v, z3::expr value) {
-    stack.insert_or_assign_value(v, value);
-}
+// void
+// State::push_value(llvm::Value* v, z3::expr value) {
+//     stack.insert_or_assign_value(v, value);
+// }
 
-AStack::StackFrame&
+MStack::StackFrame&
 State::push_frame() {
-    auto& frame = stack.push_frame();
+    auto& frame = memory.push_frame();
     // record the called site
     frame.prev_pc = pc;
     return frame;
 }
 
-AStack::StackFrame
+MStack::StackFrame
 State::pop_frame() {
-    return stack.pop_frame();
+    return memory.pop_frame();
 }
 
-LoopState::LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const SymbolTable<z3::expr>& globals, const AStack& stack, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status):
-    State(z3ctx, pc, prev_pc, globals, stack, path_condition, trace, status),
+LoopState::LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status):
+    State(z3ctx, pc, prev_pc, memory, path_condition, trace, status),
     path_condition_in_loop(path_condition_in_loop) {}
 
 

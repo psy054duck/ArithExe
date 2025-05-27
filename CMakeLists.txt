@@ -48,7 +48,7 @@ message(STATUS "${llvm_libs}")
 
 set(ARITHEXEC_LIBS
     AInstruction
-    AStack
+    MStack
     engine
     state
     rec_solver
@@ -58,6 +58,8 @@ set(ARITHEXEC_LIBS
     LoopSummary
     AnalysisManager
     logics
+    Memory
+    MemoryObject
 )
 
 add_subdirectory(lib)

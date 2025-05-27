@@ -22,7 +22,8 @@ AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
 
     MPM.addPass(llvm::ModuleInlinerPass());
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LowerSwitchPass()));
-    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::PromotePass()));
+    // MPM.addPass(createModuleToFunctionPassAdaptor(llvm::PromotePass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::RegToMemPass()));
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::SROAPass(llvm::SROAOptions::ModifyCFG)));
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LoopSimplifyPass()));
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LCSSAPass()));

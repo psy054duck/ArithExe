@@ -1,4 +1,5 @@
 #include "FunctionSummarizer.h"
+#include <spdlog/spdlog.h>
 
 using namespace ari_exe;
 
@@ -34,14 +35,14 @@ RecExecution::test(state_ptr state) {
 state_ptr
 RecExecution::build_initial_state() {
     // set up the stack
-    auto stack = AStack();
-    stack.push_frame();
+    Memory memory;
+    memory.push_frame(); 
     for (auto& arg : F->args()) {
         auto name = "ari_" + arg.getName().str();
         auto arg_value = z3ctx.int_const(name.c_str());
-        stack.insert_or_assign_value(&arg, arg_value);
+        memory.write(&arg, arg_value);
     }
-    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(&*F->begin()->begin()), nullptr, SymbolTable<z3::expr>(), stack, z3ctx.bool_val(true), {}));
+    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(&*F->begin()->begin()), nullptr, memory, z3ctx.bool_val(true), {}));
     return initial_state;
 }
 
@@ -58,9 +59,11 @@ RecExecution::step(state_ptr state) {
 std::vector<state_ptr>
 RecExecution::run() {
     std::vector<state_ptr> final_states;
+    spdlog::info("Collecting all paths");
     while (!states.empty()) {
         auto cur_state = states.front();
         states.pop();
+        spdlog::debug("Current Instruction: {}", cur_state->pc->inst->getName().str());
         if (cur_state->status == State::TERMINATED) {
             final_states.push_back(cur_state);
             continue;
@@ -92,6 +95,7 @@ FunctionSummarizer::FunctionSummarizer(llvm::Function* F, z3::context& _z3ctx): 
 
 void
 FunctionSummarizer::summarize() {
+    spdlog::info("Summarizing function: {}", F->getName().str());
     RecExecution executor(rec_s.z3ctx, F);
     auto final_states = executor.run();
     // all states are TERMINATED and pc is ret

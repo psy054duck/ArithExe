@@ -8,7 +8,7 @@
 #ifndef ASTACK_H
 #define ASTACK_H
 
-#include "SymbolTable.h"
+#include "MemoryObject.h"
 
 #include <map>
 #include <vector>
@@ -21,7 +21,7 @@ namespace ari_exe {
 
     class AInstruction;
 
-    class AStack {
+    class MStack {
         public:
             struct StackFrame {
                 StackFrame() = default;
@@ -29,21 +29,27 @@ namespace ari_exe {
                 StackFrame& operator=(const StackFrame&) = default;
 
                 // insert or assign a value to the stack frame
-                void insert_or_assign(llvm::Value* symbol, z3::expr value);
+                void write(llvm::Value* symbol, z3::expr value);
+
+                std::optional<z3::expr> read(llvm::Value* v) const;
+
+                std::optional<MemoryObject> get_memory_object(llvm::Value* v) const;
 
                 // record values for stack variables
-                SymbolTable<z3::expr> table;
+                // SymbolTable<z3::expr> table;
+                // Memory memory;
+                std::map<llvm::Value*, MemoryObject> m_objects; // map of values in the stack frame
 
                 // record the called site
                 AInstruction* prev_pc = nullptr;
 
-                void print() const { table.print(); };
+                std::string to_string() const;
             };
 
         public:
-            AStack() = default;
-            AStack(const AStack&) = default;
-            AStack& operator=(const AStack&) = default;
+            MStack() = default;
+            MStack(const MStack&) = default;
+            MStack& operator=(const MStack&) = default;
 
             // push a new frame to the stack
             StackFrame& push_frame(const StackFrame& frame);
@@ -55,22 +61,30 @@ namespace ari_exe {
             StackFrame pop_frame();
 
             // get the top frame from the stack
+            StackFrame& top_frame() const;
             StackFrame& top_frame();
 
             // get the value of a variable in the top frame
-            std::optional<z3::expr> evaluate(llvm::Value* v);
+            std::optional<z3::expr> read(llvm::Value* v) const;
+
+            // get the memory object of a variable in the top frame
+            std::optional<MemoryObject> get_memory_object(llvm::Value* v) const;
 
             // add or update a value in the top frame
-            void insert_or_assign_value(llvm::Value* v, z3::expr value);
+            void write(llvm::Value* v, z3::expr value);
+            void write(llvm::Value* v, z3::expr_vector index, z3::expr value);
 
             // get the number of frames in the stack
             size_t size() const {
                 return frames.size();
             }
 
+            std::string top_frame_to_string() const {
+                return frames.top().to_string();
+            }
+
         private:
             std::stack<StackFrame> frames;
     };
-
 }
 #endif

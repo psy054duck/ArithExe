@@ -248,6 +248,8 @@ clause2list(const z3::expr& clause) {
 
 z3::expr_vector
 Logic::to_dnf(const z3::expr& fml) {
+    // S <=> ((a1 ^ .. ^ a_n || ... ||  b1 ^ .. ^ b_m))
+    // not S <=> ((!a1 || ... || !a_n) && ... && (!b1 || ... || !b_m))
     auto neg_fml = to_cnf(!fml);
     z3::params p(fml.ctx());
     z3::expr_vector res(fml.ctx());
