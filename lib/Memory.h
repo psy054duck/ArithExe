@@ -37,11 +37,11 @@ namespace ari_exe {
                 }
                 auto it_heap = m_heap.find(value);
                 if (it_heap != m_heap.end()) {
-                    return it_heap->second.read(index);
+                    return it_heap->second->read(index);
                 }
                 auto it_globals = m_globals.find(value);
                 if (it_globals != m_globals.end()) {
-                    return it_globals->second.read(index);
+                    return it_globals->second->read(index);
                 }
             }
 
@@ -54,11 +54,11 @@ namespace ari_exe {
                 } else {
                     auto it_heap = m_heap.find(value);
                     if (it_heap != m_heap.end()) {
-                        it_heap->second.write(val);
+                        it_heap->second->write(val);
                     } else {
                         auto it_globals = m_globals.find(value);
                         if (it_globals != m_globals.end()) {
-                            it_globals->second.write(val);
+                            it_globals->second->write(val);
                         } else {
                             // If the value is not found in stack, heap, or globals,
                             // write it to the stack.
@@ -77,11 +77,11 @@ namespace ari_exe {
                 } else {
                     auto it_heap = m_heap.find(value);
                     if (it_heap != m_heap.end()) {
-                        it_heap->second.write(index, val);
+                        it_heap->second->write(index, val);
                     } else {
                         auto it_globals = m_globals.find(value);
                         if (it_globals != m_globals.end()) {
-                            it_globals->second.write(index, val);
+                            it_globals->second->write(index, val);
                         } else {
                             throw std::runtime_error("Memory object not found for writing");
                         }
@@ -95,9 +95,14 @@ namespace ari_exe {
             void add_global(llvm::GlobalVariable& value);
 
             /**
+             * @brief Allocate a new memory object for the array.
+             */
+            void allocate(llvm::Value* value, z3::expr_vector dims);
+
+            /**
              * @brief Allocate a new memory object for the given LLVM scalar value.
              */
-            void allocate(llvm::Value* value, z3::expr scalar_value);
+            void allocate(llvm::Value* value, z3::expr val);
 
             /**
              * @brief Allocate a new memory object for the given LLVM array.
@@ -132,7 +137,7 @@ namespace ari_exe {
                 return m_stack.top_frame();
             }
 
-            std::optional<MemoryObject> get_memory_object(llvm::Value* value) const {
+            std::optional<MemoryObjectPtr> get_memory_object(llvm::Value* value) const {
                 auto stack_value = m_stack.get_memory_object(value);
                 if (stack_value.has_value()) {
                     return stack_value.value();
@@ -153,11 +158,11 @@ namespace ari_exe {
                 result += "Stack:\n" + m_stack.top_frame_to_string() + "\n";
                 result += "Heap:\n";
                 for (const auto& pair : m_heap) {
-                    result += "  " + pair.first->getName().str() + ": " + pair.second.read().value().to_string() + "\n";
+                    result += "  " + pair.first->getName().str() + ": " + pair.second->read().to_string() + "\n";
                 }
                 result += "Globals:\n";
                 for (const auto& pair : m_globals) {
-                    result += "  " + pair.first->getName().str() + ": " + pair.second.read().value().to_string() + "\n";
+                    result += "  " + pair.first->getName().str() + ": " + pair.second->read().to_string() + "\n";
                 }
                 return result;
             };
@@ -173,8 +178,8 @@ namespace ari_exe {
             // Map to store memory objects by their LLVM values
             // std::map<llvm::Value*, MemoryObject> memory_objects;
             MStack m_stack;
-            std::map<llvm::Value*, MemoryObject> m_heap; // Use custom comparator for LLVM values
-            std::map<llvm::Value*, MemoryObject> m_globals; // Use custom comparator for LLVM values
+            std::map<llvm::Value*, MemoryObjectPtr> m_heap; // Use custom comparator for LLVM values
+            std::map<llvm::Value*, MemoryObjectPtr> m_globals; // Use custom comparator for LLVM values
     };
 } // namespace ari_exe
 

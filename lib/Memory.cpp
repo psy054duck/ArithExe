@@ -10,8 +10,14 @@ using namespace ari_exe;
 // }
 
 void
-Memory::allocate(llvm::Value* value, z3::expr size) {
-    auto mem_obj = MemoryObject(value, size);
+Memory::allocate(llvm::Value* value, z3::expr_vector dims) {
+    auto mem_obj = std::make_shared<MemoryObjectArray>(value, dims);
+    m_heap.insert_or_assign(value, mem_obj);
+}
+
+void
+Memory::allocate(llvm::Value* value, z3::expr scalar_value) {
+    auto mem_obj = std::make_shared<MemoryObjectScalar>(value, scalar_value);
     m_heap.insert_or_assign(value, mem_obj);
 }
 
@@ -49,7 +55,8 @@ Memory::add_global(llvm::GlobalVariable& gv) {
     } else if (value_type->isIntegerTy()) {
         if (auto constant = dyn_cast_or_null<llvm::ConstantInt>(initial_value)) {
             value = z3ctx.int_val(constant->getSExtValue());
-            m_globals.insert_or_assign(&gv, MemoryObject(&gv, value));
+            auto mem_obj = std::make_shared<MemoryObjectScalar>(&gv, value);
+            m_globals.insert_or_assign(&gv, mem_obj);
         } else {
             llvm::errs() << "Unsupported global variable initializer type\n";
         }
@@ -74,11 +81,11 @@ Memory::read(llvm::Value* value) const {
     }
     auto it_heap = m_heap.find(value);
     if (it_heap != m_heap.end()) {
-        return it_heap->second.read();
+        return it_heap->second->read();
     }
     auto it_globals = m_globals.find(value);
     if (it_globals != m_globals.end()) {
-        return it_globals->second.read();
+        return it_globals->second->read();
     }
     return std::nullopt; // Value not found in stack, heap, or globals
 }

@@ -31,14 +31,16 @@ namespace ari_exe {
                 // insert or assign a value to the stack frame
                 void write(llvm::Value* symbol, z3::expr value);
 
+                void write(llvm::Value* symbol, z3::expr_vector index, z3::expr value);
+
                 std::optional<z3::expr> read(llvm::Value* v) const;
 
-                std::optional<MemoryObject> get_memory_object(llvm::Value* v) const;
+                std::optional<MemoryObjectPtr> get_memory_object(llvm::Value* v) const;
 
                 // record values for stack variables
                 // SymbolTable<z3::expr> table;
                 // Memory memory;
-                std::map<llvm::Value*, MemoryObject> m_objects; // map of values in the stack frame
+                std::map<llvm::Value*, MemoryObjectPtr> m_objects; // map of values in the stack frame
 
                 // record the called site
                 AInstruction* prev_pc = nullptr;
@@ -68,7 +70,7 @@ namespace ari_exe {
             std::optional<z3::expr> read(llvm::Value* v) const;
 
             // get the memory object of a variable in the top frame
-            std::optional<MemoryObject> get_memory_object(llvm::Value* v) const;
+            std::optional<MemoryObjectPtr> get_memory_object(llvm::Value* v) const;
 
             // add or update a value in the top frame
             void write(llvm::Value* v, z3::expr value);

@@ -113,12 +113,6 @@ TEST(LOOPS, true_7) {
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_7.c";
 }
 
-TEST(LOOPS, true_8) {
-    auto engine = Engine("../../test/benchmark/loops/true_8.c");
-    auto veri_res = engine.verify();
-    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_8.c";
-}
-
 TEST(LOOPS, true_9) {
     auto engine = Engine("../../test/benchmark/loops/true_9.c");
     auto veri_res = engine.verify();

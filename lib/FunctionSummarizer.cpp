@@ -42,7 +42,8 @@ RecExecution::build_initial_state() {
         auto arg_value = z3ctx.int_const(name.c_str());
         memory.write(&arg, arg_value);
     }
-    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(&*F->begin()->begin()), nullptr, memory, z3ctx.bool_val(true), {}));
+    auto pc = F->getEntryBlock().getFirstNonPHIOrDbg();
+    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr, memory, z3ctx.bool_val(true), {}));
     return initial_state;
 }
 
