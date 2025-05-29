@@ -98,7 +98,7 @@ using namespace ari_exe;
 // 
 MemoryObjectArray::MemoryObjectArray(llvm::Value* llvm_value, z3::expr_vector dims)
     : MemoryObject(llvm_value), dims(dims), indices(dims.ctx()), conditions(dims.ctx()), expressions(dims.ctx()) {
-        std::string name_prefix = llvm_value->getName().str() + "_array_func_";
+        std::string name_prefix = llvm_value->getName().str() + "_array_func_n";
         for (size_t i = 0; i < dims.size(); ++i) {
             auto name = name_prefix + std::to_string(i);
             indices.push_back(dims.ctx().int_const(name.c_str()));
@@ -125,14 +125,14 @@ z3::expr
 MemoryObjectArray::read(z3::expr_vector index) {
     assert(index.size() == dims.size() && "Index size does not match array dimensions");
 
-    auto res = expressions.back();
+    auto ite_expr = expressions.back();
     // Read the value at the given index
     // Apply conditions to get the correct value
-    for (size_t i = 0; i < static_cast<int>(conditions.size()) - 1; ++i) {
-        res = z3::ite(conditions[i], expressions[i], res);
+    for (int i = static_cast<int>(conditions.size()) - 1; i >= 0; --i) {
+        ite_expr = z3::ite(conditions[i], expressions[i], ite_expr);
     }
-    
-    return res;
+    auto res = ite_expr.substitute(indices, index);
+    return res.simplify();
 }
 
 z3::expr
@@ -173,6 +173,8 @@ MemoryObjectArray::write(z3::expr_vector index, z3::expr value) {
 
     // Store the value at the given index
     auto new_array = std::make_shared<MemoryObjectArray>(get_llvm_value(), dims);
+    new_array->conditions.pop_back();
+    new_array->expressions.pop_back();
 
     z3::expr_vector index_condition(index.ctx());
     for (int i = 0; i < index.size(); ++i) {
@@ -184,10 +186,11 @@ MemoryObjectArray::write(z3::expr_vector index, z3::expr value) {
     new_array->expressions.push_back(value);
 
     // copy existing conditions and expressions
-    for (size_t i = 0; i < conditions.size(); ++i) {
+    for (int i = 0; i < conditions.size(); ++i) {
         new_array->conditions.push_back(conditions[i]);
         new_array->expressions.push_back(expressions[i]);
     }
+
 
     return new_array;
 }

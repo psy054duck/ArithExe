@@ -14,7 +14,7 @@ using namespace ari_exe;
 tests = []
 
 for dir_path, _, filenames in os.walk(BENCHMARK_DIR):
-    test_class = os.path.basename(dir_path)  # Get the base directory name
+    test_class = dir_path.replace('/', '_')  # Get the base directory name
     for filename in sorted(filenames):
         if filename.endswith(".c"):
             ground_true = filename.split('_')[0]

@@ -68,6 +68,22 @@ namespace ari_exe {
             // if value is not found on both sites, it will be inserted to the stack
             void write(llvm::Value* v, z3::expr value);
 
+            /**
+             * @brief store gep
+             */
+            void store_gep(llvm::GetElementPtrInst* v);
+
+            /**
+             * @brief get gep
+             */
+            Memory::ObjectPtr get_gep(llvm::GetElementPtrInst* v) const;
+
+            /**
+             * @brief load a value from memory
+             * @param v a pointer
+             */
+            z3::expr load(llvm::Value* v) const;
+
             // push a new variables to the stack
             // void push_value(llvm::Value* v, z3::expr value);
 

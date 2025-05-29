@@ -15,9 +15,12 @@ namespace ari_exe {
 
     class Memory {
         public:
+            // this is used to a pointer to some object as a result of GEP
+            using ObjectPtr = std::pair<llvm::Value*, z3::expr_vector>;
+
             Memory() = default;
 
-            Memory(const Memory& other): m_stack(other.m_stack), m_heap(other.m_heap), m_globals(other.m_globals) {}
+            Memory(const Memory& other): m_stack(other.m_stack), m_heap(other.m_heap), m_globals(other.m_globals), m_pointers(other.m_pointers) {}
 
             // Destructor to clean up memory objects
             ~Memory() = default;
@@ -48,46 +51,22 @@ namespace ari_exe {
             /**
              * @brief Write the value to the stack, heap, or globals based on the LLVM value.
              */
-            void write(llvm::Value* value, z3::expr val) {
-                if (m_stack.read(value).has_value()) {
-                    m_stack.write(value, val);
-                } else {
-                    auto it_heap = m_heap.find(value);
-                    if (it_heap != m_heap.end()) {
-                        it_heap->second->write(val);
-                    } else {
-                        auto it_globals = m_globals.find(value);
-                        if (it_globals != m_globals.end()) {
-                            it_globals->second->write(val);
-                        } else {
-                            // If the value is not found in stack, heap, or globals,
-                            // write it to the stack.
-                            m_stack.write(value, val);
-                        }
-                    }
-                }
-            }
+            void write(llvm::Value* value, z3::expr val);
 
             /**
              * @brief Write the value to the stack, heap, or globals based on the LLVM value and index.
              */
-            void write(llvm::Value* value, z3::expr_vector index, z3::expr val) {
-                if (m_stack.read(value).has_value()) {
-                    m_stack.write(value, index, val);
-                } else {
-                    auto it_heap = m_heap.find(value);
-                    if (it_heap != m_heap.end()) {
-                        it_heap->second->write(index, val);
-                    } else {
-                        auto it_globals = m_globals.find(value);
-                        if (it_globals != m_globals.end()) {
-                            it_globals->second->write(index, val);
-                        } else {
-                            throw std::runtime_error("Memory object not found for writing");
-                        }
-                    }
-                }
-            }
+            void write(llvm::Value* value, z3::expr_vector index, z3::expr val);
+
+            /**
+             * @brief Store gep
+             */
+            void store_gep(llvm::GetElementPtrInst* gep);
+
+            /**
+             * @brief Get gep
+             */
+            ObjectPtr get_gep(llvm::GetElementPtrInst* gep) const;
 
             /**
              * @brief Add new object to globals
@@ -164,6 +143,11 @@ namespace ari_exe {
                 for (const auto& pair : m_globals) {
                     result += "  " + pair.first->getName().str() + ": " + pair.second->read().to_string() + "\n";
                 }
+                result += "GEP Pointers:\n";
+                for (const auto& gep_info: m_pointers) {
+                    result += "GEP: " + gep_info.first->getName().str() + "\n ";
+                    result += "  Points to: " + gep_info.second.first->getName().str() + " + " + gep_info.second.second.to_string() + "\n";
+                }
                 return result;
             };
 
@@ -175,11 +159,20 @@ namespace ari_exe {
             }
 
         private:
+            /**
+             * @brief Parse a GetElementPtrInst to get the memory object it points to.
+             */
+            ObjectPtr parse_gep(llvm::GetElementPtrInst* gep) const;
             // Map to store memory objects by their LLVM values
             // std::map<llvm::Value*, MemoryObject> memory_objects;
             MStack m_stack;
-            std::map<llvm::Value*, MemoryObjectPtr> m_heap; // Use custom comparator for LLVM values
-            std::map<llvm::Value*, MemoryObjectPtr> m_globals; // Use custom comparator for LLVM values
+
+            std::map<llvm::Value*, MemoryObjectPtr> m_heap; 
+
+            std::map<llvm::Value*, MemoryObjectPtr> m_globals;
+
+            // This map is used to store the results of GEP operations
+            std::map<llvm::GetElementPtrInst*, ObjectPtr> m_pointers;
     };
 } // namespace ari_exe
 

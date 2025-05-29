@@ -19,38 +19,11 @@ State::evaluate(llvm::Value* v) {
         return *value;
     }
     assert(false && "Value not found in memory");
-    // auto stack_value = stack.evaluate(v);
-    // if (stack_value.has_value()) {
-    //     return *stack_value;
-    // }
-    // auto globals_value = globals.read(v);
-    // if (globals_value.has_value()) {
-    //     return *globals_value;
-    // }
-    // // if not found, assume it is a constant int
-    // // TODO: support other types
-    // auto const_val = llvm::dyn_cast_or_null<llvm::ConstantInt>(v);
-    // if (const_val) {
-    //     if (const_val->getBitWidth() == 1) {
-    //         return const_val->isOne() ? z3ctx.bool_val(true) : z3ctx.bool_val(false);
-    //     }
-    //     return z3ctx.int_val(const_val->getSExtValue());
-    // }
-    // spdlog::error("Value {} not found in state", v->getName().str());
-    // assert(false);
 }
 
 void
 State::write(llvm::Value* v, z3::expr value) {
     memory.write(v, value);
-    // auto stack_value = stack.evaluate(v);
-    // if (stack_value.has_value()) {
-    //     stack.insert_or_assign_value(v, value);
-    // } else if (globals.read(v).has_value()) {
-    //     globals.insert_or_assign(v, value);
-    // } else {
-    //     stack.insert_or_assign_value(v, value);
-    // }
 }
 
 void
@@ -109,4 +82,14 @@ LoopState::append_path_condition(z3::expr _path_condition) {
     } else {
         assert(false && "Unsupported instruction type");
     }
+}
+
+void
+State::store_gep(llvm::GetElementPtrInst* gep) {
+    memory.store_gep(gep);
+}
+
+Memory::ObjectPtr
+State::get_gep(llvm::GetElementPtrInst* gep) const {
+    return memory.get_gep(gep);
 }

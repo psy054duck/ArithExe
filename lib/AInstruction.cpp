@@ -38,6 +38,8 @@ AInstruction::create(llvm::Instruction* inst) {
         res = new AInstructionLoad(load_inst);
     } else if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(inst)) {
         res = new AInstructionStore(store_inst);
+    } else if (auto gep_inst = llvm::dyn_cast_or_null<llvm::GetElementPtrInst>(inst)) {
+        res = new AInstructionGEP(gep_inst);
     } else {
         llvm::errs() << "Unsupported instruction type\n";
         assert(false);
@@ -161,6 +163,9 @@ AInstructionCall::execute(state_ptr state) {
     } else if (called_func && called_func->getName().find("assume") != std::string::npos) {
         // assume function, add the condition to the path condition
         return {execute_assume(state)};
+    } else if (called_func && called_func->getName().find("malloc") != std::string::npos) {
+        // malloc function, allocate memory and return the pointer
+        return {execute_malloc(state)};
     } else if (called_func && called_func->hasExactDefinition()) {
         return {execute_normal(state)};
     } else {
@@ -289,7 +294,16 @@ state_ptr
 AInstructionCall::execute_malloc(state_ptr state) {
     // malloc function, allocate memory and return the pointer
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto& z3ctx = state->z3ctx;
+    auto size_bytes = call_inst->arg_begin()->get();
+    auto size_bytes_expr = state->evaluate(size_bytes);
+    // TODO: assume it an integer array and the size of an int is 32 bits;
+    // TODO: assume it is 1-d
+    z3::expr_vector dims(state->z3ctx);
+    dims.push_back((size_bytes_expr / state->z3ctx.int_val(4)).simplify());
+    auto new_state = std::make_shared<State>(*state);
+    new_state->memory.allocate(call_inst, dims);
+    new_state->step_pc();
+    return {new_state};
 }
 
 std::vector<state_ptr>
@@ -615,6 +629,16 @@ AInstructionStore::execute(state_ptr state) {
     state_ptr new_state = std::make_shared<State>(*state);
     new_state->write(ptr, value_expr);
     // new_state->write(inst, value_expr);
+    new_state->step_pc();
+    return {new_state};
+}
+
+std::vector<state_ptr>
+AInstructionGEP::execute(state_ptr state) {
+    auto gep = dyn_cast_or_null<llvm::GetElementPtrInst>(inst);
+    assert(gep);
+    auto new_state = std::make_shared<State>(*state);
+    new_state->store_gep(gep);
     new_state->step_pc();
     return {new_state};
 }
