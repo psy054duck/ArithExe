@@ -67,7 +67,7 @@ AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
 std::string
 AnalysisManager::generateLLVMIR(const std::string& c_filename) {
     std::ostringstream clang_cmd;
-    clang_cmd << "clang -emit-llvm -S -O0 -Xclang -disable-O0-optnone "
+    clang_cmd << "clang -emit-llvm -g -S -O0 -Xclang -disable-O0-optnone "
               << c_filename << " -o -";
     FILE* pipe = popen(clang_cmd.str().c_str(), "r");
     if (!pipe) {

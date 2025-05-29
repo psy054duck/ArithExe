@@ -28,6 +28,8 @@ AInstruction::create(llvm::Instruction* inst) {
         res = new AInstructionReturn(inst);
     } else if (auto zext_inst = llvm::dyn_cast_or_null<llvm::ZExtInst>(inst)) {
         res = new AInstructionZExt(zext_inst);
+    } else if (auto sext_inst = llvm::dyn_cast_or_null<llvm::SExtInst>(inst)) {
+        res = new AInstructionSExt(sext_inst);
     } else if (auto phi = llvm::dyn_cast_or_null<llvm::PHINode>(inst)) {
         res = new AInstructionPhi(phi);
     } else if (auto select = llvm::dyn_cast_or_null<llvm::SelectInst>(inst)) {
@@ -156,7 +158,7 @@ AInstructionCall::execute(state_ptr state) {
     if (called_func && called_func->getName().ends_with("assert")) {
         // verification. should check if the condition is true
         return {execute_assert(state)};
-    } else if (called_func && called_func->getName().ends_with("assume")) {
+    } else if (called_func && called_func->getName().find("assume") != std::string::npos) {
         // assume function, add the condition to the path condition
         return {execute_assume(state)};
     } else if (called_func && called_func->hasExactDefinition()) {
@@ -248,6 +250,7 @@ AInstructionCall::execute_assume(state_ptr state) {
     auto cond_value = state->evaluate(cond);
 
     state_ptr new_state = std::make_shared<State>(*state);
+    new_state->append_path_condition(cond_value);
     new_state->step_pc();
     new_state->status = State::TESTING;
     return new_state;
@@ -280,6 +283,13 @@ AInstructionCall::execute_unknown(state_ptr state) {
     new_state->write(inst, result);
     new_state->step_pc();
     return new_state;
+}
+
+state_ptr
+AInstructionCall::execute_malloc(state_ptr state) {
+    // malloc function, allocate memory and return the pointer
+    auto call_inst = dyn_cast<llvm::CallInst>(inst);
+    auto& z3ctx = state->z3ctx;
 }
 
 std::vector<state_ptr>
@@ -428,6 +438,20 @@ AInstructionZExt::execute(state_ptr state) {
     return {new_state};
 }
 
+std::vector<state_ptr>
+AInstructionSExt::execute(state_ptr state) {
+    auto sext_inst = dyn_cast_or_null<llvm::SExtInst>(inst);
+    auto op = sext_inst->getOperand(0);
+    auto op_value = state->evaluate(op);
+    auto& z3ctx = op_value.ctx();
+    z3::expr result(z3ctx);
+
+    state_ptr new_state = std::make_shared<State>(*state);
+    new_state->write(inst, op_value);
+    new_state->step_pc();
+    return {new_state};
+}
+
 std::set<llvm::Loop*> AInstructionPhi::failed_loops;
 
 std::vector<state_ptr>
@@ -493,16 +517,31 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
 
     auto& z3ctx = manager->get_z3ctx();
     z3::expr_vector args(z3ctx);
-    for (auto& phi : header->phis()) {
-        auto name = get_z3_name(phi.getName().str());
-        auto phi_expr = z3ctx.int_const(name.c_str());
-        args.push_back(phi_expr);
+    for (auto& inst : *header) {
+        if (auto phi = llvm::dyn_cast_or_null<llvm::PHINode>(&inst)) {
+            auto name = get_z3_name(phi->getName().str());
+            auto phi_expr = z3ctx.int_const(name.c_str());
+            args.push_back(phi_expr);
+        } else if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
+            // for store instruction, we need to get the pointer operand
+            auto ptr = store_inst->getPointerOperand();
+            auto name = get_z3_name(ptr->getName().str());
+            auto ptr_expr = z3ctx.int_const(name.c_str());
+            args.push_back(ptr_expr);
+        }
     }
+    // for (auto& phi : header->phis()) {
+    //     auto name = get_z3_name(phi.getName().str());
+    //     auto phi_expr = z3ctx.int_const(name.c_str());
+    //     args.push_back(phi_expr);
+    // }
     z3::expr_vector closed_forms = summary->evaluate(args);
     state_ptr new_state = std::make_shared<State>(*state);
-    auto phi_it = header->phis().begin();
-    for (int i = 0; i < closed_forms.size(); i++, phi_it++) {
-        new_state->write(&*phi_it, closed_forms[i]);
+    // auto phi_it = header->phis().begin();
+    auto modified_values = summary->get_modified_values();
+    for (int i = 0; i < closed_forms.size(); i++) {
+        auto modified_value = modified_values[i];
+        new_state->write(modified_value, closed_forms[i]);
     }
     auto new_pc = AInstruction::create(&*exit_block->begin());
     new_state->trace.push_back(header);
@@ -570,12 +609,12 @@ AInstructionStore::execute(state_ptr state) {
     auto store_inst = dyn_cast<llvm::StoreInst>(inst);
     auto ptr = store_inst->getPointerOperand();
     auto value = store_inst->getValueOperand();
-    auto ptr_value = state->evaluate(ptr);
+    // auto ptr_value = state->evaluate(ptr);
     auto value_expr = state->evaluate(value);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(ptr, ptr_value);
-    new_state->write(inst, value_expr);
+    new_state->write(ptr, value_expr);
+    // new_state->write(inst, value_expr);
     new_state->step_pc();
     return {new_state};
 }

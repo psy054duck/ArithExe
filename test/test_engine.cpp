@@ -53,10 +53,28 @@ TEST(LOOP_FREE, true_4) {
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loop_free/true_4.c";
 }
 
+TEST(ARRAYS, true_1) {
+    auto engine = Engine("../../test/benchmark/arrays/true_1.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/arrays/true_1.c";
+}
+
 TEST(LOOPS, true_1) {
     auto engine = Engine("../../test/benchmark/loops/true_1.c");
     auto veri_res = engine.verify();
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_1.c";
+}
+
+TEST(LOOPS, true_10) {
+    auto engine = Engine("../../test/benchmark/loops/true_10.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_10.c";
+}
+
+TEST(LOOPS, true_11) {
+    auto engine = Engine("../../test/benchmark/loops/true_11.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_11.c";
 }
 
 TEST(LOOPS, true_2) {
@@ -87,4 +105,22 @@ TEST(LOOPS, true_6) {
     auto engine = Engine("../../test/benchmark/loops/true_6.c");
     auto veri_res = engine.verify();
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_6.c";
+}
+
+TEST(LOOPS, true_7) {
+    auto engine = Engine("../../test/benchmark/loops/true_7.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_7.c";
+}
+
+TEST(LOOPS, true_8) {
+    auto engine = Engine("../../test/benchmark/loops/true_8.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_8.c";
+}
+
+TEST(LOOPS, true_9) {
+    auto engine = Engine("../../test/benchmark/loops/true_9.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_9.c";
 }

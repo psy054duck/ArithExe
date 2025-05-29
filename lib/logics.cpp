@@ -72,6 +72,7 @@ LinearLogic::preprocess_constraints(z3::expr constraints) {
 
 z3::expr_vector
 LinearLogic::solve_vars(const z3::expr& constraints, const z3::expr_vector& vars) {
+    std::cout << vars.to_string() << std::endl;
     auto& z3ctx = constraints.ctx();
     auto [processed_cons, tmp_vars] = preprocess_constraints(constraints);
 
@@ -118,7 +119,6 @@ LinearLogic::solve_vars(const z3::expr& constraints, const z3::expr_vector& vars
     for (int i = 0; i < res_vec.size(); ++i) {
         res.push_back(res_vec[i].simplify());
     }
-
     return res;
 }
 

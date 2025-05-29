@@ -166,6 +166,7 @@ namespace ari_exe {
              * @return the matrix A and vector b
              */
             std::pair<Matrix, Matrix> build_matrix_form(z3::expr_vector equations, z3::expr_vector vars);
+
     };
 }
 

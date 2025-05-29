@@ -91,6 +91,7 @@ namespace ari_exe {
             state_ptr execute_assert(state_ptr state);
             state_ptr execute_assume(state_ptr state);
             state_ptr execute_normal(state_ptr state);
+            state_ptr execute_malloc(state_ptr state);
     };
 
     class AInstructionBranch: public AInstruction {
@@ -112,6 +113,12 @@ namespace ari_exe {
     class AInstructionZExt: public AInstruction {
         public:
             AInstructionZExt(llvm::Instruction* inst): AInstruction(inst) {};
+            std::vector<state_ptr> execute(state_ptr state) override;
+    };
+
+    class AInstructionSExt: public AInstruction {
+        public:
+            AInstructionSExt(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<state_ptr> execute(state_ptr state) override;
     };
 
@@ -157,6 +164,12 @@ namespace ari_exe {
         public:
             AInstructionStore(llvm::Instruction* inst): AInstruction(inst) {};
             // TODO: for now, only assume it is a write to a scalar variable
+            std::vector<state_ptr> execute(state_ptr state) override;
+    };
+
+    class AInstructionGEP: public AInstruction {
+        public:
+            AInstructionGEP(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<state_ptr> execute(state_ptr state) override;
     };
 }

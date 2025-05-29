@@ -3,40 +3,16 @@
 using namespace ari_exe;
 
 
+// void
+// Memory::allocate(llvm::Value* value, z3::expr scalar_value) {
+//     auto mem_obj = MemoryObject(value, scalar_value);
+//     m_heap.insert_or_assign(value, mem_obj);
+// }
+
 void
-Memory::allocate(llvm::Value* value, z3::expr scalar_value) {
-    auto mem_obj = MemoryObject(value, scalar_value);
+Memory::allocate(llvm::Value* value, z3::expr size) {
+    auto mem_obj = MemoryObject(value, size);
     m_heap.insert_or_assign(value, mem_obj);
-}
-
-z3::expr_vector
-MemoryObject::_get_dim(llvm::Value* value) {
-    z3::expr_vector dims(AnalysisManager::get_instance()->get_z3ctx());
-    assert(false && "exit for dev");
-    if (auto array_type = llvm::dyn_cast<llvm::ArrayType>(value->getType())) {
-        auto element_type = array_type->getElementType();
-        auto num_elements = array_type->getNumElements();
-        dims.push_back(AnalysisManager::get_instance()->get_z3ctx().int_val(num_elements));
-        while (llvm::isa<llvm::ArrayType>(element_type)) {
-            auto sub_array_type = llvm::cast<llvm::ArrayType>(element_type);
-            dims.push_back(AnalysisManager::get_instance()->get_z3ctx().int_val(sub_array_type->getNumElements()));
-            element_type = sub_array_type->getElementType();
-        }
-    } else {
-        // For non-array types, we assume a single dimension of size 1
-        dims.push_back(AnalysisManager::get_instance()->get_z3ctx().int_val(1));
-    }
-    return dims;
-}
-
-z3::func_decl
-MemoryObject::_get_func_decl(llvm::Value* value) {
-    auto& z3ctx = AnalysisManager::get_instance()->get_z3ctx();
-    auto name = value->getName().str();
-    z3::sort_vector sorts(z3ctx);
-    for (int i = 0; i < _get_dim(value).size(); ++i) sorts.push_back(z3ctx.int_sort());
-    z3::func_decl func_decl = z3ctx.function(name.c_str(), sorts, z3ctx.int_sort());
-    return func_decl;
 }
 
 void

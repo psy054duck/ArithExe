@@ -24,8 +24,8 @@ namespace ari_exe {
              *               are symbolic initial values of the recurrence.
              * @param summary The exact summary of the loop
              */
-            LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary, const z3::expr& constraints);
-            LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary, const z3::expr& constraints);
+            LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values);
+            LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values);
             
             LoopSummary(const LoopSummary& other);
             
@@ -37,6 +37,20 @@ namespace ari_exe {
              *         if is_over_approx is true, return polynomial equalities.
              */
             z3::expr_vector evaluate(const z3::expr_vector& args);
+
+            /**
+             * @brief get modified values by the loop
+             */
+            std::vector<llvm::Value*> get_modified_values() const {
+                return modified_values;
+            }
+
+            /**
+             * @brief set the modified values by the loop
+             */
+            void set_modified_values(const std::vector<llvm::Value*>& values) {
+                modified_values = values;
+            }
 
         private:
             /**

@@ -148,7 +148,7 @@ Engine::build_initial_state() {
         memory.add_global(gv);
     }
 
-    auto pc = &*entry->getEntryBlock().begin();
+    auto pc = entry->getEntryBlock().getFirstNonPHIOrDbg();
     memory.push_frame();
     for (auto& arg : entry->args()) {
         auto name = "ari_" + arg.getName().str();

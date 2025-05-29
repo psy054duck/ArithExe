@@ -100,7 +100,7 @@ namespace ari_exe {
             z3::expr get_loop_N() { return loop_N; }
 
         private :
-            AnalysisManager(): ind_var(z3ctx.int_const("ari_n")), loop_N(z3ctx.int_const("ari_N")) {}
+            AnalysisManager(): ind_var(z3ctx.int_const("ari_loop_n")), loop_N(z3ctx.int_const("ari_loop_N")) {}
             static AnalysisManager* instance;
 
             // LLVM context for keeping the module

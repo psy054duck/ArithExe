@@ -18,7 +18,11 @@ namespace ari_exe {
             // Constructor to initialize the memory object with a value
             MemoryObject(llvm::Value* llvm_value) : llvm_value(llvm_value), dims(_get_dim(llvm_value)) {}
 
-            MemoryObject(llvm::Value* llvm_value, z3::expr scalar_value): llvm_value(llvm_value), scalar(scalar_value), dims(_get_dim(llvm_value)) {}
+            // Constructor to initialize an array with a value and size
+            // currently, assume it is a 1-d array.
+            MemoryObject(llvm::Value* llvm_value, z3::expr size);
+
+            // MemoryObject(llvm::Value* llvm_value, z3::expr scalar_value): llvm_value(llvm_value), scalar(scalar_value), dims(_get_dim(llvm_value)) {}
 
             MemoryObject(const MemoryObject& other) = default;
 
@@ -55,10 +59,9 @@ namespace ari_exe {
 
             llvm::Value* llvm_value; // Pointer to the value being managed
 
-            size_t num_elements; // the number of elements in this object.
-
             // when the object is an array, it is associated with a function declaration
             std::optional<z3::func_decl> func;
+
             // when the object is a scalar, it is associated with a z3 expression
             std::optional<z3::expr> scalar;
 

@@ -57,7 +57,7 @@ LoopExecution::build_initial_state() {
         auto z3_value = z3ctx.int_const(name.c_str());
         memory.write(written_value, z3_value);
     }
-    auto initial_pc = AInstruction::create(loop->getHeader()->getFirstNonPHI());
+    auto initial_pc = AInstruction::create(loop->getHeader()->getFirstNonPHIOrDbg());
     auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, memory, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
     return initial_state;
 }
@@ -172,9 +172,11 @@ LoopSummarizer::summarize() {
     rec_s.solve();
     closed_form_ty closed = rec_s.get_res();
     // TODO: assume the summary is exact for now
+    std::vector<llvm::Value*> modified_values;
     z3::expr_vector params(rec_s.z3ctx);
     z3::expr_vector params_values(rec_s.z3ctx);
     for (auto& phi : loop->getHeader()->phis()) {
+        modified_values.push_back(&phi);
         auto name = get_z3_name(phi.getName().str());
         auto phi_func = rec_s.z3ctx.int_const(name.c_str());
         params.push_back(phi_func);
@@ -187,6 +189,18 @@ LoopSummarizer::summarize() {
             assert(false);
         }
     }
+
+    for (auto& inst: *loop->getHeader()) {
+        if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
+            auto written_value = store_inst->getValueOperand();
+            modified_values.push_back(written_value);
+            auto name = get_z3_name(store_inst->getPointerOperand()->getName().str());
+            auto store_func = rec_s.z3ctx.int_const(name.c_str());
+            auto stored_value_z3 = final_states[0]->evaluate(written_value).simplify().substitute(params, params_values);
+            params.push_back(store_func);
+            params_values.push_back(stored_value_z3);
+        }
+    }
     spdlog::info("Closed-form solutions are computed successfully:");
     spdlog::info("Computing the number of iterations");
     auto [N_constraints, N] = get_iterations_constraints(exit_states, params, params_values);
@@ -194,12 +208,13 @@ LoopSummarizer::summarize() {
     auto linear_logic = LinearLogic();
     z3::expr_vector N_vec(z3ctx);
     N_vec.push_back(N);
-    llvm::errs() << N_constraints.to_string() << "\n";
+    // llvm::errs() << N_constraints.to_string() << "\n";
     auto N_value = linear_logic.solve_vars(N_constraints, N_vec);
     if (N_value.size() == 0) {
         spdlog::info("fail to compute the number of iterations, record the constraints on it in path conditions");
         N_constraints = z3ctx.bool_val(true);
     } else {
+        spdlog::info("The number of iterations is {}", N_value[0].to_string());
         z3::expr_vector src(z3ctx);
         z3::expr_vector dst(z3ctx);
         src.push_back(manager->get_ind_var());
@@ -208,7 +223,7 @@ LoopSummarizer::summarize() {
             exit_values.push_back(expr.substitute(src, dst));
         }
     }
-    summary = LoopSummary(params, exit_values, N_constraints);
+    summary = LoopSummary(params, exit_values, N_constraints, modified_values);
 }
 
 initial_ty
