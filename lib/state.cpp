@@ -9,7 +9,11 @@ SymbolTable<LoopSummary>* State::loop_summaries = new SymbolTable<LoopSummary>()
 
 void
 State::append_path_condition(z3::expr _path_condition) {
-    path_condition = path_condition && _path_condition;
+    if (_path_condition.is_int()) {
+        path_condition = path_condition && _path_condition != 0;
+    } else {
+        path_condition = path_condition && _path_condition;
+    }
 }
 
 z3::expr
@@ -19,6 +23,7 @@ State::evaluate(llvm::Value* v) {
         return *value;
     }
     assert(false && "Value not found in memory");
+    return value.value(); // return something to avoid compiler warning
 }
 
 void

@@ -128,12 +128,6 @@ namespace ari_exe {
             std::vector<state_ptr> execute(state_ptr state) override;
 
             /**
-             * @brief symbolic execute the loop for get all possible paths of the loop body,
-             *        should be called only by LoopSummarizer
-             */
-            std::vector<state_ptr> execute_and_collect_trace(state_ptr state, llvm::Loop* loop);
-
-            /**
              * @brief if reach a loop and the loop is summarizable, use the summary and skip the execution
              */
             std::vector<state_ptr> execute_if_summarizable(state_ptr state);

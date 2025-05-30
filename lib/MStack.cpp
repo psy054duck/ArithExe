@@ -61,7 +61,7 @@ MStack::StackFrame::write(llvm::Value* symbol, z3::expr value) {
     // insert_or_assign(symbol, value);
     auto it = m_objects.find(symbol);
     if (it != m_objects.end()) {
-        it->second->write(value);
+        it->second = it->second->write(value);
     } else {
         auto mem_obj = std::make_shared<MemoryObjectScalar>(symbol, value);
         m_objects.insert_or_assign(symbol, mem_obj);

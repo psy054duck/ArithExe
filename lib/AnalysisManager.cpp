@@ -5,6 +5,8 @@ using namespace ari_exe;
 
 AnalysisManager* AnalysisManager::instance = new AnalysisManager();
 
+int AnalysisManager::unknown_counter = 0;
+
 std::unique_ptr<llvm::Module>
 AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
     auto ir_content = generateLLVMIR(c_filename);

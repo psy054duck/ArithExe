@@ -68,6 +68,10 @@ Memory::read(llvm::Value* value) const {
     // if value is constant, return the constant value
     auto manager = AnalysisManager::get_instance();
     auto& z3ctx = manager->get_z3ctx();
+    if (auto undef = dyn_cast_or_null<llvm::UndefValue>(value)) {
+        auto name = "_undef_" + std::to_string(manager->unknown_counter++);
+        return z3ctx.int_const(name.c_str());
+    }
     if (auto const_value = dyn_cast_or_null<llvm::ConstantInt>(value)) {
         if (const_value->getBitWidth() == 1) {
             return const_value->getZExtValue() ? z3ctx.bool_val(true) : z3ctx.bool_val(false);
@@ -160,6 +164,7 @@ Memory::get_gep(llvm::GetElementPtrInst* gep) const {
 void
 Memory::write(llvm::Value* value, z3::expr val) {
     // if value is a pointer
+    val = val.simplify(); // Simplify the value before writing
     auto value_type = value->getType();
     if (value_type->isPointerTy()) {
         // check if the value is a global variable
@@ -215,6 +220,7 @@ Memory::write(llvm::Value* value, z3::expr val) {
 
 void 
 Memory::write(llvm::Value* value, z3::expr_vector index, z3::expr val) {
+    val = val.simplify(); // Simplify the value before writing
     if (m_stack.read(value).has_value()) {
         m_stack.write(value, index, val);
     } else {
@@ -230,4 +236,21 @@ Memory::write(llvm::Value* value, z3::expr_vector index, z3::expr val) {
             }
         }
     }
+}
+
+std::optional<z3::expr>
+Memory::read(llvm::Value* value, z3::expr_vector index) const {
+    auto v = m_stack.read(value);
+    if (v.has_value()) {
+        return v.value();
+    }
+    auto it_heap = m_heap.find(value);
+    if (it_heap != m_heap.end()) {
+        return it_heap->second->read(index);
+    }
+    auto it_globals = m_globals.find(value);
+    if (it_globals != m_globals.end()) {
+        return it_globals->second->read(index);
+    }
+    return std::nullopt;
 }

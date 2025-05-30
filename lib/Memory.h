@@ -33,20 +33,7 @@ namespace ari_exe {
             /**
              * @brief Read the value from stack, heap, or globals based on the LLVM value.
              */
-            std::optional<z3::expr> read(llvm::Value* value, z3::expr_vector index) const {
-                auto v = m_stack.read(value);
-                if (v.has_value()) {
-                    return v.value();
-                }
-                auto it_heap = m_heap.find(value);
-                if (it_heap != m_heap.end()) {
-                    return it_heap->second->read(index);
-                }
-                auto it_globals = m_globals.find(value);
-                if (it_globals != m_globals.end()) {
-                    return it_globals->second->read(index);
-                }
-            }
+            std::optional<z3::expr> read(llvm::Value* value, z3::expr_vector index) const;
 
             /**
              * @brief Write the value to the stack, heap, or globals based on the LLVM value.

@@ -475,16 +475,16 @@ AInstructionPhi::execute(state_ptr state) {
     auto& LI = manager->get_LI(phi_inst->getFunction());
     auto loop = LI.getLoopFor(phi_inst->getParent());
 
-    if (loop && failed_loops.find(loop) == failed_loops.end()) {
-        if (!state->is_summarizing()) {
-            auto accelarated_states = execute_if_summarizable(state);
-            if (accelarated_states.size() > 0) {
-                return accelarated_states;
-            } else {
-                failed_loops.insert(loop);
-            }
-        }
-    }
+    // if (loop && failed_loops.find(loop) == failed_loops.end()) {
+    //     if (!state->is_summarizing()) {
+    //         auto accelarated_states = execute_if_summarizable(state);
+    //         if (accelarated_states.size() > 0) {
+    //             return accelarated_states;
+    //         } else {
+    //             failed_loops.insert(loop);
+    //         }
+    //     }
+    // }
 
     auto& z3ctx = state->z3ctx;
     auto prev_block = state->trace.back();
@@ -496,10 +496,6 @@ AInstructionPhi::execute(state_ptr state) {
     new_state->step_pc();
 
     return {new_state};
-}
-
-std::vector<state_ptr>
-AInstructionPhi::execute_and_collect_trace(state_ptr state, llvm::Loop* loop) {
 }
 
 std::vector<state_ptr>

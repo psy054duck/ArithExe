@@ -104,7 +104,6 @@ Engine::verify(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->get_path_condition());
     assumptions.push_back(!state->verification_condition);
-    llvm::errs() << assumptions.to_string() << "\n";
     auto res = solver.check(assumptions);
     Engine::VeriResult result;
     switch (res) {

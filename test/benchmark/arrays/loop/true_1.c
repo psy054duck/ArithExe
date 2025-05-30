@@ -16,11 +16,11 @@ void __VERIFIER_assert(int cond) { if(!(cond)) { ERROR: {reach_error();abort();}
 extern int __VERIFIER_nondet_int(void);
 void *malloc(unsigned int size);
 
-int N;
+int N = 30;
 
 int main()
 {
-	N = __VERIFIER_nondet_int();
+	// N = __VERIFIER_nondet_int();
 	if(N <= 0) return 1;
 	assume_abort_if_not(N <= 2147483647/sizeof(int));
 

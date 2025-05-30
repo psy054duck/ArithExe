@@ -99,6 +99,9 @@ namespace ari_exe {
             z3::expr get_ind_var() { return ind_var; }
             z3::expr get_loop_N() { return loop_N; }
 
+            // counter for unknowns
+            static int unknown_counter;
+
         private :
             AnalysisManager(): ind_var(z3ctx.int_const("ari_loop_n")), loop_N(z3ctx.int_const("ari_loop_N")) {}
             static AnalysisManager* instance;
@@ -126,6 +129,7 @@ namespace ari_exe {
 
             // The symbolic variable for the loop iteration count
             z3::expr loop_N;
+
     };
 }
 
