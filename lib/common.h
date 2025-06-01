@@ -15,7 +15,10 @@ namespace ari_exe {
         return Z3_PREFIX + z3_name;
     }
 
-
+    /**
+     * @brief Get all application of the given function in the expression
+     */
+    z3::expr_vector get_app_of(z3::expr e, z3::func_decl f);
 }
 
 #endif

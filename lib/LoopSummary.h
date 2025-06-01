@@ -24,8 +24,8 @@ namespace ari_exe {
              *               are symbolic initial values of the recurrence.
              * @param summary The exact summary of the loop
              */
-            LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values);
-            LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values);
+            LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary, const z3::expr_vector& closed_form, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values, std::optional<z3::expr> N);
+            LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values, std::optional<z3::expr> N);
             
             LoopSummary(const LoopSummary& other);
             
@@ -37,6 +37,12 @@ namespace ari_exe {
              *         if is_over_approx is true, return polynomial equalities.
              */
             z3::expr_vector evaluate(const z3::expr_vector& args);
+
+            /**
+             * @brief evaluate the given z3 expression, which is represented in terms of params,
+             *        using the closed-form solutions.
+             */
+            z3::expr evaluate_expr(z3::expr expr) const;
 
             /**
              * @brief get modified values by the loop
@@ -52,6 +58,24 @@ namespace ari_exe {
                 modified_values = values;
             }
 
+            /**
+             * @brief add modified value by the loop
+             */
+            void add_modified_value(llvm::Value* value) {
+                modified_values.push_back(value);
+            }
+
+            /**
+             * @brief get the number of iterations of the loop
+             */
+            std::optional<z3::expr> get_N() const { return N; }
+
+            /**
+             * @brief add new closed-form solution to the loop summary
+             */
+            void add_closed_form(const z3::expr& param, const z3::expr& closed_form);
+
+
         private:
             /**
              * @brief The parameters of the loop, which are header phis and global variables modified by the loop.
@@ -66,12 +90,17 @@ namespace ari_exe {
             std::vector<llvm::Value*> modified_values;
 
             /**
-             * @brief The exact summary of the loop
+             * @brief The exact summary of the loop, which is exit value
              * @details if is_over_approx is false, which means
              *          the loop summary is exact, then the summary expressions 
              *          representing closed-form solutions to each param in params (loop variables);
              */
             z3::expr_vector summary_exact;
+
+            /**
+             * @brief the closed-form solutions of the loop
+             */
+            z3::expr_vector summary_closed_form;
 
              /**
              * @brief The over-approximated summary of the loop
@@ -88,6 +117,11 @@ namespace ari_exe {
              * should be included in the path condition of parent state's
              */
             z3::expr constraints;
+
+            /**
+             * @brief the number of iterations of the loop
+             */
+            std::optional<z3::expr> N;
 
             /**
              * @brief indicates whether the loop is over-approximated or not.

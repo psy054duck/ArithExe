@@ -124,15 +124,16 @@ MemoryObjectScalar::get_dims() const {
 z3::expr
 MemoryObjectArray::read(z3::expr_vector index) {
     assert(index.size() == dims.size() && "Index size does not match array dimensions");
+    return as_expr().substitute(indices, index).simplify();
+}
 
+z3::expr
+MemoryObjectArray::as_expr() const {
     auto ite_expr = expressions.back();
-    // Read the value at the given index
-    // Apply conditions to get the correct value
     for (int i = static_cast<int>(conditions.size()) - 1; i >= 0; --i) {
         ite_expr = z3::ite(conditions[i], expressions[i], ite_expr);
     }
-    auto res = ite_expr.substitute(indices, index);
-    return res.simplify();
+    return ite_expr.simplify();
 }
 
 z3::expr
@@ -159,12 +160,11 @@ MemoryObjectScalar::write(z3::expr_vector index, z3::expr value) {
 
 MemoryObjectPtr
 MemoryObjectArray::write(z3::expr value) {
-    // For array, we write the value to the first element
-    z3::expr_vector zeros(dims.ctx());
-    for (int i = 0; i < dims.size(); ++i) {
-        zeros.push_back(dims.ctx().int_val(0)); // Default to zero index for each dimension
-    }
-    return write(zeros, value);
+    auto [in_conditions, in_expressions] = expr2piecewise(value);
+    auto new_array = std::make_shared<MemoryObjectArray>(get_llvm_value(), dims);
+    new_array->conditions = in_conditions;
+    new_array->expressions = in_expressions;
+    return new_array;
 }
 
 MemoryObjectPtr

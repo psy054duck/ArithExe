@@ -13,6 +13,18 @@ LoopExecution::LoopExecution(llvm::Loop *loop, state_ptr parent_state): loop(loo
     states.push(initial_state);
 }
 
+LoopState
+LoopExecution::run_header(loop_state_ptr state) {
+    auto header = loop->getHeader();
+    auto cur_state = state;
+    while (cur_state->pc->inst != header->getTerminator()) {
+        auto states = step(cur_state);
+        assert(states.size() == 1);
+        cur_state = states.front();
+    }
+    return *cur_state;
+}
+
 LoopExecution::TestResult
 LoopExecution::test(loop_state_ptr state) {
     auto manager = AnalysisManager::get_instance();
@@ -46,7 +58,7 @@ LoopExecution::build_initial_state() {
     // auto header = loop->getHeader();
     auto manager = AnalysisManager::get_instance();
     auto& z3ctx = manager->get_z3ctx();
-    auto modified_values = get_modified_values();
+    auto modified_values = get_scalar_modified_values();
     // auto prev_block = parent_state->trace.back();
     for (auto& m_value: modified_values) {
         auto written_value = m_value;
@@ -134,12 +146,16 @@ LoopExecution::back_edge_taken(loop_state_ptr state) {
 
 void
 LoopSummarizer::summarize() {
-    LoopExecution executor(loop, parent_state);
-    auto execution_res = executor.run();
-    auto final_states = execution_res.first;
-    auto exit_states = execution_res.second;
-    auto manager = AnalysisManager::get_instance();
-    auto& z3ctx = manager->get_z3ctx();
+    auto [final_states, exit_states] = get_final_and_exit_states();
+    log_states(final_states, exit_states);
+
+    summarize_scalar(final_states, exit_states);
+
+    summarize_array(final_states, exit_states);
+}
+
+void
+LoopSummarizer::log_states(const loop_state_list& final_states, const loop_state_list& exit_states) {
     spdlog::info("For loop {}, there are {} Final states", loop->getName(), final_states.size());
     spdlog::info("For loop {}, there are {} exit states", loop->getName(), exit_states.size());
     for (int i = 0; i < final_states.size(); i++) {
@@ -161,6 +177,23 @@ LoopSummarizer::summarize() {
         path += " -> " + state->pc->get_block()->getName().str();
         spdlog::info("{}th exit state path: {}", i + 1, path);
     }
+}
+
+std::pair<loop_state_list, loop_state_list>
+LoopSummarizer::get_final_and_exit_states() {
+    LoopExecution executor(loop, parent_state);
+    auto execution_res = executor.run();
+    auto final_states = execution_res.first;
+    auto exit_states = execution_res.second;
+
+    return {final_states, exit_states};
+}
+
+void
+LoopSummarizer::summarize_scalar(const loop_state_list& final_states, const loop_state_list& exit_states) {
+    spdlog::info("Summarizing scalars");
+    auto manager = AnalysisManager::get_instance();
+    auto& z3ctx = manager->get_z3ctx();
 
     auto conditions_and_updates = get_conditions_and_updates(final_states);
     auto path_conds = conditions_and_updates.first;
@@ -192,15 +225,20 @@ LoopSummarizer::summarize() {
 
     for (auto& inst: *loop->getHeader()) {
         if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
+            auto ptr = store_inst->getPointerOperand();
+            if (!isa<llvm::GetElementPtrInst>(ptr)) {
+                continue;
+            }
             auto written_value = store_inst->getValueOperand();
             modified_values.push_back(written_value);
-            auto name = get_z3_name(store_inst->getPointerOperand()->getName().str());
+            auto name = get_z3_name(ptr->getName().str());
             auto store_func = rec_s.z3ctx.int_const(name.c_str());
             auto stored_value_z3 = final_states[0]->evaluate(written_value).simplify().substitute(params, params_values);
             params.push_back(store_func);
             params_values.push_back(stored_value_z3);
         }
     }
+
     spdlog::info("Closed-form solutions are computed successfully:");
     spdlog::info("Computing the number of iterations");
     auto [N_constraints, N] = get_iterations_constraints(exit_states, params, params_values);
@@ -210,11 +248,13 @@ LoopSummarizer::summarize() {
     N_vec.push_back(N);
     // llvm::errs() << N_constraints.to_string() << "\n";
     auto N_value = linear_logic.solve_vars(N_constraints, N_vec);
+    std::optional<z3::expr> N_opt;
     if (N_value.size() == 0) {
         spdlog::info("fail to compute the number of iterations, record the constraints on it in path conditions");
         N_constraints = z3ctx.bool_val(true);
     } else {
         spdlog::info("The number of iterations is {}", N_value[0].to_string());
+        N_opt = N_value[0];
         z3::expr_vector src(z3ctx);
         z3::expr_vector dst(z3ctx);
         src.push_back(manager->get_ind_var());
@@ -223,7 +263,199 @@ LoopSummarizer::summarize() {
             exit_values.push_back(expr.substitute(src, dst));
         }
     }
-    summary = LoopSummary(params, exit_values, N_constraints, modified_values);
+    summary = LoopSummary(params, exit_values, params_values, N_constraints, modified_values, N_opt);
+}
+
+std::pair<z3::expr, rec_ty>
+LoopSummarizer::get_array_base_case(const MemoryObjectArrayPtr array) {
+    auto manager = AnalysisManager::get_instance();
+    auto& z3ctx = manager->get_z3ctx();
+    auto sig = array->get_signature();
+    z3::expr_vector args(sig.args());
+    args.push_back(manager->get_ind_var()); // add loop counter
+    auto rec_func = get_array_rec_func(array);
+    
+    // base case: if any argument is negative or the loop counter is non-positive
+    z3::expr base_cond = manager->get_ind_var() <= 0;
+    for (auto arg : sig.args()) {
+        base_cond = base_cond || arg < 0;
+    }
+    
+    rec_ty base_eq;
+    base_eq.insert_or_assign(rec_func(args), sig);
+    
+    return {base_cond, base_eq};
+}
+
+z3::func_decl
+LoopSummarizer::get_array_rec_func(const MemoryObjectArrayPtr array) {
+    auto manager = AnalysisManager::get_instance();
+    auto& z3ctx = manager->get_z3ctx();
+    auto sig = array->get_signature();
+    auto rec_name = sig.decl().name().str() + '_';
+
+    z3::sort_vector rec_sorts(z3ctx);
+    for (int i = 0; i < sig.decl().arity(); i++)
+        rec_sorts.push_back(sig.decl().domain(i));
+    rec_sorts.push_back(z3ctx.int_sort()); // add an extra parameter for loop counter
+    return z3ctx.function(rec_name.c_str(), rec_sorts, z3ctx.int_sort());
+}
+
+std::pair<std::vector<z3::expr>, std::vector<rec_ty>>
+LoopSummarizer::get_array_recursive_case(loop_state_ptr state, const MemoryObjectArrayPtr array) {
+    auto manager = AnalysisManager::get_instance();
+    auto& z3ctx = manager->get_z3ctx();
+    auto sig = array->get_signature();
+    auto path_condition = state->path_condition_in_loop;
+    auto cur_array = state->get_memory_object(array->get_llvm_value());
+    auto array_ptr = dynamic_pointer_cast<MemoryObjectArray>(cur_array);
+    auto rec_func = get_array_rec_func(array_ptr);
+    z3::expr_vector go_back_src(z3ctx);
+    z3::expr_vector go_back_dst(z3ctx);
+    go_back_src.push_back(manager->get_ind_var());
+    go_back_dst.push_back(manager->get_ind_var() - 1);
+
+    z3::expr_vector sub_src(z3ctx);
+    z3::expr_vector sub_dst(z3ctx);
+    // retrieve closed-form solutions to scalar variables
+    // and substitute them into the array update
+    auto scalars = summary.value();
+    auto update = summary.value().evaluate_expr(array_ptr->as_expr()).simplify();
+    auto apps_of_arr = get_app_of(update, sig.decl());
+    for (auto app : apps_of_arr) {
+        sub_src.push_back(app);
+        auto args = app.args();
+        args.push_back(manager->get_ind_var() - 1);
+        sub_dst.push_back(rec_func(args));
+    }
+    
+    z3::expr_vector lhs_args(sig.args());
+    lhs_args.push_back(manager->get_ind_var()); // add loop counter
+    std::vector<z3::expr> conditions;
+    std::vector<rec_ty> eqs;
+    // assume the last condition and expression represent the frame part
+    auto array_conditions = array_ptr->conditions;
+    auto array_expressions = array_ptr->expressions;
+    for (int i = 0; i < array_ptr->conditions.size() - 1; i++) {
+        auto condition = scalars.evaluate_expr(path_condition && array_conditions[i]).simplify();
+        conditions.push_back(condition.substitute(go_back_src, go_back_dst));
+        rec_ty eq;
+        auto trans = summary.value().evaluate_expr(array_expressions[i]).substitute(sub_src, sub_dst).substitute(go_back_src, go_back_dst);
+        eq.insert_or_assign(rec_func(lhs_args), trans);
+        eqs.push_back(eq);
+    }
+    return {conditions, eqs};
+}
+
+void
+LoopSummarizer::summarize_array(const loop_state_list& final_states, const loop_state_list& exit_states) {
+    spdlog::info("Summarizing arrays");
+    auto arrays = parent_state->memory.get_arrays();
+    auto manager = AnalysisManager::get_instance();
+    auto& z3ctx = manager->get_z3ctx();
+    assert(summary.has_value() && "Loop summary for scalars should be computed before summarizing arrays");
+    auto scalar_summary = summary.value();
+    
+    for (auto array : arrays) {
+        summary->add_modified_value(array->get_llvm_value());
+        std::vector<z3::expr> conditions;
+        std::vector<rec_ty> eqs;
+
+        auto arbitrary_state = final_states[0];
+        auto cur_array = arbitrary_state->get_memory_object(array->get_llvm_value());
+        auto array_ptr = dynamic_pointer_cast<MemoryObjectArray>(cur_array);
+
+        //------------------ get recurrence for arrays -------------------------
+        // base case: if any argument is negative or the loop counter is non-positive
+        auto [base_cond, base_eq] = get_array_base_case(array_ptr);
+        conditions.push_back(base_cond);
+        eqs.push_back(base_eq);
+
+        for (auto state : final_states) {
+            auto [case_conditions, case_eqs] = get_array_recursive_case(state, array_ptr);
+            conditions.insert(conditions.end(), case_conditions.begin(), case_conditions.end());
+            eqs.insert(eqs.end(), case_eqs.begin(), case_eqs.end());
+        }
+
+        // add the frame part
+        auto [frame_cond, frame_eq] = get_array_frame_case(conditions, array_ptr);
+        auto acc_cond = z3ctx.bool_val(false);
+        conditions.push_back(frame_cond);
+        eqs.push_back(frame_eq);
+        //----------------------------------------------------------------------
+
+        // solve recurrence
+        assert(conditions.size() == eqs.size());
+        auto closed = solve_recurrence(conditions, eqs);
+
+        z3::expr_vector n_src(z3ctx);
+        n_src.push_back(manager->get_ind_var());
+        z3::expr_vector N_dst(z3ctx);
+        N_dst.push_back(scalar_summary.get_N().value_or(manager->get_loop_N()));
+        auto dims = array_ptr->get_dims();
+        z3::expr domain(z3ctx.bool_val(true));
+        for (int i = 0 ; i < dims.size(); i++) {
+            domain = domain && 0 <= array_ptr->indices[i] && array_ptr->indices[i] < dims[i];
+        }
+        for (auto& [func, expr] : closed) {
+            summary->add_closed_form(array_ptr->get_signature(), restrict_to_domain(expr.substitute(n_src, N_dst), domain).simplify());
+        }
+    }
+    spdlog::info("Array summaries are computed successfully");
+}
+
+closed_form_ty
+LoopSummarizer::solve_recurrence(const std::vector<z3::expr>& conditions, const std::vector<rec_ty>& rec_eqs) {
+    auto manager = AnalysisManager::get_instance();
+    auto& z3ctx = manager->get_z3ctx();
+    rec_solver solver(z3ctx);
+    solver.set_eqs(conditions, rec_eqs);
+    solver.solve();
+    return solver.get_res();
+}
+
+std::pair<z3::expr, rec_ty>
+LoopSummarizer::get_array_frame_case(std::vector<z3::expr> conditions, const MemoryObjectArrayPtr array) {
+    auto manager = AnalysisManager::get_instance();
+    auto& z3ctx = manager->get_z3ctx();
+    auto sig = array->get_signature();
+    auto rec_func = get_array_rec_func(array);
+    z3::expr_vector lhs_args(sig.args());
+    lhs_args.push_back(manager->get_ind_var()); // add loop counter
+    z3::expr_vector rhs_args(sig.args());
+    rhs_args.push_back(manager->get_ind_var() - 1);
+
+    // assume the last condition and expression represent the frame part
+    auto acc_cond = z3ctx.bool_val(false);
+    for (auto cond : conditions) acc_cond = acc_cond || cond;
+
+    z3::expr frame_cond = !acc_cond;
+    rec_ty frame_eq;
+    frame_eq.insert_or_assign(rec_func(lhs_args), rec_func(rhs_args));
+    
+    return {frame_cond, frame_eq};
+}
+
+std::vector<llvm::StoreInst*>
+LoopSummarizer::get_array_modified_stmts() {
+
+    auto executor = LoopExecution(loop, parent_state);
+    auto initial_state = executor.build_initial_state();
+    auto update_state = executor.run_header(initial_state);
+
+    std::vector<llvm::StoreInst*> modified_stmts;
+    auto header = loop->getHeader();
+    for (auto& inst : *header) {
+        if (auto store_inst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
+            auto ptr = store_inst->getPointerOperand();
+            auto [target_v, offset] = update_state.parse_pointer(ptr);
+            auto m_obj = update_state.get_memory_object(target_v);
+            if (m_obj->is_array()) {
+                modified_stmts.push_back(store_inst);
+            }
+        }
+    }
+    return modified_stmts;
 }
 
 initial_ty
@@ -244,7 +476,7 @@ LoopSummarizer::get_initial_values() {
 }
 
 std::vector<llvm::Value*>
-LoopExecution::get_modified_values() {
+LoopExecution::get_scalar_modified_values() {
     std::vector<llvm::Value*> modified_values;
     auto header = loop->getHeader();
     for (auto& phi : header->phis()) {
@@ -253,7 +485,10 @@ LoopExecution::get_modified_values() {
     for (auto& block : loop->blocks()) {
         for (auto& inst : *block) {
             if (auto store_inst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
-                modified_values.push_back(store_inst->getPointerOperand());
+                auto ptr = store_inst->getPointerOperand();
+                if (!isa<llvm::GetElementPtrInst>(ptr)) {
+                    modified_values.push_back(store_inst->getPointerOperand());
+                }
             }
         }
     }

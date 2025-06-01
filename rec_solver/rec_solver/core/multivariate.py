@@ -306,6 +306,7 @@ def solve_nearly_tail(rec: MultiRecurrence, is_array=False):
     D = z3.Int('_D')
     rets = z3.Ints(' '.join(['_ret%d' % i for i in range(rec.number_ret())]))
     loop_rec = nearly_tail2loop(rec, d, rets)
+    loop_rec.pprint()
     loop_guard = get_loop_cond(rec, d)
     precondition = z3.BoolVal(True)
     if is_array:
@@ -344,7 +345,7 @@ def solve_nearly_tail(rec: MultiRecurrence, is_array=False):
     # tmp_ret = z3.Function('_ret0', z3.IntSort(), z3.IntSort())
     # ret0 = z3.Int('_ret0')
     # print(z3.simplify(z3.substitute(piecewise_D, [(z3.Int('sarg'), z3.IntVal(1)), (z3.Int('sarg1'), z3.IntVal(-1))])))
-    mapping = {ret: ret0 for ret, ret0 in zip(rets, rets0)}
+    mapping = {ret: ret0 for ret, ret0 in zip(rets, rets0)} | {d: piecewise_D}
     return [z3.substitute(closed_form_dict[symbol2func(ret)(d)], *list(mapping.items())) for ret in rets]
 
 def nearly_tail2loop(rec: MultiRecurrence, d, rets):
@@ -409,7 +410,7 @@ def compute_piecewise_D(d, D, loop_cond, loop_closed_form, precondition):
     hints = []
     for i, (cur_case, closed) in enumerate(zip(loop_closed_form._constraints, loop_closed_form._closed_forms)):
         logger.debug('Handling case %d/%d' % (i + 1, len(loop_closed_form._constraints)))
-        terminate_cond = z3.substitute(loop_cond, *list(closed.as_dict().items()))
+        terminate_cond = z3.simplify(z3.substitute(loop_cond, *list(closed.as_dict().items())), elim_ite=True)
         cur_D = compute_D_by_case(d_z3, D_z3, z3.Not(terminate_cond), cur_case, hints)
         if cur_D is not None:
             hints.append(cur_D)
@@ -428,8 +429,9 @@ def compute_D_by_case(d, D, loop_cond, case, hints):
     axioms.add(z3.substitute(z3.Not(cond), (d, D)))
     axioms.add(D >= 0)
 
-    qe = z3.Tactic('qe')
-    constraints = z3.simplify(z3.Or(*[z3.And(*c) for c in qe(z3.And(*axioms))]))
+    qe = z3.Then(z3.Tactic('qe'), z3.Tactic('ctx-solver-simplify'), z3.Tactic('simplify'))
+    # constraints = z3.simplify(z3.Or(*[z3.And(*c) for c in qe(z3.And(*axioms))]))
+    constraints = qe(z3.And(*axioms)).as_expr()
     sol = utils.solve_piecewise_sol(constraints, [D], z3.Int)
     try:
         return sol.to_z3()[D]
@@ -440,6 +442,7 @@ def symbol2func(sym):
     return z3.Function(sym.decl().name(), z3.IntSort(), z3.IntSort())
 
 def solve_multivariate_rec(rec: MultiRecurrence):
+    rec.pprint()
     if rec.is_nearly_tail():
         closed_forms = solve_nearly_tail(rec)
     else:

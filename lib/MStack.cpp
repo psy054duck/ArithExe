@@ -56,6 +56,17 @@ MStack::write(llvm::Value* v, z3::expr_vector index, z3::expr value) {
     // throw std::runtime_error("Memory object not found in the top frame.");
 }
 
+std::vector<MemoryObjectArrayPtr>
+MStack::StackFrame::get_arrays() const {
+    std::vector<MemoryObjectArrayPtr> arrays;
+    for (const auto& pair : m_objects) {
+        if (pair.second->is_array()) {
+            arrays.push_back(dynamic_pointer_cast<MemoryObjectArray>(pair.second));
+        }
+    }
+    return arrays;
+}
+
 void
 MStack::StackFrame::write(llvm::Value* symbol, z3::expr value) {
     // insert_or_assign(symbol, value);
@@ -109,4 +120,9 @@ MStack::StackFrame::get_memory_object(llvm::Value* v) const {
 std::optional<MemoryObjectPtr>
 MStack::get_memory_object(llvm::Value* v) const {
     return frames.top().get_memory_object(v);
+}
+
+std::vector<MemoryObjectArrayPtr>
+MStack::get_arrays() const {
+    return frames.top().get_arrays();
 }

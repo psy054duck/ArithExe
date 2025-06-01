@@ -171,7 +171,7 @@ Memory::write(llvm::Value* value, z3::expr val) {
         if (auto global_var = dyn_cast_or_null<llvm::GlobalVariable>(value)) {
             auto it_globals = m_globals.find(global_var);
             if (it_globals != m_globals.end()) {
-                it_globals->second->write(val);
+                it_globals->second = it_globals->second->write(val);
                 return;
             }
         } else if (auto alloca_inst = dyn_cast_or_null<llvm::AllocaInst>(value)) {
@@ -253,4 +253,41 @@ Memory::read(llvm::Value* value, z3::expr_vector index) const {
         return it_globals->second->read(index);
     }
     return std::nullopt;
+}
+
+Memory::ObjectPtr
+Memory::parse_pointer(llvm::Value* value) const {
+    // if value is a pointer, return the base pointer and the indices
+    auto& z3ctx = AnalysisManager::get_instance()->get_z3ctx();
+    if (auto gep = dyn_cast_or_null<llvm::GetElementPtrInst>(value)) {
+        return parse_gep(gep);
+    }
+    // assume it points to a memory object with zero offset
+    auto m_obj_opt = get_memory_object(value);
+    assert(m_obj_opt.has_value() && "Memory object should be found for the given value");
+    auto m_obj = m_obj_opt.value();
+    z3::expr_vector indices(z3ctx);
+    for (int i = 0; i < m_obj->get_dims().size(); i++) {
+        indices.push_back(z3ctx.int_val(0));
+    }
+    return std::make_pair(value, indices);
+}
+
+std::vector<MemoryObjectArrayPtr>
+Memory::get_arrays() const {
+    std::vector<MemoryObjectArrayPtr> arrays = m_stack.get_arrays();
+
+    for (const auto& [key, value] : m_heap) {
+        if (value->is_array()) {
+            arrays.push_back(dynamic_pointer_cast<MemoryObjectArray>(value));
+        }
+    }
+
+    for (const auto& [key, value] : m_globals) {
+        if (value->is_array()) {
+            arrays.push_back(dynamic_pointer_cast<MemoryObjectArray>(value));
+        }
+    }
+
+    return arrays;
 }

@@ -100,13 +100,6 @@ namespace ari_exe {
 
             AInstruction* prev_pc;
 
-            // values of each variable
-            // SymbolTable<z3::expr> globals;
-            // Memory globals;
-
-            // stack of function calls
-            // AStack stack;
-
             // memory model for symbolic execution
             Memory memory;
 
@@ -127,6 +120,12 @@ namespace ari_exe {
             static SymbolTable<LoopSummary>* loop_summaries;
 
             z3::expr get_path_condition() const { return path_condition; }
+
+            Memory::ObjectPtr parse_pointer(llvm::Value* value) const {
+                return memory.parse_pointer(value);
+            }
+
+            MemoryObjectPtr get_memory_object(llvm::Value* value) const;
 
             // std::string top_stack_frame_to_string() const {
             //     return stack.top_frame().to_string();

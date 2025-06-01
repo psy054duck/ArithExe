@@ -25,20 +25,6 @@ def is_tautology(f):
 def is_contradiction(f):
     return equals(f, z3.BoolVal(False))
 
-def is_atom(t):
-    if not z3.is_bool(t):
-        return False
-    if not z3.is_app(t):
-        return False
-    k = t.decl().kind()
-    if k == z3.Z3_OP_AND or k == z3.Z3_OP_OR or k == z3.Z3_OP_IMPLIES:
-        return False
-    if k == z3.Z3_OP_EQ and z3.is_bool(t.arg(0)):
-        return False
-    if k == z3.Z3_OP_TRUE or k == z3.Z3_OP_FALSE or k == z3.Z3_OP_XOR or k == z3.Z3_OP_NOT:
-        return False
-    return True
-
 def is_literal(f):
     return is_atom(f) or z3.is_not(f) and is_atom(f.arg(0))
 
@@ -56,85 +42,179 @@ def get_vars(f: z3.ExprRef):
     collect(f)
     return r
 
+def is_atom(t):
+    if not z3.is_bool(t):
+        return False
+    if not z3.is_app(t):
+        return False
+    k = t.decl().kind()
+    if k == z3.Z3_OP_AND or k == z3.Z3_OP_OR or k == z3.Z3_OP_IMPLIES:
+        return False
+    if k == z3.Z3_OP_EQ and z3.is_bool(t.arg(0)):
+        return False
+    if k == z3.Z3_OP_TRUE or k == z3.Z3_OP_FALSE or k == z3.Z3_OP_XOR or k == z3.Z3_OP_NOT:
+        return False
+    return True
+
+def atoms(fml):
+    visited = set([])
+    atms = set([])
+    def atoms_rec(t, visited, atms):
+        if t in visited:
+            return
+        visited |= { t }
+        if is_atom(t):
+            atms |= { t }
+        for s in t.children():
+            atoms_rec(s, visited, atms)
+    atoms_rec(fml, visited, atms)
+    return atms
+
+def atom2literal(m, a):
+    if z3.is_true(m.eval(a)):
+        return a
+    return z3.Not(a)
+
+def implicant(atoms, s, snot):
+    m = snot.model()
+    lits = [atom2literal(m, a) for a in atoms]
+    is_sat = s.check(lits)
+    assert is_sat == z3.unsat
+    core = s.unsat_core()
+    return z3.Or([z3.mk_not(c) for c in core])
+
+def to_cnf(fml):
+    atms = atoms(fml)
+    s = z3.Solver()
+    snot = z3.Solver()
+    snot.add(z3.Not(fml))
+    s.add(fml)
+
+    while z3.sat == snot.check():
+        clause = implicant(atms, s, snot)
+        yield clause
+        snot.add(clause)
+
+def to_dnf(fml):
+    not_fml = z3.Not(fml)
+    cnf = list(to_cnf(not_fml))
+    dnf = []
+    for clause in cnf:
+        literals = clause.children()
+        dnf.append([z3.Not(lit) for lit in literals])
+    return dnf
+
+def atom2canonical(atom):
+    '''Convert atom to a canonical form.'''
+    if z3.is_lt(atom):
+        return atom.arg(1) - atom.arg(0) - 1 >= 0
+    elif z3.is_le(atom):
+        return atom.arg(1) - atom.arg(0) >= 0
+    elif z3.is_gt(atom):
+        return atom.arg(0) - atom.arg(1) - 1 >= 0
+    elif z3.is_ge(atom):
+        return atom.arg(0) - atom.arg(1) >= 0
+    elif z3.is_eq(atom):
+        return atom.arg(0) - atom.arg(1) == 0
+
+def literal2canonical(literal):
+    '''Convert literal to a canonical form.'''
+    if not z3.is_not(literal):
+        return [atom2canonical(literal)]
+    atom = literal.arg(0)
+    if z3.is_lt(atom):
+        return [atom2canonical(atom.arg(0) >= atom.arg(1))]
+    elif z3.is_le(atom):
+        return [atom2canonical(atom.arg(0) > atom.arg(1))]
+    elif z3.is_gt(atom):
+        return [atom2canonical(atom.arg(0) <= atom.arg(1))]
+    elif z3.is_ge(atom):
+        return [atom2canonical(atom.arg(0) < atom.arg(1))]
+    elif z3.is_eq(atom):
+        return [atom2canonical(atom.arg(0) > atom.arg(1)), atom2canonical(atom.arg(0) < atom.arg(1))]
+
 class DNFConverter:
     def __init__(self):
         pass
 
-    def to_dnf(self, f):
-        nnf = z3.Or([z3.And(*c) for c in z3.Tactic('nnf').apply(f)])
-        vars = get_vars(nnf)
-        if any('!' in str(var) for var in vars):
-            solver = z3.Solver()
-            fresh_vars = [var for var in vars if str(var).startswith('z3name')]
-            observers = {var: z3.Int('observer%d' % i) for i, var in enumerate(fresh_vars)}
-            solver.add([observers[var] == var for var in fresh_vars])
-            if solver.check(nnf) == z3.sat:
-                m = solver.model()
-                for var in fresh_vars:
-                    m_var = m.eval(observers[var])
-                    if solver.check(nnf, var != m_var) == z3.unsat:
-                        nnf = z3.substitute(nnf, (var, m_var))
-        temp_vars = [var for var in vars if '!' in str(var)]
-        cons = {z3.IntSort(): z3.Int, z3.BoolSort(): z3.Bool, z3.RealSort(): z3.Real}
-        name_mapping = [(var, cons[var.sort()](str(var).replace('!', '_'))) for var in temp_vars]
-        nnf = z3.substitute(nnf, name_mapping)
-        raw_dnf = self._to_dnf(nnf)
-        return raw_dnf
+    def to_dnf(self, fml):
+        return to_dnf(fml)
 
-    def or2list(self, f):
-        assert(z3.is_or(f) or z3.is_false(f) or z3.is_true(f))
-        if z3.is_true(f) or z3.is_false(f):
-            return [[f]]
-        return [[c] for c in f.children()]
+    # def to_dnf(self, f):
+    #     nnf = z3.Or([z3.And(*c) for c in z3.Tactic('nnf').apply(f)])
+    #     vars = get_vars(nnf)
+    #     if any('!' in str(var) for var in vars):
+    #         solver = z3.Solver()
+    #         fresh_vars = [var for var in vars if str(var).startswith('z3name')]
+    #         observers = {var: z3.Int('observer%d' % i) for i, var in enumerate(fresh_vars)}
+    #         solver.add([observers[var] == var for var in fresh_vars])
+    #         if solver.check(nnf) == z3.sat:
+    #             m = solver.model()
+    #             for var in fresh_vars:
+    #                 m_var = m.eval(observers[var])
+    #                 if solver.check(nnf, var != m_var) == z3.unsat:
+    #                     nnf = z3.substitute(nnf, (var, m_var))
+    #     temp_vars = [var for var in vars if '!' in str(var)]
+    #     cons = {z3.IntSort(): z3.Int, z3.BoolSort(): z3.Bool, z3.RealSort(): z3.Real}
+    #     name_mapping = [(var, cons[var.sort()](str(var).replace('!', '_'))) for var in temp_vars]
+    #     nnf = z3.substitute(nnf, name_mapping)
+    #     raw_dnf = self._to_dnf(nnf)
+    #     return raw_dnf
 
-    def _to_dnf(self, f):
-        '''Convert f into dnf with early simplification'''
-        if is_literal(f):
-            return [[f]]
-        args = [self._to_dnf(arg) for arg in f.children()]
-        if z3.is_and(f):
-            args_as_and = [self.disjunction2z3(arg) for arg in args if len(arg) != 0]
-            simplified_list = [c for c in self.simplify_and(args_as_and)]
-            simplified_args = [self.or2list(c) for c in simplified_list]
-            new_disjunction = []
-            for conjunctions in product(*simplified_args):
-                new_disjunction.append(self.simplify_and(sum(conjunctions, [])))
-            return new_disjunction
-        return self.simplify_or(sum(args, []))
+    # def or2list(self, f):
+    #     assert(z3.is_or(f) or z3.is_false(f) or z3.is_true(f))
+    #     if z3.is_true(f) or z3.is_false(f):
+    #         return [[f]]
+    #     return [[c] for c in f.children()]
 
-    def disjunction2z3(self, disjunction):
-        return z3.Or([z3.And(d) for d in disjunction])
+    # def _to_dnf(self, f):
+    #     '''Convert f into dnf with early simplification'''
+    #     if is_literal(f):
+    #         return [[f]]
+    #     args = [self._to_dnf(arg) for arg in f.children()]
+    #     if z3.is_and(f):
+    #         args_as_and = [self.disjunction2z3(arg) for arg in args if len(arg) != 0]
+    #         simplified_list = [c for c in self.simplify_and(args_as_and)]
+    #         simplified_args = [self.or2list(c) for c in simplified_list]
+    #         new_disjunction = []
+    #         for conjunctions in product(*simplified_args):
+    #             new_disjunction.append(self.simplify_and(sum(conjunctions, [])))
+    #         return new_disjunction
+    #     return self.simplify_or(sum(args, []))
 
-    def conjunction2z3(self, conjunction):
-        return z3.And(conjunction)
-            
-    def simplify_and(self, conjunction):
-        removed = []
-        if is_contradiction(self.conjunction2z3(conjunction)):
-            return [z3.BoolVal(False)]
+    # def disjunction2z3(self, disjunction):
+    #     return z3.Or([z3.And(d) for d in disjunction])
 
-        for i, conjunct in enumerate(conjunction):
-            rest_conjunctions = [c for j, c in enumerate(conjunction) if j != i and j not in removed]
-            rest = self.conjunction2z3(rest_conjunctions)
-            if implies(rest, conjunct):
-                removed.append(i)
-        res = [conjunct for i, conjunct in enumerate(conjunction) if i not in removed]
-        assert(equals(self.conjunction2z3(res), self.conjunction2z3(conjunction)))
-        return res
+    # def conjunction2z3(self, conjunction):
+    #     return z3.And(conjunction)
+    #         
+    # def simplify_and(self, conjunction):
+    #     removed = []
+    #     if is_contradiction(self.conjunction2z3(conjunction)):
+    #         return [z3.BoolVal(False)]
+
+    #     for i, conjunct in enumerate(conjunction):
+    #         rest_conjunctions = [c for j, c in enumerate(conjunction) if j != i and j not in removed]
+    #         rest = self.conjunction2z3(rest_conjunctions)
+    #         if implies(rest, conjunct):
+    #             removed.append(i)
+    #     res = [conjunct for i, conjunct in enumerate(conjunction) if i not in removed]
+    #     assert(equals(self.conjunction2z3(res), self.conjunction2z3(conjunction)))
+    #     return res
     
-    def simplify_or(self, disjunction):
-        removed = []
-        if is_tautology(self.disjunction2z3(disjunction)):
-            return [[z3.BoolVal(True)]]
+    # def simplify_or(self, disjunction):
+    #     removed = []
+    #     if is_tautology(self.disjunction2z3(disjunction)):
+    #         return [[z3.BoolVal(True)]]
 
-        for i, disjunct in enumerate(disjunction):
-            rest_disjunction = [d for j, d in enumerate(disjunction) if j != i and j not in removed]
-            rest = self.disjunction2z3(rest_disjunction)
-            if implies(self.conjunction2z3(disjunct), rest):
-                removed.append(i)
-        res = [self.simplify_and(disjunct) for i, disjunct in enumerate(disjunction) if i not in removed]
-        assert(equals(self.disjunction2z3(res), self.disjunction2z3(disjunction)))
-        return res
+    #     for i, disjunct in enumerate(disjunction):
+    #         rest_disjunction = [d for j, d in enumerate(disjunction) if j != i and j not in removed]
+    #         rest = self.disjunction2z3(rest_disjunction)
+    #         if implies(self.conjunction2z3(disjunct), rest):
+    #             removed.append(i)
+    #     res = [self.simplify_and(disjunct) for i, disjunct in enumerate(disjunction) if i not in removed]
+    #     assert(equals(self.disjunction2z3(res), self.disjunction2z3(disjunction)))
+    #     return res
 
 if __name__ == '__main__':
     from z3 import *

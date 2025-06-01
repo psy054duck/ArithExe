@@ -1,5 +1,3 @@
-# from old_rec_solver.sym_rec_solver import pretty_solve_and_print, solve_file
-# from rec_solver.PRS.mathematica_manipulation import session
 import time
 import z3
 import fire
@@ -18,7 +16,19 @@ def main(filename, inv_var):
     closed_dict = closed.as_dict()
     # apps = reduce(set.union, [k.atoms(AppliedUndef) | v.atoms(AppliedUndef) for k, v in closed_dict.items()])
     apps = reduce(set.union, [get_applied_functions(k) | get_applied_functions(v) for k, v in closed_dict.items()])
-    remove_func_mapping = [(f, z3.Int(f.decl().name())) for f in apps]
+
+    # remove the last argument from the function applications
+    remove_func_mapping = []
+    for f in apps:
+        assert(f.decl().arity() > 0)
+        if f.decl().arity() == 1:
+            remove_func_mapping.append((f, z3.Int(f.decl().name())))
+        else:
+            args = f.children()[:-1]
+            new_func = z3.Function(f.decl().name(), *[arg.sort() for arg in args], z3.IntSort())
+            remove_func_mapping.append((f, new_func(args)))
+
+    # remove_func_mapping = [(f, z3.Int(f.decl().name())) for f in apps]
     # new_closed_dict = {k.subs(remove_func_mapping, simultaneous=True): v.subs(remove_func_mapping, simultaneous=True) for k, v in closed_dict.items()}
     new_closed_dict = {z3.substitute(k, remove_func_mapping): z3.substitute(v, remove_func_mapping) for k, v in closed_dict.items()}
     for k, e in new_closed_dict.items():
@@ -29,11 +39,3 @@ def main(filename, inv_var):
 
 if __name__ == '__main__':
     fire.Fire(main)
-    # fire.Fire(pretty_solve_and_print)
-    # pretty_solve_and_print('rec_solver/test.txt')
-    # pretty_solve_and_print('examples_rec/test3.txt')
-    # pretty_solve_and_print('temp/rec.txt')
-    # pretty_solve_and_print('temp/copy_some.txt')
-    # pretty_solve_and_print('temp/test4.txt')
-    # pretty_solve_and_print('temp/test6.txt')
-    # session.terminate()

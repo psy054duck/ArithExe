@@ -60,6 +60,7 @@ set(ARITHEXEC_LIBS
     logics
     Memory
     MemoryObject
+    common
 )
 
 add_subdirectory(lib)

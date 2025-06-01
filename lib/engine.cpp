@@ -49,7 +49,7 @@ Engine::run(state_ptr state) {
         auto cur_state = states.front();
         states.pop();
         spdlog::debug("Current Instruction: {}", cur_state->pc->inst->getName().str());
-        // llvm::errs() << cur_state->memory.to_string() << "\n";
+        llvm::errs() << cur_state->memory.to_string() << "\n";
 
         if (cur_state->status == State::TERMINATED) {
             continue;

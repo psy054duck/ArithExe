@@ -29,6 +29,40 @@ namespace ari_exe {
         }
     };
 
+    /**
+     * @brief restrict a function to a specific domain
+     * @param f the function to be restricted
+     * @param vars the variables of the function
+     * @param domain the domain to restrict to
+     * @return a new function that is restricted to the domain
+     */
+    z3::expr restrict_to_domain(const z3::expr& f, z3::expr domain);
+
+    /**
+     * @brief check if two formulas are equivalent
+     */
+    bool is_equivalent(const z3::expr& f1, const z3::expr& f2);
+    
+    /**
+     * @brief convert a z3 expressions into piecewise form
+     * @param expr the expression to be converted
+     * @return a pair of (conditions, expressions), where expressions are ite-free
+     */
+    std::pair<z3::expr_vector, z3::expr_vector> expr2piecewise(const z3::expr& expr);
+
+    /**
+     * @brief convert (conditions, expressions) into a ite
+     */
+    z3::expr piecewise2ite(const z3::expr_vector& conditions, const z3::expr_vector& expressions);
+
+    /**
+     * @brief merge cases for piecewise expressions
+     * @param conditions the conditions of the piecewise expression
+     * @param expressions the expressions of the piecewise expression
+     * @return a new pair of (conditions, expressions) where the some cases are merged
+     */
+    std::pair<z3::expr_vector, z3::expr_vector> merge_cases(const z3::expr_vector& conditions, const z3::expr_vector& expressions);
+
     class Logic {
         public:
             /**

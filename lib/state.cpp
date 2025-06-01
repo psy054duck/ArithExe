@@ -26,6 +26,16 @@ State::evaluate(llvm::Value* v) {
     return value.value(); // return something to avoid compiler warning
 }
 
+z3::expr
+State::load(llvm::Value* v) const {
+    auto value = memory.read(v);
+    if (value.has_value()) {
+        return *value;
+    }
+    assert(false && "Value not found in memory");
+    return value.value(); // return something to avoid compiler warning
+}
+
 void
 State::write(llvm::Value* v, z3::expr value) {
     memory.write(v, value);
@@ -41,10 +51,12 @@ State::step_pc(AInstruction* next_pc) {
     }
 }
 
-// void
-// State::push_value(llvm::Value* v, z3::expr value) {
-//     stack.insert_or_assign_value(v, value);
-// }
+MemoryObjectPtr
+State::get_memory_object(llvm::Value* value) const {
+    auto m_obj_opt = memory.get_memory_object(value);
+    assert(m_obj_opt.has_value() && "Memory object not found");
+    return m_obj_opt.value();
+}
 
 MStack::StackFrame&
 State::push_frame() {

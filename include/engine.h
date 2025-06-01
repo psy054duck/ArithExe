@@ -95,6 +95,9 @@ namespace ari_exe {
             // run the engine from empty state
             void run();
 
+            // run the engine util reach the end of some basic block
+            void run_until(state_ptr state, llvm::BasicBlock* end_block);
+
             // run the engine from the given state
             void run(state_ptr state);
 

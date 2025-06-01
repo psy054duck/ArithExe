@@ -26,6 +26,11 @@ namespace ari_exe {
             ~Memory() = default;
 
             /**
+             * @brief parse a pointer type to get the memory object and offset it points to.
+             */
+            ObjectPtr parse_pointer(llvm::Value* value) const;
+
+            /**
              * @brief Read the value from stack, heap, or globals based on the LLVM value.
              */
             std::optional<z3::expr> read(llvm::Value* value) const;
@@ -144,6 +149,11 @@ namespace ari_exe {
             size_t stack_size() const {
                 return m_stack.size();
             }
+
+            /**
+             * @brief get all arrays in the memory.
+             */
+            std::vector<MemoryObjectArrayPtr> get_arrays() const;
 
         private:
             /**

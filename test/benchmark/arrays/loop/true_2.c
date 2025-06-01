@@ -30,11 +30,7 @@ int main()
 
 	for(i=0; i<N; i++)
 	{
-		if(i%2==0) {
-			a[i] = 2;
-		} else {
-			a[i] = 0;
-		}
+        a[i] = i;
 	}
 
 	for(i=0; i<N; i++)
@@ -45,6 +41,6 @@ int main()
 			sum[0] = sum[0] + a[i];
 		}
 	}
-	__VERIFIER_assert(sum[0] <= 2*N);
+	__VERIFIER_assert(sum[0] <= N*N);
 	return 1;
 }

@@ -44,7 +44,7 @@ namespace ari_exe {
             rec_solver(rec_ty& rec_eqs, z3::expr var, z3::context& z3ctx);
             rec_solver(z3::context& z3ctx): z3ctx(z3ctx), ind_var(z3ctx.int_const("n0")), initial_values_k(z3ctx), initial_values_v(z3ctx), assumption(z3ctx.bool_val(true)) {}
             void set_eqs(rec_ty& rec_eqs);
-            void set_eqs(std::vector<z3::expr>& _conds, std::vector<rec_ty>& _exprs);
+            void set_eqs(const std::vector<z3::expr>& _conds, const std::vector<rec_ty>& _exprs);
             void add_initial_values(z3::expr_vector k, z3::expr_vector v);
             void set_ind_var(z3::expr var);
             void simple_solve();

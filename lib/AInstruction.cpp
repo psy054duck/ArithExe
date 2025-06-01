@@ -213,7 +213,7 @@ AInstructionCall::execute_normal(state_ptr state) {
         auto param = called_func->getArg(i);
         new_state->write(param, arg_value);
     }
-    auto called_first_inst = &*called_func->getEntryBlock().begin();
+    auto called_first_inst = &*called_func->getEntryBlock().getFirstNonPHIOrDbg();
     auto next_pc = AInstruction::create(called_first_inst);
     new_state->step_pc(next_pc);
     return new_state;
@@ -475,16 +475,16 @@ AInstructionPhi::execute(state_ptr state) {
     auto& LI = manager->get_LI(phi_inst->getFunction());
     auto loop = LI.getLoopFor(phi_inst->getParent());
 
-    // if (loop && failed_loops.find(loop) == failed_loops.end()) {
-    //     if (!state->is_summarizing()) {
-    //         auto accelarated_states = execute_if_summarizable(state);
-    //         if (accelarated_states.size() > 0) {
-    //             return accelarated_states;
-    //         } else {
-    //             failed_loops.insert(loop);
-    //         }
-    //     }
-    // }
+    if (loop && failed_loops.find(loop) == failed_loops.end()) {
+        if (!state->is_summarizing()) {
+            auto accelarated_states = execute_if_summarizable(state);
+            if (accelarated_states.size() > 0) {
+                return accelarated_states;
+            } else {
+                failed_loops.insert(loop);
+            }
+        }
+    }
 
     auto& z3ctx = state->z3ctx;
     auto prev_block = state->trace.back();
@@ -540,11 +540,10 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
             args.push_back(ptr_expr);
         }
     }
-    // for (auto& phi : header->phis()) {
-    //     auto name = get_z3_name(phi.getName().str());
-    //     auto phi_expr = z3ctx.int_const(name.c_str());
-    //     args.push_back(phi_expr);
-    // }
+    auto arrays_ptr = state->memory.get_arrays();
+    for (auto& array_ptr : arrays_ptr) {
+        args.push_back(array_ptr->get_signature());
+    }
     z3::expr_vector closed_forms = summary->evaluate(args);
     state_ptr new_state = std::make_shared<State>(*state);
     // auto phi_it = header->phis().begin();
@@ -553,8 +552,17 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         auto modified_value = modified_values[i];
         new_state->write(modified_value, closed_forms[i]);
     }
-    auto new_pc = AInstruction::create(&*exit_block->begin());
+    auto cur_inst = header->getFirstNonPHIOrDbg();
+    auto cur_state = new_state;
+    cur_state->step_pc(AInstruction::create(cur_inst));
+    while (cur_state->pc->inst != header->getTerminator()) {
+        auto states = cur_state->pc->execute(cur_state);
+        assert(states.size() == 1 && "should only have one state after executing an instruction inside a header");
+        cur_state = states[0];
+    }
+    new_state = cur_state;
     new_state->trace.push_back(header);
+    auto new_pc = AInstruction::create(&*exit_block->begin());
     new_state->step_pc(new_pc);
     return {new_state};
 }

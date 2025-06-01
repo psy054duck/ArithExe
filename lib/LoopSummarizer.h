@@ -65,6 +65,11 @@ namespace ari_exe {
             std::pair<loop_state_list, loop_state_list> run();
 
             /**
+             * @brief only run the header of the loop
+             */
+            LoopState run_header(loop_state_ptr state);
+
+            /**
              * @brief Test the feasibility of the current state
              * @param state The current state
              */
@@ -97,7 +102,7 @@ namespace ari_exe {
              * @brief get all values that modified by this loop,
              *        for which wee need to summarize.
              */
-            std::vector<llvm::Value*> get_modified_values();
+            std::vector<llvm::Value*> get_scalar_modified_values();
 
             llvm::Loop* loop;
 
@@ -148,6 +153,46 @@ namespace ari_exe {
             void summarize();
 
             /**
+             * @brief Summarize the loop for scalar values.
+             */
+            void summarize_scalar(const loop_state_list& final_states, const loop_state_list& exit_states);
+
+            /**
+             * @brief Summarize the loop for array values.
+             */
+            void summarize_array(const loop_state_list& final_states, const loop_state_list& exit_states);
+
+            /**
+             * @brief Get the z3 function used in the recurrence for an array.
+             *        Thus, this function is added another parameter to denote
+             *        the loop counter.
+             */
+            z3::func_decl get_array_rec_func(const MemoryObjectArrayPtr array);
+
+            /**
+             * @brief get base case for array summarization
+             * @return A pair of (condition , transition)
+             */
+            std::pair<z3::expr, rec_ty> get_array_base_case(const MemoryObjectArrayPtr array);
+
+            /**
+             * @brief convert a finial state to recursive case
+             * @return A pair of (condition , transition)
+             */
+            std::pair<std::vector<z3::expr>, std::vector<rec_ty>> get_array_recursive_case(loop_state_ptr final_state, const MemoryObjectArrayPtr array);
+
+            /**
+             * @brief solve recurrence
+             */
+            closed_form_ty solve_recurrence(const std::vector<z3::expr>& conditions, const std::vector<rec_ty>& eqs);
+
+            /**
+             * @brief get the frame case for array summarization
+             * @return A pair of (condition , transition)
+             */
+            std::pair<z3::expr, rec_ty> get_array_frame_case(std::vector<z3::expr> conditions, const MemoryObjectArrayPtr array);
+
+            /**
              * @brief get all header phis in order
              */
             std::vector<llvm::PHINode*> get_header_phis();
@@ -179,9 +224,20 @@ namespace ari_exe {
             std::pair<z3::expr_vector, z3::expr_vector> get_modified_values_and_functions();
 
             /**
+             * @brief get array modified statements
+             */
+            std::vector<llvm::StoreInst*> get_array_modified_stmts();
+
+            /**
              * @brief extract conditions and update from final states
              */
             std::pair<std::vector<z3::expr>, std::vector<rec_ty>> get_conditions_and_updates(const loop_state_list& final_states);
+
+            /**
+             * @brief get final and exit states
+             * @return (final_states, exit_states)
+             */
+            std::pair<loop_state_list, loop_state_list> get_final_and_exit_states();
 
             /**
              * @brief get initial values for the loop
@@ -197,6 +253,11 @@ namespace ari_exe {
              * @brief parent state, in which this loop summarization is invoked
              */
             state_ptr parent_state;
+
+            /**
+             * @brief log info
+             */
+            void log_states(const loop_state_list& final_states, const loop_state_list& exit_states);
     };
 }
 

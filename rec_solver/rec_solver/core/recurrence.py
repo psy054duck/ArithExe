@@ -4,7 +4,7 @@ from . import utils
 import z3
 from functools import reduce
 from collections import defaultdict
-from .logic_simplification import DNFConverter
+from .logic_simplification import DNFConverter, to_cnf
 
 class Recurrence:
     def __new__(cls, branches):
@@ -99,8 +99,10 @@ class Recurrence:
         if solver.check(acc_neg) == z3.sat:
             exclusive_conditions.append(acc_neg)
         # simplified = [utils.formula2dnf(cond) for cond in exclusive_conditions]
-        simplifier = DNFConverter()
-        simplified = [z3.Or([z3.And(c) for c in simplifier.to_dnf(cond)]) for cond in exclusive_conditions]
+        # simplifier = DNFConverter()
+        # simplified = [z3.Or([z3.And(c) for c in simplifier.to_dnf(cond)]) for cond in exclusive_conditions]
+        # simplified = [z3.simplify(c) for c in simplified]
+        simplified = [z3.And(list(to_cnf(cond))) for cond in exclusive_conditions]
         simplified = [z3.simplify(c) for c in simplified]
         return simplified
 

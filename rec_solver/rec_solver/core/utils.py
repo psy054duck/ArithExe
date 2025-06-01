@@ -6,7 +6,7 @@ from sympy.core.function import UndefinedFunction
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, convert_equals_signs
 import z3
 from itertools import product
-from .logic_simplification import DNFConverter, equals
+from .logic_simplification import DNFConverter, equals, to_dnf, literal2canonical
 
 z3.set_option(max_depth=99999999)
 # z3.set_option(timeout=5)
@@ -480,49 +480,27 @@ def flatten_seq(seq):
     return sum([l*c for l, c in seq], [])
 
 def solve_piecewise_sol(constraint, x, sort=z3.Real):
-    # dnf = to_dnf(constraint)
+    elim_ite = z3.Tactic('elim-term-ite')
+    constraint = elim_ite(constraint).as_expr()
+    all_vars = get_vars(constraint)
+    a = z3.Int('__a')
+    sub_map = {v: z3.Int(str(v).replace('!', '__')) for v in all_vars if '!' in str(v)}
+    constraint = z3.substitute(constraint, list(sub_map.items()))
     premises = []
     linear_exprs = []
     dnf_converter = DNFConverter()
-    # if is_convex(constraint):
-    #     atoms = get_all_atoms(constraint)
-    #     possible_eqs = {to_eq(atom) for atom in atoms}
-    #     solver = z3.Solver()
-    #     eqs = set()
-    #     solver.add(constraint)
-    #     for eq in possible_eqs:
-    #         if solver.check(z3.Not(eq)) == z3.unsat:
-    #             eqs.add(eq)
-    #     if len(eqs) >= len(x):
-    #         return ConditionalExpr([z3.BoolVal(True)], [solve_x(eqs, x)])
-    # dnf = formula2dnf(constraint)
     dnf = dnf_converter.to_dnf(constraint)
     
     for conjunct in dnf:
         formula = z3.And(*conjunct)
-        # formula = conjunct
-        # try:
-        linear_expr = _solve_linear_expr_heuristic(conjunct, x)
-        # except:
-        #     linear_expr = None
-        # if len(linear_expr) == 0:
-        #     # set up linear template for each variable in x
-        #     for v in x:
-        #         all_vars = [var.n for var in get_vars(formula)]
-        #         vars = [var for var in all_vars if str(var) != str(x)] + [1]
-        #         coeffs = [sort('_%s_c%d' % (i)) for i in range(len(vars))]
-        #         linear_template = sum([c*v for c, v in zip(coeffs, vars)])
-        #     res = solver.check(z3.ForAll(all_vars, z3.Implies(formula, x == linear_template)))
-        #     if res == z3.sat:
-        #         m = solver.model()
-        #         linear_expr = m.eval(linear_template)
+        linear_expr = _solve_linear_expr_heuristic(conjunct, set(x).union(set(sub_map.values())))
         if linear_expr is not None:
-            linear_exprs.append(linear_expr)
+            projected_expr = {v: linear_expr[v] for v in x}
+            linear_exprs.append(projected_expr)
             premises.append(z3.simplify(z3.substitute(formula, list(linear_expr.items()))))
         else:
             return None
     return ConditionalExpr(premises, linear_exprs)
-    # return _pack_piecewise_sol(premises[:-1], linear_exprs)
 
 def to_eq(atom):
     lhs, rhs = atom.children()
@@ -532,27 +510,71 @@ def to_eq(atom):
         return z3.simplify(lhs == rhs + 1)
     return z3.simplify(lhs == rhs)
 
+def _get_linear_part(expr, vars):
+    p = expr.as_poly(vars)
+    return sp.simplify(p - p.coeff_monomial(1)).as_expr()
+
 def _solve_linear_expr_heuristic(constraints, x):
     '''Assume constraints is a list of formulas, representing a conjunction.
        Compute x as a linear expression of other variables heuristically'''
     # all_vars = [var.n for var in get_vars(z3.And(*constraints)) ]
     if len(x) == 0: return {}
-    possible_eqs = _get_possible_eqs(constraints, x)
-    solver = z3.Solver()
+        # conjunct is a conjunction of literals
+    eq_detector = z3.Solver() # check if some eq is entailed
+    eq_detector.add(z3.And(*constraints))
+    linear_checker = z3.Solver() # check linear dependence
     eqs = []
-    for eq in possible_eqs:
-        res = solver.check(z3.And(z3.And(*constraints), z3.Not(to_z3(eq))))
-        if res == z3.unsat:
-            eqs.append(eq)
-        all_mentioned_symbols = reduce(set.union, [set(eq.free_symbols) for eq in eqs], set())
-        all_mentioned_symbols = {to_z3(v) for v in all_mentioned_symbols}
-        if len(eqs) == len(x) and len(set(x) - set(x).intersection(all_mentioned_symbols)) == 0:
+    for literal in constraints:
+        can_atoms = literal2canonical(z3.simplify(literal))
+        to_eq = lambda atom: atom.arg(0) == atom.arg(1)
+
+        for can_atom in can_atoms:
+            eq = to_eq(can_atom)
+            # check if eq involves some x
+            if len(get_vars(eq).intersection(x)) == 0:
+                continue
+            eq_sp = to_sympy(eq)
+            try:
+                pure_eq = _get_linear_part(eq_sp, [to_sympy(v) for v in x]) # only terms in x are kept
+            except:
+                continue
+            if linear_checker.check(z3.Not(to_z3(pure_eq) == 0)) == z3.unsat:
+                continue
+            if eq_detector.check(z3.Not(eq)) == z3.unsat:
+                eqs.append(eq_sp)
+                linear_checker.add(to_z3(pure_eq) == 0)
+        
+            if len(eqs) == len(x):
+                break
+        if len(eqs) == len(x):
             break
+
     res = sp.solve(eqs, [to_sympy(v) for v in x], dict=True)
     if len(res) == 0:
         return None
     res = res[0]
     return {to_z3(v): to_z3(res[v]) for v in res}
+
+    # possible_eqs = _get_possible_eqs(constraints, x)
+    # print(possible_eqs)
+    # solver = z3.Solver()
+    # eqs = []
+    # for eq in possible_eqs:
+    #     res = solver.check(z3.And(z3.And(*constraints), z3.Not(to_z3(eq))))
+    #     if res == z3.unsat:
+    #         eqs.append(eq)
+    #     all_mentioned_symbols = reduce(set.union, [set(eq.free_symbols) for eq in eqs], set())
+    #     all_mentioned_symbols = {to_z3(v) for v in all_mentioned_symbols}
+    #     if len(eqs) == len(x) and len(set(x) - set(x).intersection(all_mentioned_symbols)) == 0:
+    #         break
+    # print(x)
+    # print(eqs)
+    # print(res)
+    # res = sp.solve(eqs, [to_sympy(v) for v in x], dict=True)
+    # if len(res) == 0:
+    #     return None
+    # res = res[0]
+    # return {to_z3(v): to_z3(res[v]) for v in res}
 
 def _get_possible_eqs(constraints, x):
     possible_formulas = get_all_atoms(z3.And(constraints))

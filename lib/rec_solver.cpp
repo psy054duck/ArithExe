@@ -109,7 +109,7 @@ rec_solver::rec_solver(rec_ty& eqs, z3::expr var, z3::context& z3ctx): z3ctx(z3c
 }
 
 void
-rec_solver::set_eqs(std::vector<z3::expr>& _conds, std::vector<rec_ty>& _exprs) {
+rec_solver::set_eqs(const std::vector<z3::expr>& _conds, const std::vector<rec_ty>& _exprs) {
     conds = _conds;
     exprs = _exprs;
 }
@@ -500,19 +500,6 @@ void rec_solver::file2z3() {
 
 void rec_solver::_file2z3(const std::string& filename) {
     z3::expr_vector c = z3ctx.parse_file(filename.data());
-    // int idx_name = 0;
-    // z3::expr_vector src(z3ctx);
-    // z3::expr_vector dst(z3ctx);
-    // for (auto r : rec_eqs) {
-    //     std::string name = "a" + std::to_string(idx_name);
-    //     idx_name++;
-    //     z3::expr src_f = z3ctx.int_const(name.data());
-    //     z3::func_decl f = r.first.decl();
-    //     src.push_back(src_f);
-    //     dst.push_back(f(ind_var));
-    // }
-    // src.push_back(z3ctx.int_const("n"));
-    // dst.push_back(z3ctx.int_const("n0"));
     for (auto e : c) {
         auto kind = e.decl().decl_kind();
         auto args = e.args();
@@ -523,8 +510,6 @@ void rec_solver::_file2z3(const std::string& filename) {
             k = args[1];
             v = args[0];
         }
-        // std::cout << v.to_string() << "\n";
-        // res.insert_or_assign(k.substitute(src, dst), v.substitute(initial_back.first, initial_back.second).substitute(src, dst).simplify());
         res.insert_or_assign(k, v.simplify());
     }
 }

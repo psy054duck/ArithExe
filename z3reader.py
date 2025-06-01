@@ -22,36 +22,36 @@ def add_lemma(solver):
 def main(filename, timeout):
     f = z3.parse_smt2_file(filename)
     # solver = z3.Then('ctx-solver-simplify', 'smt').solver()
-    basic_solver = z3.Solver()
-    lemma_solver = z3.Solver()
-    basic_solver.set(timeout=int(timeout)//2)
-    lemma_solver.set(timeout=int(timeout)//2)
-    basic_solver.add(f)
-    lemma_solver.add(f)
-    add_lemma(lemma_solver)
-    # print(solver)
-    # solver.add(z3.Int('N_0_0') == z3.Int('i'))
-    if DEBUG:
-        for e in basic_solver.assertions():
-            print(z3.simplify(e))
-    # print(solver.check())
-    # print(solver.model())
-    res = basic_solver.check()
+    # basic_solver = z3.Solver()
+    # lemma_solver = z3.Solver()
+    # basic_solver.set(timeout=int(timeout)//2)
+    # lemma_solver.set(timeout=int(timeout)//2)
+    # basic_solver.add(f)
+    # lemma_solver.add(f)
+    # add_lemma(lemma_solver)
+    # # print(solver)
+    # # solver.add(z3.Int('N_0_0') == z3.Int('i'))
+    # if DEBUG:
+    #     for e in basic_solver.assertions():
+    #         print(z3.simplify(e))
+    # # print(solver.check())
+    # # print(solver.model())
+    # res = basic_solver.check()
 
-    if DEBUG:
-        print(res)
-    if res == z3.unknown:
-        res = lemma_solver.check()
-    if DEBUG:
-        print(res)
+    # if DEBUG:
+    #     print(res)
+    # if res == z3.unknown:
+    #     res = lemma_solver.check()
+    # if DEBUG:
+    #     print(res)
 
-    if res == z3.sat:
-        print(basic_solver.model())
-        exit(0)
-    elif res == z3.unsat:
-        exit(1)
-    else:
-        exit(2)
+    # if res == z3.sat:
+    #     print(basic_solver.model())
+    #     exit(0)
+    # elif res == z3.unsat:
+    #     exit(1)
+    # else:
+    #     exit(2)
 
 
 if __name__ == '__main__':

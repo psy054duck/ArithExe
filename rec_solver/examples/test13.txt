@@ -1,9 +1,9 @@
-if (Or(z <= 0, c <= 0)) {
+if (Or(z <= 0)) {
     a(c, z) = g(c);
-} else if (And(c % 2 == 0, c == z - 1)) {
-    a(c, z) = a(c, z - 1) + 1;
-} else if (And(c % 2 == 1, c == z - 1)) {
-    a(c, z) = a(c, z - 1) + 2;
-} else {
+} else if (And((z - 1) % 2 == 0, c == z - 1)) {
+    a(c, z) = 1;
+} else if (And((z - 1) % 2 == 1, c == z - 1)) {
+    a(c, z) = 2;
+} else if (c != z - 1) {
     a(c, z) = a(c, z - 1);
 }

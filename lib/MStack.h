@@ -37,6 +37,9 @@ namespace ari_exe {
 
                 std::optional<MemoryObjectPtr> get_memory_object(llvm::Value* v) const;
 
+                // get all arrays in the stack frame
+                std::vector<MemoryObjectArrayPtr> get_arrays() const;
+
                 // record values for stack variables
                 // SymbolTable<z3::expr> table;
                 // Memory memory;
@@ -71,6 +74,9 @@ namespace ari_exe {
 
             // get the memory object of a variable in the top frame
             std::optional<MemoryObjectPtr> get_memory_object(llvm::Value* v) const;
+
+            // get all arrays in the top frame
+            std::vector<MemoryObjectArrayPtr> get_arrays() const;
 
             // add or update a value in the top frame
             void write(llvm::Value* v, z3::expr value);

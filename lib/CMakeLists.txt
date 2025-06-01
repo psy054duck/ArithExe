@@ -11,6 +11,7 @@ add_library(AnalysisManager AnalysisManager.cpp)
 add_library(logics logics.cpp)
 add_library(Memory Memory.cpp)
 add_library(MemoryObject MemoryObject.cpp)
+add_library(common common.cpp)
 
 target_link_libraries(engine PRIVATE spdlog::spdlog)
 target_link_libraries(state PRIVATE spdlog::spdlog)
