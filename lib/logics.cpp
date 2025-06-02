@@ -11,6 +11,28 @@
 
 namespace ari_exe {
 
+    z3::expr
+    simplify(const z3::expr& expr, std::optional<z3::expr> assumption) {
+        auto logic = Logic();
+        auto new_expr = expr.simplify();
+        auto clauses= logic.to_cnf(new_expr);
+        auto solver = z3::solver(expr.ctx());
+        if (assumption.has_value()) {
+            solver.add(assumption.value());
+        }
+        z3::expr_vector remains(expr.ctx());
+        for (const auto& clause : clauses) {
+            solver.push();
+            solver.add(clause);
+            if (solver.check() == z3::sat) {
+                // this clause is not entailed, so keep it
+                remains.push_back(clause);
+            }
+            solver.pop();
+        }
+        return z3::mk_and(remains);
+    }
+
     /**
      * @brief check if e1 and e2 are equivalent under the condition cond
      */
@@ -73,7 +95,8 @@ namespace ari_exe {
         auto feasible_conditions = z3::expr_vector(f.ctx());
         auto feasible_expressions = z3::expr_vector(f.ctx());
         for (int i = 0; i < conditions.size(); ++i) {
-            auto restricted_conditions = conditions[i] && domain;
+            // auto restricted_conditions = conditions[i] && domain;
+            auto restricted_conditions = simplify(conditions[i], domain);
             solver.push();
             solver.add(restricted_conditions);
             if (solver.check() == z3::sat) {

@@ -78,12 +78,29 @@ loop_state_list
 LoopExecution::step(loop_state_ptr state) {
     auto pc = state->pc;
     loop_state_list new_states;
+    auto modified_values = state->modified_values;
     for (auto next_state : pc->execute(state)) {
         auto next_loop_state = std::make_shared<LoopState>(LoopState(*next_state));
         new_states.push_back(next_loop_state);
+        next_loop_state->modified_values = modified_values;
+        auto modified_value = get_modified_value(state, pc->inst);
+        if (modified_value) {
+            next_loop_state->modified_values.insert(modified_value);
+        }
     }
 
     return new_states;
+}
+
+llvm::Value*
+LoopExecution::get_modified_value(state_ptr state, llvm::Instruction* inst) {
+    // if the value is a store instruction, get the value operand
+    if (auto store_inst = dyn_cast_or_null<llvm::StoreInst>(inst)) {
+        auto ptr = store_inst->getPointerOperand();
+        auto [base_obj, offset] = state->memory.parse_pointer(ptr);
+        return base_obj;
+    }
+    return nullptr;
 }
 
 std::pair<loop_state_list, loop_state_list>
@@ -398,7 +415,9 @@ LoopSummarizer::summarize_array(const loop_state_list& final_states, const loop_
             domain = domain && 0 <= array_ptr->indices[i] && array_ptr->indices[i] < dims[i];
         }
         for (auto& [func, expr] : closed) {
-            summary->add_closed_form(array_ptr->get_signature(), restrict_to_domain(expr.substitute(n_src, N_dst), domain).simplify());
+            auto closed_form = restrict_to_domain(expr.substitute(n_src, N_dst), domain).simplify();
+            llvm::errs() << closed_form.to_string() << "\n";
+            summary->add_closed_form(array_ptr->get_signature(), closed_form);
         }
     }
     spdlog::info("Array summaries are computed successfully");
@@ -670,6 +689,11 @@ LoopSummarizer::get_update(loop_state_ptr state) {
         updates.push_back(phi_value);
     }
     return updates;
+}
+
+bool
+LoopSummarizer::is_invariant(const loop_state_ptr final_state, llvm::Value* value) const {
+    return final_state->modified_values.find(value) == final_state->modified_values.end();
 }
 
 bool

@@ -3,6 +3,7 @@
 
 #include <map>
 #include <vector>
+#include <set>
 
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Constants.h"
@@ -149,6 +150,11 @@ namespace ari_exe {
             // path condition in loop body, loop guard is discarded
             // should only be used when summarize a loop
             z3::expr path_condition_in_loop;
+
+            /**
+             * @brief store modified values by the loop
+             */
+            std::set<llvm::Value*> modified_values;
     };
 }
 

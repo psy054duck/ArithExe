@@ -56,6 +56,13 @@ namespace ari_exe {
     z3::expr piecewise2ite(const z3::expr_vector& conditions, const z3::expr_vector& expressions);
 
     /**
+     * @brief simplify the given expression under assumptions
+     * @param expr the expression to be simplified
+     * @param assumptions the assumptions to be used for simplification
+     */
+    z3::expr simplify(const z3::expr& expr, std::optional<z3::expr> assumption = std::nullopt);
+
+    /**
      * @brief merge cases for piecewise expressions
      * @param conditions the conditions of the piecewise expression
      * @param expressions the expressions of the piecewise expression

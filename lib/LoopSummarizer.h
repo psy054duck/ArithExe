@@ -75,6 +75,12 @@ namespace ari_exe {
              */
             TestResult test(loop_state_ptr state);
 
+            /**
+             * @brief get the value modified by the instruction
+             */
+            llvm::Value* get_modified_value(state_ptr state, llvm::Instruction* inst);
+
+
         private:
             /**
              * @brief Check if the current state is a final state, which is a state
@@ -258,6 +264,11 @@ namespace ari_exe {
              * @brief log info
              */
             void log_states(const loop_state_list& final_states, const loop_state_list& exit_states);
+
+            /**
+             * @brief check if some object is invariant in the loop
+             */
+            bool is_invariant(const loop_state_ptr final_state, llvm::Value* v) const;
     };
 }
 
