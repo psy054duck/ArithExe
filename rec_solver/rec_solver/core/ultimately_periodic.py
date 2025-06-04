@@ -121,7 +121,7 @@ def verify(rec: Recurrence, candidate_sol: PiecewiseClosedForm, pattern: list):
     n = z3.Int('__n')
     k = z3.Int('__k')
     n_range = n >= start
-    # candidate_sol.pprint()
+    candidate_sol.pprint()
     smallest = None
     for r, i in enumerate(periodic_index_seq):
         cond = conditions[i]
@@ -236,6 +236,7 @@ def _set_up_constraints(rec: LoopRecurrence, closed_form: PiecewiseClosedForm, i
     # closed_form.pprint()
     acc = z3.IntVal(0)
     k_cnt = 0
+
     for i, (seq, q) in enumerate(index_seq):
         piece_premise = closed_form.conditions[i]
         closed_form_component = closed_form.closed_forms[i]
@@ -255,5 +256,6 @@ def _set_up_constraints(rec: LoopRecurrence, closed_form: PiecewiseClosedForm, i
             cur_constraint = z3.Implies(premise, condition)
             cur_constraint = z3.substitute(cur_constraint, (ind_var, k))
             constraint = z3.And(constraint, cur_constraint)
-        acc += acc + q
+        # acc += acc + q
+        acc += q
     return constraint, ks

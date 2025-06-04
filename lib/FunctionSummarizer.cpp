@@ -32,7 +32,7 @@ RecExecution::test(state_ptr state) {
     return result;
 }
 
-state_ptr
+rec_state_ptr
 RecExecution::build_initial_state() {
     // set up the stack
     Memory memory;
@@ -43,28 +43,38 @@ RecExecution::build_initial_state() {
         memory.write(&arg, arg_value);
     }
     auto pc = F->getEntryBlock().getFirstNonPHIOrDbg();
-    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr, memory, z3ctx.bool_val(true), {}));
+    auto initial_state = std::make_shared<RecState>(State(z3ctx, AInstruction::create(pc), nullptr, memory, z3ctx.bool_val(true), {}));
     return initial_state;
 }
 
-std::vector<state_ptr>
+rec_state_list
 RecExecution::step(state_ptr state) {
     auto pc = state->pc;
+    state_list next_states;
     if (auto call_inst = dynamic_cast<AInstructionCall*>(pc)) {
-        auto call_states = call_inst->execute_if_not_target(state, F);
-        return call_states;
+        next_states = call_inst->execute_if_not_target(state, F);
+    } else {
+        next_states = pc->execute(state);
     }
-    return pc->execute(state);
+
+    rec_state_list next_rec_states;
+    for (auto next_state : next_states) {
+        auto next_rec_state = std::make_shared<RecState>(RecState(*next_state));
+        next_rec_states.push_back(next_rec_state);
+    }
+    return next_rec_states;
 }
 
-std::vector<state_ptr>
+rec_state_list
 RecExecution::run() {
-    std::vector<state_ptr> final_states;
+    rec_state_list final_states;
     spdlog::info("Collecting all paths");
     while (!states.empty()) {
         auto cur_state = states.front();
         states.pop();
         spdlog::debug("Current Instruction: {}", cur_state->pc->inst->getName().str());
+        llvm::errs() << *cur_state->pc->inst << "\n";
+        llvm::errs() << states.size() << " states left to process\n";
         if (cur_state->status == State::TERMINATED) {
             final_states.push_back(cur_state);
             continue;
@@ -77,7 +87,7 @@ RecExecution::run() {
             continue;
         }
         auto new_states = step(cur_state);
-        for (auto& new_state : new_states) states.push(new_state);
+        for (auto new_state : new_states) states.push(new_state);
     }
     return final_states;
 }

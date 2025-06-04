@@ -75,6 +75,8 @@ LoopState::LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc
     State(z3ctx, pc, prev_pc, memory, path_condition, trace, status),
     path_condition_in_loop(path_condition_in_loop) {}
 
+RecState::RecState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status):
+    State(z3ctx, pc, prev_pc, memory, path_condition, trace, status) {}
 
 void
 LoopState::append_path_condition(z3::expr _path_condition) {

@@ -41,6 +41,7 @@
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Analysis/CallGraph.h"
 
 namespace ari_exe {
     
@@ -95,6 +96,7 @@ namespace ari_exe {
             llvm::LoopInfo& get_LI(llvm::Function* F) { return LIs.at(F); }
             llvm::DominatorTree& get_DT(llvm::Function* F) { return DTs.at(F); }
             llvm::PostDominatorTree& get_PDT(llvm::Function* F) { return PDTs.at(F); }
+            llvm::CallGraph* get_CG() { return CG; }
 
             z3::expr get_ind_var() { return ind_var; }
             z3::expr get_loop_N() { return loop_N; }
@@ -121,6 +123,8 @@ namespace ari_exe {
             std::map<llvm::Function*, llvm::LoopInfo&> LIs;
             std::map<llvm::Function*, llvm::DominatorTree> DTs;
             std::map<llvm::Function*, llvm::PostDominatorTree> PDTs;
+
+            llvm::CallGraph* CG = nullptr;
 
             z3::context z3ctx;
 

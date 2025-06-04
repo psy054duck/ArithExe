@@ -300,7 +300,7 @@ namespace ari_exe {
 
             template<>
             inline z3::expr Matrix<z3::expr>::data_div(const z3::expr& a, const z3::expr& b) {
-                assert(b != z3ctx.int_val(0) && "Division by zero");
+                assert((b != a.ctx().int_val(0)).simplify().is_true() && "Division by zero");
                 z3::solver solver(a.ctx());
                 auto to_check = (a / b * b) != a;
                 solver.add(to_check);
@@ -360,7 +360,7 @@ namespace ari_exe {
                     if ((pivot == 0).simplify().is_true()) {
                         continue;
                     }
-                    assert(pivot != 0 && "Matrix is singular and cannot be solved");
+                    // assert(pivot != 0 && "Matrix is singular and cannot be solved");
                     for (int j = 0; j < A.cols + b.cols; j++) {
                         augmented(i, j) = data_div(augmented(i, j), pivot);
                     }

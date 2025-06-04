@@ -12,7 +12,7 @@ Engine::Engine(): mod(nullptr), solver(z3ctx) {}
 
 Engine::Engine(const std::string& c_filename): mod(nullptr), solver(z3ctx) {
     auto manager = AnalysisManager::get_instance();
-    assert(manager->get_z3ctx() == z3ctx && "The z3 context is not the same as the analysis manager");
+    assert(&manager->get_z3ctx() == &z3ctx && "The z3 context is not the same as the analysis manager");
     mod = manager->get_module(c_filename, z3ctx);
 }
 

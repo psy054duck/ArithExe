@@ -42,15 +42,15 @@ namespace ari_exe {
             ~RecExecution();
     
             // execute one instruction
-            std::vector<state_ptr> step(state_ptr state);
+            rec_state_list step(state_ptr state);
     
             // execute the function
             // return a list of final states
-            std::vector<state_ptr> run();
+            rec_state_list run();
     
             // build the initial state
             // assuming the function do not access global variables
-            state_ptr build_initial_state();
+            rec_state_ptr build_initial_state();
 
             /**
              * @brief Test the feasibility of the current state
@@ -64,7 +64,7 @@ namespace ari_exe {
 
             z3::solver solver;
     
-            std::queue<state_ptr> states;
+            std::queue<rec_state_ptr> states;
     };
 
     class FunctionSummarizer {

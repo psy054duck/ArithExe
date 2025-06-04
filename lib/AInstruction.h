@@ -38,6 +38,7 @@ namespace ari_exe {
             // Execute the instruction on the given state and return the new state(s)
             virtual state_list execute(state_ptr state) = 0;
             virtual loop_state_list execute(loop_state_ptr state);
+            virtual rec_state_list execute(rec_state_ptr state);
 
             // Get the next instruction in the same basic block,
             // or nullptr if there is no next instruction in the block.
@@ -99,6 +100,7 @@ namespace ari_exe {
             AInstructionBranch(llvm::Instruction* inst): AInstruction(inst) {};
             state_list execute(state_ptr state) override;
             loop_state_list execute(loop_state_ptr state) override;
+            rec_state_list execute(rec_state_ptr state) override;
 
             template<typename state_ty>
             state_list_base<state_ty> _execute(std::shared_ptr<state_ty> state);

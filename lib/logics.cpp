@@ -23,7 +23,7 @@ namespace ari_exe {
         z3::expr_vector remains(expr.ctx());
         for (const auto& clause : clauses) {
             solver.push();
-            solver.add(clause);
+            solver.add(!clause);
             if (solver.check() == z3::sat) {
                 // this clause is not entailed, so keep it
                 remains.push_back(clause);
@@ -31,6 +31,15 @@ namespace ari_exe {
             solver.pop();
         }
         return z3::mk_and(remains);
+    }
+
+    bool
+    implies(const z3::expr& a, const z3::expr& b) {
+        auto& z3ctx = a.ctx();
+        z3::solver s(z3ctx);
+        s.add(a);
+        s.add(!b);
+        return s.check() == z3::unsat;
     }
 
     /**
@@ -92,10 +101,11 @@ namespace ari_exe {
     restrict_to_domain(const z3::expr& f, z3::expr domain) {
         auto [conditions, expressions] = expr2piecewise(f);
         auto solver = z3::solver(f.ctx());
+        solver.add(domain);
         auto feasible_conditions = z3::expr_vector(f.ctx());
         auto feasible_expressions = z3::expr_vector(f.ctx());
         for (int i = 0; i < conditions.size(); ++i) {
-            // auto restricted_conditions = conditions[i] && domain;
+            // auto restricted_conditions = simplify(conditions[i] && domain);
             auto restricted_conditions = simplify(conditions[i], domain);
             solver.push();
             solver.add(restricted_conditions);
@@ -157,7 +167,41 @@ namespace ari_exe {
         z3::expr_vector conditions(expr.ctx());
         z3::expr_vector expressions(expr.ctx());
         aux_expr2piecewise(expr, expr.ctx().bool_val(true), conditions, expressions);
-        return merge_cases(conditions, expressions);
+        z3::expr_vector eliminated_conditions(expr.ctx());
+        for (const auto& cond : conditions) {
+            eliminated_conditions.push_back(eliminate_ite(cond));
+        }
+        return merge_cases(eliminated_conditions, expressions);
+    }
+
+    z3::expr
+    eliminate_ite(const z3::expr& expr) {
+        auto goal = z3::goal(expr.ctx());
+        goal.add(expr);
+        z3::expr_vector to_or(expr.ctx());
+        auto elim_ite = z3::tactic(expr.ctx(), "elim-term-ite");
+        auto elim_res = elim_ite(goal);
+        for (int i = 0; i < elim_res.size(); ++i) {
+            to_or.push_back(elim_res[i].as_expr());
+        }
+        auto eliminated_expr = z3::mk_or(to_or);
+        auto elim_temp = z3::tactic(expr.ctx(), "qe");
+        auto logic = Logic();
+        auto aux_vars = logic.collect_aux_vars(eliminated_expr);
+        if (!aux_vars.empty()) {
+            // If there are auxiliary variables, we need to eliminate them
+            auto exits_expr = z3::exists(aux_vars, eliminated_expr);
+            auto qe_goal = z3::goal(expr.ctx());
+            qe_goal.add(exits_expr);
+            auto qe_res = elim_temp(qe_goal);
+            z3::expr_vector qe_conditions(expr.ctx());
+            for (int j = 0; j < qe_res.size(); ++j) {
+                qe_conditions.push_back(qe_res[j].as_expr());
+            }
+            eliminated_expr = z3::mk_or(qe_conditions).simplify();
+            assert(is_equivalent(eliminated_expr, expr));
+        }
+        return eliminated_expr.simplify();
     }
 
     z3::expr
@@ -172,6 +216,7 @@ namespace ari_exe {
         }
         return ite_expr;
     }
+
 
     z3::expr
     apply_result2expr(z3::apply_result result) {
@@ -199,6 +244,18 @@ namespace ari_exe {
         for (unsigned i = 0; i < e.num_args(); ++i) {
             collect_vars_rec(e.arg(i), vars);
         }
+    }
+
+    z3::expr_vector
+    Logic::collect_aux_vars(const z3::expr& e) {
+        auto vars = collect_vars(e);
+        z3::expr_vector aux_vars(e.ctx());
+        for (const auto& var : vars) {
+            if (var.to_string().find("!") != std::string::npos) {
+                aux_vars.push_back(var);
+            }
+        }
+        return aux_vars;
     }
 
     std::pair<z3::expr, z3::expr_vector>
@@ -316,8 +373,8 @@ namespace ari_exe {
         Z3_decl_kind k = t.decl().decl_kind();
         if (k == Z3_OP_AND || k == Z3_OP_OR || k == Z3_OP_IMPLIES) return false;
         // if (k == Z3_OP_EQ && t.arg(0).is_bool()) return false;
-        if (t.arg(0).is_bool()) return false;
         if (k == Z3_OP_TRUE || k == Z3_OP_FALSE || k == Z3_OP_XOR || k == Z3_OP_NOT) return false;
+        if (t.arg(0).is_bool()) return false;
         return true;
     }
 
@@ -354,6 +411,35 @@ namespace ari_exe {
         return !a;
     }
 
+    static z3::expr_vector
+    get_expr_vec_except(const z3::expr_vector& vec, int pivot) {
+        z3::expr_vector res(vec.ctx());
+        for (int i = 0; i < vec.size(); ++i) {
+            if (i != pivot) {
+                res.push_back(vec[i]);
+            }
+        }
+        return res;
+    }
+
+    z3::expr_vector
+    minimize_conjunction(const z3::expr_vector& conjunction, int pivot) {
+        if (pivot >= conjunction.size()) {
+            return conjunction; // nothing to minimize
+        }
+        auto solver = z3::solver(conjunction.ctx());
+        z3::expr pivot_expr = conjunction[pivot];
+        auto remaining_exprs = get_expr_vec_except(conjunction, pivot);
+        solver.add(remaining_exprs);
+        solver.add(!pivot_expr);
+        if (solver.check() == z3::unsat) {
+            // the pivot is entailed, so we can remove it
+            return minimize_conjunction(remaining_exprs, pivot);
+        } else {
+            return minimize_conjunction(conjunction, ++pivot);
+        }
+    }
+
     z3::expr
     Logic::implicant(const z3::expr_vector& atoms, z3::solver& s, z3::solver& snot) {
         z3::model m = snot.get_model();
@@ -365,8 +451,10 @@ namespace ari_exe {
         assert(is_sat == z3::unsat);
 
         z3::expr_vector core = s.unsat_core();
+        z3::expr_vector minimized_core = minimize_conjunction(core);
+        // assert(is_equivalent(z3::mk_and(minimized_core), z3::mk_and(core)));
         z3::expr_vector not_core(s.ctx());
-        for (const auto& a : core) {
+        for (const auto& a : minimized_core) {
             not_core.push_back(!a);
         }
         return z3::mk_or(not_core);
@@ -465,12 +553,25 @@ namespace ari_exe {
         bool found = false;
         z3::expr_vector eqs(ctx);
         for (auto literal : literals) {
+            auto lit_vars = collect_vars(literal);
+            bool is_itersect = false; // check if the literal contains any of the vars
+            for (auto var : vars) {
+                if (lit_vars.contains(var)) {
+                    is_itersect = true;
+                    break;
+                }
+            }
+            if (!is_itersect) continue;
+
             auto normalized = normalize(literal);
             auto target = normalized.arg(0);
             s.push();
             s.add(target != 0);
-            if (s.check() == z3::unsat) {
+            if (s.check() == z3::unsat && !ari_exe::implies(z3::mk_and(eqs), target == 0)) {
                 eqs.push_back(target == 0);
+            }
+            if (eqs.size() >= vars.size()) {
+                break;
             }
             s.pop();
         }
@@ -520,7 +621,6 @@ namespace ari_exe {
         src.push_back(var);
         dst.push_back(var - 1);
         auto coeff = (expr - expr.substitute(src, dst)).simplify();
-        assert((coeff == 1).simplify().is_true() && "support only 1 coeff now");
         return coeff;
     }
 

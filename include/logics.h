@@ -42,6 +42,11 @@ namespace ari_exe {
      * @brief check if two formulas are equivalent
      */
     bool is_equivalent(const z3::expr& f1, const z3::expr& f2);
+
+    /**
+     * @brief check if a => b
+     */
+    bool implies(const z3::expr& a, const z3::expr& b);
     
     /**
      * @brief convert a z3 expressions into piecewise form
@@ -49,6 +54,11 @@ namespace ari_exe {
      * @return a pair of (conditions, expressions), where expressions are ite-free
      */
     std::pair<z3::expr_vector, z3::expr_vector> expr2piecewise(const z3::expr& expr);
+
+    /**
+     * @brief unfold boolean expressions involving ite into pieces without ite
+     */
+    z3::expr_vector unfold_ite_in_boolean(const z3::expr& cond);
 
     /**
      * @brief convert (conditions, expressions) into a ite
@@ -63,12 +73,25 @@ namespace ari_exe {
     z3::expr simplify(const z3::expr& expr, std::optional<z3::expr> assumption = std::nullopt);
 
     /**
+     * @brief minimize conjunction
+     * @param conjuncts vector of literal conjuncts
+     * @return a minimized conjunction of the literals
+     */
+    z3::expr_vector minimize_conjunction(const z3::expr_vector& conjuncts, int pivot = 0);
+
+
+    /**
      * @brief merge cases for piecewise expressions
      * @param conditions the conditions of the piecewise expression
      * @param expressions the expressions of the piecewise expression
      * @return a new pair of (conditions, expressions) where the some cases are merged
      */
     std::pair<z3::expr_vector, z3::expr_vector> merge_cases(const z3::expr_vector& conditions, const z3::expr_vector& expressions);
+
+    /**
+     * @brief eliminate ite terms in the expression
+     */
+    z3::expr eliminate_ite(const z3::expr& expr);
 
     class Logic {
         public:
@@ -131,6 +154,11 @@ namespace ari_exe {
              * @brief get all variables in the formula
              */
             std::set<z3::expr, expr_compare> collect_vars(const z3::expr& e);
+
+            /**
+             * @brief get all auxiliary variables introduced by z3
+             */
+            z3::expr_vector collect_aux_vars(const z3::expr& e);
 
         private:
             void atoms_rec(const z3::expr& t, std::set<std::string>& visited, z3::expr_vector& atms);

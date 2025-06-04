@@ -75,6 +75,11 @@ namespace ari_exe {
              */
             void add_closed_form(const z3::expr& param, const z3::expr& closed_form);
 
+            /**
+             * @brief check if the loop summary is over-approximated
+             */
+            bool is_over_approximated() const { return is_over_approx; }
+
 
         private:
             /**

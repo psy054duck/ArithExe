@@ -404,23 +404,24 @@ LoopSummarizer::summarize_array(const loop_state_list& final_states, const loop_
         // solve recurrence
         assert(conditions.size() == eqs.size());
         auto closed = solve_recurrence(conditions, eqs);
+        spdlog::info("Array summaries are computed successfully");
 
         z3::expr_vector n_src(z3ctx);
         n_src.push_back(manager->get_ind_var());
         z3::expr_vector N_dst(z3ctx);
-        N_dst.push_back(scalar_summary.get_N().value_or(manager->get_loop_N()));
+        auto N = scalar_summary.get_N().value_or(manager->get_loop_N());
+        N_dst.push_back(N);
         auto dims = array_ptr->get_dims();
         z3::expr domain(z3ctx.bool_val(true));
         for (int i = 0 ; i < dims.size(); i++) {
-            domain = domain && 0 <= array_ptr->indices[i] && array_ptr->indices[i] < dims[i];
+            domain = domain && 0 <= array_ptr->indices[i] && array_ptr->indices[i] < dims[i] && 0 <= N;
         }
         for (auto& [func, expr] : closed) {
+            spdlog::info("Restricting array summaries to the domain");
             auto closed_form = restrict_to_domain(expr.substitute(n_src, N_dst), domain).simplify();
-            llvm::errs() << closed_form.to_string() << "\n";
             summary->add_closed_form(array_ptr->get_signature(), closed_form);
         }
     }
-    spdlog::info("Array summaries are computed successfully");
 }
 
 closed_form_ty
@@ -527,29 +528,83 @@ LoopSummarizer::get_predecessor() {
     return nullptr;
 }
 
+/**
+ * @brief get the cartesian product
+ * @param vec: a vector [i_1, ..., i_n] of integers, the cartesian product is [0, i_1 - 1] x ... x [0, i_n - 1]
+ */
+static std::vector<std::vector<int>>
+cartesian_product(const std::vector<int>& vec, int start = 0) {
+    assert(vec.size() > 0);
+    auto res = std::vector<std::vector<int>>();
+    if (start == vec.size() - 1) {
+        for (int i = 0; i < vec[start]; i++) {
+            res.push_back({i});
+        }
+        return res;
+    }
+    auto sub_res = cartesian_product(vec, start + 1);
+    for (int i = 0; i < vec[start]; i++) {
+        for (auto& sub : sub_res) {
+            std::vector<int> tmp = {i};
+            tmp.insert(tmp.end(), sub.begin(), sub.end());
+            res.push_back(tmp);
+        }
+    }
+    return res;
+}
+
+/**
+ * @brief get expressions by indices
+ */
+static z3::expr_vector
+get_elements_by_indices(const std::vector<z3::expr_vector>& exprs, const std::vector<int>& indices) {
+    assert(exprs.size() == indices.size());
+    z3::expr_vector res(exprs[0].ctx());
+
+    for (int i = 0; i < indices.size(); i++) {
+        res.push_back(exprs[i][indices[i]]);
+    }
+    return res;
+}
+
+
 std::pair<std::vector<z3::expr>, std::vector<rec_ty>>
 LoopSummarizer::get_conditions_and_updates(const loop_state_list& final_states) {
     auto manager = AnalysisManager::get_instance();
     std::vector<z3::expr> path_conds;
     std::vector<rec_ty> rec_eqs;
-    // z3::expr func = function_app_z3(F);
     auto header = loop->getHeader();
     auto phis = get_header_phis();
     auto header_phis_scalar_and_func = get_header_phis_scalar_and_func();
     auto src = header_phis_scalar_and_func.first;
     auto dst = header_phis_scalar_and_func.second;
     for (auto state : final_states) {
-        path_conds.push_back(state->path_condition_in_loop.substitute(src, dst));
+        auto path_cond = state->path_condition_in_loop.substitute(src, dst);
         auto updates = get_update(state);
-        rec_ty eq;
-        for (int i = 0; i < updates.size(); i++) {
-            auto phi = phis[i];
-            auto name = get_z3_name(phi->getName().str());
-            auto phi_func = rec_s.z3ctx.function(name.c_str(), rec_s.z3ctx.int_sort(), rec_s.z3ctx.int_sort());
-            auto phi_value = updates[i];
-            eq.insert_or_assign(phi_func(manager->get_ind_var() + 1), phi_value.substitute(src, dst));
+
+        // collect all conditions and expressions by unfolding ite
+        std::vector<z3::expr_vector> ite_conditions;
+        std::vector<z3::expr_vector> ite_expressions;
+        std::vector<int> sizes; // record the size of each update
+        for (auto update : updates) {
+            auto [tmp_conditions, tmp_expressions] = expr2piecewise(update);
+            ite_conditions.push_back(tmp_conditions);
+            ite_expressions.push_back(tmp_expressions);
+            sizes.push_back(tmp_conditions.size());
         }
-        rec_eqs.push_back(eq);
+        for (const auto& indices : cartesian_product(sizes)) {
+            z3::expr_vector tmp_conditions = get_elements_by_indices(ite_conditions, indices);
+            z3::expr_vector tmp_expressions = get_elements_by_indices(ite_expressions, indices);
+            path_conds.push_back(path_cond && z3::mk_and(tmp_conditions).substitute(src, dst));
+            rec_ty eq;
+            for (int i = 0; i < tmp_expressions.size(); i++) {
+                auto phi = phis[i];
+                auto name = get_z3_name(phi->getName().str());
+                auto phi_func = rec_s.z3ctx.function(name.c_str(), rec_s.z3ctx.int_sort(), rec_s.z3ctx.int_sort());
+                eq.insert_or_assign(phi_func(manager->get_ind_var() + 1), tmp_expressions[i].substitute(src, dst));
+            }
+            rec_eqs.push_back(eq);
+        }
     }
     return {path_conds, rec_eqs};
 }
@@ -582,6 +637,7 @@ LoopSummarizer::get_iterations_constraints(const loop_state_list& exit_states, c
     constraints = constraints && !loop_guard_closed_form.substitute(src, dst);
     constraints = constraints && N >= 0;
     spdlog::info("constraints for N: {}", constraints.to_string());
+    constraints = constraints && parent_state->get_path_condition();
     constraints = constraints.substitute(params, values);
 
     z3::tactic qe_tactic = z3::tactic(z3ctx, "qe");
@@ -604,7 +660,7 @@ LoopSummarizer::get_loop_guard_condition(const loop_state_list& exit_states) {
         auto path_cond = state->get_path_condition();
         acc_exit_cond = acc_exit_cond || path_cond;
     }
-    return !acc_exit_cond;
+    return (!acc_exit_cond).simplify();
 }
 
 std::vector<llvm::PHINode*>

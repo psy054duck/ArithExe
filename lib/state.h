@@ -17,6 +17,7 @@ namespace ari_exe {
     class AStack;
     class State;
     class LoopState;
+    class RecState;
 
     using trace_ty = std::vector<llvm::BasicBlock*>;
 
@@ -25,12 +26,14 @@ namespace ari_exe {
 
     using state_ptr = state_ptr_base<State>;
     using loop_state_ptr = state_ptr_base<LoopState>;
+    using rec_state_ptr = state_ptr_base<RecState>;
 
     template<typename state_ty> 
     using state_list_base = std::vector<state_ptr_base<state_ty>>;
 
     using state_list = state_list_base<State>;
     using loop_state_list = state_list_base<LoopState>;
+    using rec_state_list = state_list_base<RecState>;
 }
 
 #include "AInstruction.h"
@@ -155,6 +158,16 @@ namespace ari_exe {
              * @brief store modified values by the loop
              */
             std::set<llvm::Value*> modified_values;
+    };
+
+    class RecState: public State {
+        public:
+            RecState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
+            RecState(const State& state): State(state) {};
+            RecState(const RecState& state): State(state) {};
+
+            // if the state is in the process of summarizing a loop
+            bool is_summarizing() const override { return true; }
     };
 }
 

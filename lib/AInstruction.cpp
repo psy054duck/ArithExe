@@ -60,6 +60,17 @@ AInstruction::execute(loop_state_ptr state) {
     return new_base_states;
 }
 
+rec_state_list
+AInstruction::execute(rec_state_ptr state) {
+    auto new_states = execute(std::static_pointer_cast<State>(state));
+    rec_state_list new_base_states;
+    for (auto& new_state : new_states) {
+        auto new_loop_state = std::make_shared<RecState>(RecState(*new_state));
+        new_base_states.push_back(new_loop_state);
+    }
+    return new_base_states;
+}
+
 AInstruction*
 AInstruction::get_next_instruction() {
     auto next_inst = inst->getNextNonDebugInstruction();
@@ -69,7 +80,7 @@ AInstruction::get_next_instruction() {
     return nullptr;
 }
 
-std::vector<state_ptr>
+state_list
 AInstructionBinary::execute(state_ptr state) {
     auto bin_inst = dyn_cast<llvm::BinaryOperator>(inst);
     auto opcode = bin_inst->getOpcode();
@@ -179,7 +190,8 @@ AInstructionCall::execute_normal(state_ptr state) {
     auto called_func = call_inst->getCalledFunction();
 
     // check if the function is recursive and not yet summarized
-    if (is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
+    // if (is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
+    if (!state->is_summarizing() && is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
         auto summary = summarize_complete(state->z3ctx);
         if (summary.has_value()) {
             State::func_summaries->insert_or_assign(called_func, *summary);
@@ -333,23 +345,28 @@ AInstructionCall::execute_if_not_target(state_ptr state, llvm::Function* target)
     } else {
         // execute the called function
         auto new_state = execute_normal(state);
+        // return execute_if_not_target(new_state, target);
         return {new_state};
     }
 }
 
 bool
 AInstructionCall::is_recursive(llvm::Function* target) {
-    for (auto& bb : *target) {
-        for (auto& inst : bb) {
-            if (auto call_inst = llvm::dyn_cast<llvm::CallInst>(&inst)) {
-                auto called_func = call_inst->getCalledFunction();
-                if (called_func == target) {
-                    return true;
-                }
-            }
+    auto CG = AnalysisManager::get_instance()->get_CG();
+    auto* node = CG->operator[](target);
+    std::set<llvm::CallGraphNode*> visited;
+    std::function<bool(llvm::CallGraphNode*)> dfs = [&](llvm::CallGraphNode* n) {
+        if (!n) return false;
+        if (!visited.insert(n).second) return false;
+        for (auto& callRecord : *n) {
+            auto* callee = callRecord.second;
+            if (callee == node) return true; // cycle detected
+            if (dfs(callee)) return true;
         }
-    }
-    return false;
+        return false;
+    };
+    return dfs(node);
+
 }
 
 std::optional<FunctionSummary>
@@ -372,6 +389,11 @@ AInstructionBranch::execute(loop_state_ptr state) {
     return _execute(state);
 }
 
+rec_state_list
+AInstructionBranch::execute(rec_state_ptr state) {
+    return _execute(state);
+}
+
 template<typename state_ty>
 state_list_base<state_ty>
 AInstructionBranch::_execute(std::shared_ptr<state_ty> state) {
@@ -385,7 +407,7 @@ AInstructionBranch::_execute(std::shared_ptr<state_ty> state) {
         auto cond_value = state->evaluate(cond);
 
         auto true_block = branch_inst->getSuccessor(0);
-        auto true_pc = AInstruction::create(&*true_block->begin());
+        auto true_pc = AInstruction::create(&*true_block->instructionsWithoutDebug().begin());
         auto true_state = std::make_shared<state_ty>(*state);
         true_state->trace = new_trace;
         true_state->status = State::TESTING;
@@ -394,7 +416,7 @@ AInstructionBranch::_execute(std::shared_ptr<state_ty> state) {
         true_state->step_pc(true_pc);
 
         auto false_block = branch_inst->getSuccessor(1);
-        auto false_pc = AInstruction::create(&*false_block->begin());
+        auto false_pc = AInstruction::create(&*false_block->instructionsWithoutDebug().begin());
         auto false_state = std::make_shared<state_ty>(*state);
         false_state->trace = new_trace;
         false_state->status = State::TESTING;
@@ -406,7 +428,7 @@ AInstructionBranch::_execute(std::shared_ptr<state_ty> state) {
         new_states.push_back(false_state);
     } else {
         // unconditional branch
-        auto next_pc = AInstruction::create(&*branch_inst->getSuccessor(0)->begin());
+        auto next_pc = AInstruction::create(&*branch_inst->getSuccessor(0)->instructionsWithoutDebug().begin());
         auto new_state = std::make_shared<state_ty>(*state);
         new_state->trace = new_trace;
         new_state->step_pc(next_pc);
@@ -425,6 +447,7 @@ AInstructionReturn::execute(state_ptr state) {
     auto ret = dyn_cast<llvm::ReturnInst>(inst);
     auto ret_value = ret->getReturnValue();
     // get the return value
+    llvm::errs() << ret_value->getName() << "\n";
     auto ret_expr = state->evaluate(ret_value);
 
     state_ptr new_state = std::make_shared<State>(*state);
@@ -519,7 +542,7 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         return {};
     }
 
-    assert(!summary.is_over_approx && "Over-approximation is not supported yet");
+    assert(!summary->is_over_approximated() && "Over-approximation is not supported yet");
 
     auto exit_block = loop->getExitBlock();
     // only consider those loops with only one exit block

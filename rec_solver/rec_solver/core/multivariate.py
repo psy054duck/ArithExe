@@ -306,7 +306,7 @@ def solve_nearly_tail(rec: MultiRecurrence, is_array=False):
     D = z3.Int('_D')
     rets = z3.Ints(' '.join(['_ret%d' % i for i in range(rec.number_ret())]))
     loop_rec = nearly_tail2loop(rec, d, rets)
-    # loop_rec.pprint()
+    loop_rec.pprint()
     loop_guard = get_loop_cond(rec, d)
     precondition = z3.BoolVal(True)
     if is_array:
@@ -450,4 +450,5 @@ def solve_multivariate_rec(rec: MultiRecurrence):
         # new_rec.pprint()
         closed_forms = solve_nearly_tail(new_rec)
         # raise Exception('not a nearly tail recursion')
+    print(closed_forms[0])
     return MultiFuncClosedForm(rec.func_sig, closed_forms[0])
