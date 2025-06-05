@@ -54,6 +54,7 @@
 
 #include <vector>
 #include <queue>
+#include <stack>
 
 namespace ari_exe {
     const std::string default_entry_function_name = "main";
@@ -137,13 +138,14 @@ namespace ari_exe {
             llvm::Function* entry = nullptr;
 
             // queue of states
-            std::queue<state_ptr> states;
+            std::stack<state_ptr> states;
 
             // z3 solver
             z3::solver solver;
 
             // store all verification results for all paths
             std::vector<VeriResult> results;
+
     };
 }
 

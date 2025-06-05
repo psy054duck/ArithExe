@@ -120,15 +120,16 @@ void rec_solver::set_eqs(rec_ty& eqs) {
     }
 }
 
-void rec_solver::solve() {
+bool rec_solver::solve() {
     rec2file();
-    std::string cmd = "python solver.py tmp/recurrence.txt " + ind_var.to_string(); // + " > /dev/null";
+    std::string cmd = "python solver.py tmp/recurrence.txt " + ind_var.to_string() + " 2>/dev/null";
     int err = system(cmd.c_str());
     // int err = system("python rec_solver.py tmp/test.txt");
     if (err) {
-        exit(-1);
+        return false;
     }
     file2z3();
+    return true;
 }
 
 void rec_solver::simple_solve() {
@@ -141,7 +142,6 @@ void rec_solver::simple_solve() {
             z3::expr linear_part = z3ctx.int_val(0);
             for (auto app : all_app) {
                 linear_part = linear_part + coeff_of(eq, app, z3ctx)*app;
-                // std::cout << coeff_of(eq, app, z3ctx) << std::endl;
             }
             z3::expr const_term = (eq - linear_part).simplify();
             if (all_app.size() == 1 && coeff_of(eq, all_app[0], z3ctx) == 1) {
@@ -155,14 +155,12 @@ void rec_solver::simple_solve() {
 }
 
 void rec_solver::expr_solve(z3::expr e) {
-    // std::cout << e.to_string() << std::endl;
     z3::expr_vector all_apps(z3ctx);
     z3::solver solver(z3ctx);
     
     for (auto& i : rec_eqs) {
         solver.add(i.first == i.second);
     }
-    // std::cout << solver.to_smt2() << "\n";
     z3::expr_vector ind_vars(z3ctx);
     z3::expr_vector ind_varps(z3ctx);
     z3::expr_vector zeros(z3ctx);
@@ -173,11 +171,9 @@ void rec_solver::expr_solve(z3::expr e) {
     z3::expr d = z3ctx.int_const("_d");
     solver.push();
     solver.add(ep == e + d);
-    // std::cout << solver.to_smt2(); << "\n"
     auto check_res = solver.check();
     bool solved = false;
     if (check_res == z3::sat) {
-        // std::cout << "hhhhh\n";
         z3::model m = solver.get_model();
         z3::expr instance_d = m.eval(d);
         solver.pop();
@@ -203,7 +199,6 @@ void rec_solver::expr_solve(z3::expr e) {
             solver.pop();
             solver.add(ep != instance_d);
             auto check_res = solver.check();
-            // std::cout << solver.get_model() << "\n";
             if (check_res == z3::unsat) {
                 res.insert_or_assign(e, instance_d);
             }

@@ -59,11 +59,33 @@ State::get_memory_object(llvm::Value* value) const {
 }
 
 MStack::StackFrame&
-State::push_frame() {
+State::push_frame(llvm::Function* func) {
     auto& frame = memory.push_frame();
+    frame.func = func;
     // record the called site
     frame.prev_pc = pc;
     return frame;
+}
+
+z3::model
+State::get_model() {
+    if (model.has_value()) {
+        return model.value();
+    }
+    auto evaluator = z3::solver(z3ctx);
+    evaluator.add(get_path_condition());
+    auto is_sat = evaluator.check();
+    assert(is_sat && "Path condition is not satisfiable, this state should not be created");
+    model = evaluator.get_model();
+    return model.value();
+}
+
+bool
+State::is_concrete(z3::expr e, z3::expr concrete_value) {
+    auto evaluator = z3::solver(z3ctx);
+    evaluator.add(get_path_condition());
+    evaluator.add(concrete_value != e);
+    return evaluator.check() == z3::check_result::unsat;
 }
 
 MStack::StackFrame
@@ -111,4 +133,9 @@ State::store_gep(llvm::GetElementPtrInst* gep) {
 Memory::ObjectPtr
 State::get_gep(llvm::GetElementPtrInst* gep) const {
     return memory.get_gep(gep);
+}
+
+MStack::StackFrame&
+State::top_frame() {
+    return memory.top_frame();
 }

@@ -15,6 +15,7 @@
 #include "llvm/IR/InstrTypes.h"
 
 #include "AnalysisManager.h"
+#include "cache.h"
 #include "state.h"
 #include "FunctionSummary.h"
 #include "LoopSummary.h"
@@ -93,6 +94,9 @@ namespace ari_exe {
             state_ptr execute_assume(state_ptr state);
             state_ptr execute_normal(state_ptr state);
             state_ptr execute_malloc(state_ptr state);
+            // if this function call is cached, execute the cache
+            state_ptr execute_cache(state_ptr state);
+            state_ptr execute_reach_error(state_ptr state);
     };
 
     class AInstructionBranch: public AInstruction {
@@ -110,6 +114,9 @@ namespace ari_exe {
         public:
             AInstructionReturn(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<state_ptr> execute(state_ptr state) override;
+
+        private:
+            void cache_func_value(state_ptr state, z3::expr result);
     };
 
     class AInstructionZExt: public AInstruction {

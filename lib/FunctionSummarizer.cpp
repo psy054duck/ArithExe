@@ -73,8 +73,6 @@ RecExecution::run() {
         auto cur_state = states.front();
         states.pop();
         spdlog::debug("Current Instruction: {}", cur_state->pc->inst->getName().str());
-        llvm::errs() << *cur_state->pc->inst << "\n";
-        llvm::errs() << states.size() << " states left to process\n";
         if (cur_state->status == State::TERMINATED) {
             final_states.push_back(cur_state);
             continue;
@@ -122,7 +120,12 @@ FunctionSummarizer::summarize() {
         rec_eqs.push_back(eq);
     }
     rec_s.set_eqs(path_conds, rec_eqs);
-    rec_s.solve();
+    if (rec_s.solve()) {
+        spdlog::info("Recurrence solved successfully");
+    } else {
+        spdlog::info("Failed to solve recurrence for function: {}", F->getName().str());
+        return;
+    }
     closed_form_ty closed = rec_s.get_res();
     // find the function's closed form.
     // check if func has the same name as some key in closed
@@ -135,8 +138,12 @@ FunctionSummarizer::summarize() {
 
 std::optional<FunctionSummary>
 FunctionSummarizer::get_summary() {
-    if (!summary.has_value()) {
-        summarize();
+    try {
+        if (!summary.has_value()) {
+            summarize();
+        }
+    } catch (...) {
+        spdlog::info("Failed to summarize function: {}", F->getName().str());
     }
     return summary;
 }

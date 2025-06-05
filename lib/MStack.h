@@ -25,6 +25,7 @@ namespace ari_exe {
         public:
             struct StackFrame {
                 StackFrame() = default;
+                StackFrame(llvm::Function* func): func(func) {}
                 StackFrame(const StackFrame&) = default;
                 StackFrame& operator=(const StackFrame&) = default;
 
@@ -49,6 +50,9 @@ namespace ari_exe {
                 AInstruction* prev_pc = nullptr;
 
                 std::string to_string() const;
+
+                // representing the 
+                llvm::Function* func;
             };
 
         public:

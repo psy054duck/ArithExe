@@ -61,6 +61,7 @@ set(ARITHEXEC_LIBS
     Memory
     MemoryObject
     common
+    cache
 )
 
 add_subdirectory(lib)

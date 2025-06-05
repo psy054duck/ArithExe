@@ -50,10 +50,11 @@ namespace ari_exe {
 
         public:
             enum Status {
-                RUNNING,    // normal status
-                TERMINATED, // reach the end of the program
-                VERIFYING,  // a verification condition is being generated
-                TESTING,    // a new branch, should check the feasibility
+                RUNNING,        // normal status
+                TERMINATED,     // reach the end of the program
+                VERIFYING,      // a verification condition is being generated
+                TESTING,        // a new branch, should check the feasibility
+                REACH_ERROR,    // reach an error state (call reach_error())
             };
 
         public:
@@ -64,6 +65,11 @@ namespace ari_exe {
             virtual bool is_summarizing() const { return false; }
 
             virtual void append_path_condition(z3::expr _path_condition);
+
+            /**
+             * @brief check if the given e is concrete and equal to concrete_value in the current state
+             */
+            bool is_concrete(z3::expr e, z3::expr concrete_value);
 
             // step the pc
             void step_pc(AInstruction* next_pc = nullptr);
@@ -92,9 +98,11 @@ namespace ari_exe {
             // void push_value(llvm::Value* v, z3::expr value);
 
             // allocate a new stack frame
-            MStack::StackFrame& push_frame();
+            MStack::StackFrame& push_frame(llvm::Function* func);
 
             MStack::StackFrame pop_frame();
+
+            MStack::StackFrame& top_frame();
 
             // The context for Z3
             z3::context& z3ctx;
@@ -130,6 +138,13 @@ namespace ari_exe {
             }
 
             MemoryObjectPtr get_memory_object(llvm::Value* value) const;
+
+            /**
+             * @brief get a model for current path condition
+             */
+            z3::model get_model();
+
+            std::optional<z3::model> model;
 
             // std::string top_stack_frame_to_string() const {
             //     return stack.top_frame().to_string();
