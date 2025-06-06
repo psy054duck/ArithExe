@@ -188,8 +188,8 @@ AInstructionCall::execute(state_ptr state) {
 
 state_ptr
 AInstructionCall::execute_normal(state_ptr state) {
-    auto try_cache = execute_cache(state);
-    if (try_cache) return try_cache;
+    // auto try_cache = execute_cache(state);
+    // if (try_cache) return try_cache;
 
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();
@@ -489,18 +489,21 @@ AInstructionReturn::execute(state_ptr state) {
         return {state};
     }
     auto ret = dyn_cast<llvm::ReturnInst>(inst);
-    auto ret_value = ret->getReturnValue();
-    // get the return value
-    auto ret_expr = state->evaluate(ret_value);
 
     state_ptr new_state = std::make_shared<State>(*state);
     auto frame = new_state->pop_frame();
-    // go back to the called site
+
+    auto ret_value = ret->getReturnValue();
     new_state->step_pc(frame.prev_pc);
     auto call_inst = dyn_cast<llvm::CallInst>(new_state->pc->inst);
-    assert(call_inst);
-    new_state->write(call_inst, ret_expr);
-    cache_func_value(state, ret_expr);
+    if (ret_value) {
+        auto ret_expr = state->evaluate(ret_value);
+
+        // go back to the called site
+        assert(call_inst);
+        new_state->write(call_inst, ret_expr);
+        cache_func_value(state, ret_expr);
+    }
     new_state->step_pc();
     return {new_state};
 }
