@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
         spdlog::error("Usage: arith_exe <source_file.c>");
         return 1;
     }
-    spdlog::set_level(spdlog::level::debug);
+    spdlog::set_level(spdlog::level::info);
     auto engine = Engine(argv[1]);
     auto res = engine.verify();
 

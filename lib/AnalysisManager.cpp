@@ -23,6 +23,12 @@ AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
     MPM.addPass(llvm::ModuleInlinerPass());
+
+    llvm::CGSCCPassManager CGPM;
+    CGPM.addPass(llvm::ArgumentPromotionPass());
+    // MPM.addPass(createModuleToFunctionPassAdaptor(llvm::TailCallElimPass()));
+    MPM.addPass(llvm::createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM)));
+
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LowerSwitchPass()));
     // MPM.addPass(createModuleToFunctionPassAdaptor(llvm::PromotePass()));
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::RegToMemPass()));
@@ -40,6 +46,7 @@ AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::InstructionNamerPass()));
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::AggressiveInstCombinePass()));
     MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LowerSwitchPass()));
+    // MPM.addPass(createModuleToFunctionPassAdaptor(llvm::TailCallElimPass()));
     // MPM.addPass(createModuleToFunctionPassAdaptor(llvm::PromotePass()));
     // MPM.addPass(createModuleToFunctionPassAdaptor(RegToMemPass()));
     // MPM.addPass(createModuleToFunctionPassAdaptor(MemorySSAPrinterPass(output_fd, true)));

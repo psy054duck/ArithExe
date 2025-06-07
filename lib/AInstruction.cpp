@@ -188,8 +188,8 @@ AInstructionCall::execute(state_ptr state) {
 
 state_ptr
 AInstructionCall::execute_normal(state_ptr state) {
-    // auto try_cache = execute_cache(state);
-    // if (try_cache) return try_cache;
+    auto try_cache = execute_cache(state);
+    if (try_cache) return try_cache;
 
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();

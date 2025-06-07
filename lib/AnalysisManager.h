@@ -30,6 +30,10 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/Transforms/Scalar/Reg2Mem.h"
+#include "llvm/Transforms/Scalar/TailRecursionElimination.h"
+
+
+#include "llvm/Transforms/IPO/ArgumentPromotion.h"
 
 #include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
 #include "llvm/Transforms/IPO/ModuleInliner.h"
