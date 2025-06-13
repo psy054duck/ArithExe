@@ -515,7 +515,7 @@ class LoopRecurrence:
     def all_funcs(self):
         funcs = reduce(set.union, [set(trans.keys()) for trans in self.transitions])
         # return [func.subs({self.ind_var: self.ind_var - 1}) for func in funcs]
-        return [z3.substitute(func, (self.ind_var, self.ind_var - 1)) for func in funcs]
+        return [z3.simplify(z3.substitute(func, (self.ind_var, self.ind_var - 1))) for func in funcs]
 
     @property
     def ind_var(self):

@@ -58,6 +58,8 @@ Engine::run(state_ptr state) {
             auto res = verify(cur_state);
             // early terminate if unsafe path is found
             results.push_back(res);
+            // llvm::errs() << cur_state->memory.to_string() << "\n";
+            // llvm::errs() << "Verification condition: " << cur_state->verification_condition.to_string() << "\n";
             if (res == FAIL) return;
             cur_state->append_path_condition(cur_state->verification_condition);
             cur_state->status = State::RUNNING;

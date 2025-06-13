@@ -7,6 +7,7 @@
 
 #include <utility>
 #include <map>
+#include "rec_solver.h"
 
 namespace ari_exe {
 
@@ -25,8 +26,12 @@ namespace ari_exe {
              * @param summary The exact summary of the loop
              */
             LoopSummary(const z3::expr_vector& params, const z3::expr_vector& summary, const z3::expr_vector& closed_form, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values, std::optional<z3::expr> N);
-            LoopSummary(const z3::expr_vector& params, const std::map<z3::expr, z3::expr>& summary, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values, std::optional<z3::expr> N);
-            
+
+            LoopSummary(const z3::expr_vector& params, const z3::expr_vector& exact_summary, const z3::expr_vector& closed_form, const closed_form_ty& over_approximated, const z3::expr& constraints, std::optional<z3::expr> N);
+
+            // This is used for over-approximated loop summaries
+            // LoopSummary(const z3::expr_vector& params, const closed_form_ty& summary, const z3::expr& constraints, const std::vector<llvm::Value*>& modified_values, std::optional<z3::expr> N);
+
             LoopSummary(const LoopSummary& other);
             
             /**
@@ -80,6 +85,22 @@ namespace ari_exe {
              */
             bool is_over_approximated() const { return is_over_approx; }
 
+            /**
+             * @brief set the loop summary to be over-approximated
+             */
+            void set_over_approximated(bool over_approx) { is_over_approx = over_approx; }
+
+            z3::expr get_constraints() const { return constraints; }
+
+            /**
+             * @brief The over-approximated summary of the loop
+             * @details if is_over_approx is true, which means the loop summary is
+             *          over-approximated, then the summary are closed-form solutions
+             *          polynomials of params which satisfy C-finite recurrences.
+             *          ret.first is the polynomial, and ret.second is the corresponding
+             *          closed-form solution.
+             */
+            closed_form_ty summary_over_approx;
 
         private:
             /**
@@ -107,15 +128,7 @@ namespace ari_exe {
              */
             z3::expr_vector summary_closed_form;
 
-             /**
-             * @brief The over-approximated summary of the loop
-             * @details if is_over_approx is true, which means the loop summary is
-             *          over-approximated, then the summary are closed-form solutions
-             *          polynomials of params which satisfy C-finite recurrences.
-             *          ret.first is the polynomial, and ret.second is the corresponding
-             *          closed-form solution.
-             */
-            std::map<z3::expr, z3::expr> summary_over_approx;
+
 
             /**
              * constraints of this loop, which may contains constraints on the number of iterations

@@ -12,6 +12,7 @@
 #include <vector>
 #include <optional>
 #include <queue>
+#include <algorithm>
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
@@ -211,6 +212,12 @@ namespace ari_exe {
              * @return constraints on the number of iterations of the loop and the symbol used to denote the number of iterations
              */
             std::pair<z3::expr, z3::expr> get_iterations_constraints(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values);
+
+            /**
+             * @brief get exit conditions for the loop
+             */
+            std::pair<z3::expr, z3::expr> get_exit_loop_guard(const loop_state_list& exit_states);
+
 
             /**
              * @brief get the loop guard condition

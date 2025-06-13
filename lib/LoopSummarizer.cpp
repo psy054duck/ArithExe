@@ -168,7 +168,9 @@ LoopSummarizer::summarize() {
 
     summarize_scalar(final_states, exit_states);
 
-    summarize_array(final_states, exit_states);
+    if (summary.has_value()) {//  && !summary.value().is_over_approximated()) {
+        summarize_array(final_states, exit_states);
+    }
 }
 
 void
@@ -216,12 +218,16 @@ LoopSummarizer::summarize_scalar(const loop_state_list& final_states, const loop
     auto path_conds = conditions_and_updates.first;
     auto rec_eqs = conditions_and_updates.second;
 
+    //------------------------------ Recurrence solving ------------------------
     auto initial_pairs = get_initial_values();
     rec_s.add_initial_values(initial_pairs.first, initial_pairs.second);
     rec_s.set_eqs(path_conds, rec_eqs);
     rec_s.solve();
     closed_form_ty closed = rec_s.get_res();
-    // TODO: assume the summary is exact for now
+    //------------------------------ End of Recurrence Solving -----------------
+
+    //---------------------------- Collect all parameters ----------------------
+    bool is_approximate = false;
     std::vector<llvm::Value*> modified_values;
     z3::expr_vector params(rec_s.z3ctx);
     z3::expr_vector params_values(rec_s.z3ctx);
@@ -229,14 +235,13 @@ LoopSummarizer::summarize_scalar(const loop_state_list& final_states, const loop
         modified_values.push_back(&phi);
         auto name = get_z3_name(phi.getName().str());
         auto phi_func = rec_s.z3ctx.int_const(name.c_str());
-        params.push_back(phi_func);
         auto it = closed.find(phi_func);
         if (it != closed.end()) {
             auto closed_form = it->second;
+            params.push_back(phi_func);
             params_values.push_back(closed_form);
         } else {
-            spdlog::error("Cannot find closed form for phi {}", phi.getName().str());
-            assert(false);
+            is_approximate = true;
         }
     }
 
@@ -255,32 +260,82 @@ LoopSummarizer::summarize_scalar(const loop_state_list& final_states, const loop
             params_values.push_back(stored_value_z3);
         }
     }
+    //---------------------------- End of Collecting Parameters ----------------
 
     spdlog::info("Closed-form solutions are computed successfully:");
-    spdlog::info("Computing the number of iterations");
-    auto [N_constraints, N] = get_iterations_constraints(exit_states, params, params_values);
-    z3::expr_vector exit_values(rec_s.z3ctx);
-    auto linear_logic = LinearLogic();
-    z3::expr_vector N_vec(z3ctx);
-    N_vec.push_back(N);
-    // llvm::errs() << N_constraints.to_string() << "\n";
-    auto N_value = linear_logic.solve_vars(N_constraints, N_vec);
-    std::optional<z3::expr> N_opt;
-    if (N_value.size() == 0) {
-        spdlog::info("fail to compute the number of iterations, record the constraints on it in path conditions");
-        N_constraints = z3ctx.bool_val(true);
+    if (is_approximate) {
+        spdlog::info("This is an over-approximation");
     } else {
-        spdlog::info("The number of iterations is {}", N_value[0].to_string());
-        N_opt = N_value[0];
-        z3::expr_vector src(z3ctx);
-        z3::expr_vector dst(z3ctx);
-        src.push_back(manager->get_ind_var());
-        dst.push_back(N_value[0]);
-        for (auto expr : params_values) {
-            exit_values.push_back(expr.substitute(src, dst));
+        spdlog::info("This is a precise solution");
+    }
+
+    //---------------------------- compute the number of iterations ------------
+    std::optional<z3::expr> N_opt = std::nullopt;
+    z3::expr_vector exit_values(rec_s.z3ctx);
+    decltype(closed) over_closed;
+    auto loop_guard = get_loop_guard_condition(exit_states);
+    auto loop_guard_vars = Logic().collect_vars(loop_guard);
+    std::vector<z3::expr> modified_values_expr;
+    for (auto& m_value : modified_values) {
+        auto name = get_z3_name(m_value->getName().str());
+        auto z3_value = rec_s.z3ctx.int_const(name.c_str());
+        modified_values_expr.push_back(z3_value);
+    }
+    std::set<std::string> iteration_related_vars;
+    std::set<std::string> modified_values_str;
+    std::set<std::string> loop_guard_vars_str;
+    std::set<std::string> params_str;
+    for (auto& expr : modified_values_expr) modified_values_str.insert(expr.decl().name().str());
+    for (auto& expr : loop_guard_vars) loop_guard_vars_str.insert(expr.decl().name().str());
+    for (auto expr : params) params_str.insert(expr.decl().name().str());
+    std::set_intersection(modified_values_str.begin(), modified_values_str.end(),
+                          loop_guard_vars_str.begin(), loop_guard_vars_str.end(),
+                          std::inserter(iteration_related_vars, iteration_related_vars.begin()));
+
+    auto [N_constraints, N] = get_iterations_constraints(exit_states, params, params_values);
+    if (std::includes(params_str.begin(), params_str.end(),
+                      iteration_related_vars.begin(), iteration_related_vars.end())) {
+        auto linear_logic = LinearLogic();
+        z3::expr_vector N_vec(z3ctx);
+        N_vec.push_back(N);
+        spdlog::info("Solving for N");
+        auto N_value = linear_logic.solve_vars(N_constraints, N_vec);
+        if (N_value.size() == 0) {
+            spdlog::info("fail to compute the number of iterations, record the constraints on it in path conditions");
+            N_constraints = z3ctx.bool_val(true);
+        } else {
+            spdlog::info("The number of iterations is {}", N_value[0].to_string());
+            N_opt = N_value[0];
         }
     }
-    summary = LoopSummary(params, exit_values, params_values, N_constraints, modified_values, N_opt);
+    z3::expr_vector src(z3ctx);
+    z3::expr_vector dst(z3ctx);
+    if (N_opt.has_value()) {
+        src.push_back(manager->get_ind_var());
+        dst.push_back(N_opt.value());
+    }
+    for (auto& p : closed) {
+        auto new_first = p.first;
+        new_first = new_first.substitute(params, params_values).substitute(src, dst);
+        auto new_second = p.second.substitute(params, params_values).substitute(src, dst);
+        over_closed.insert_or_assign(new_first, new_second);
+    }
+    for (auto expr : params_values) {
+        exit_values.push_back(expr.substitute(src, dst));
+    }
+    //---------------------------- End of computing the number of iterations ---
+
+    if (is_approximate) {
+        if (N_opt.has_value()) {
+            // summary = LoopSummary(params, closed, params.ctx().bool_val(true), modified_values, N_opt);
+            summary = LoopSummary(params, exit_values, params_values, over_closed, params.ctx().bool_val(true), N_opt);
+        } else {
+            auto [exit_condition, N] = get_exit_loop_guard(exit_states);
+            summary = LoopSummary(params, exit_values, params_values, over_closed, exit_condition, N_opt);
+        }
+    } else {
+        summary = LoopSummary(params, exit_values, params_values, N_constraints, modified_values, N_opt);
+    }
 }
 
 std::pair<z3::expr, rec_ty>
@@ -337,7 +392,7 @@ LoopSummarizer::get_array_recursive_case(loop_state_ptr state, const MemoryObjec
     // retrieve closed-form solutions to scalar variables
     // and substitute them into the array update
     auto scalars = summary.value();
-    auto update = summary.value().evaluate_expr(array_ptr->as_expr()).simplify();
+    auto update = scalars.evaluate_expr(array_ptr->as_expr()).simplify();
     auto apps_of_arr = get_app_of(update, sig.decl());
     for (auto app : apps_of_arr) {
         sub_src.push_back(app);
@@ -528,30 +583,7 @@ LoopSummarizer::get_predecessor() {
     return nullptr;
 }
 
-/**
- * @brief get the cartesian product
- * @param vec: a vector [i_1, ..., i_n] of integers, the cartesian product is [0, i_1 - 1] x ... x [0, i_n - 1]
- */
-static std::vector<std::vector<int>>
-cartesian_product(const std::vector<int>& vec, int start = 0) {
-    assert(vec.size() > 0);
-    auto res = std::vector<std::vector<int>>();
-    if (start == vec.size() - 1) {
-        for (int i = 0; i < vec[start]; i++) {
-            res.push_back({i});
-        }
-        return res;
-    }
-    auto sub_res = cartesian_product(vec, start + 1);
-    for (int i = 0; i < vec[start]; i++) {
-        for (auto& sub : sub_res) {
-            std::vector<int> tmp = {i};
-            tmp.insert(tmp.end(), sub.begin(), sub.end());
-            res.push_back(tmp);
-        }
-    }
-    return res;
-}
+
 
 /**
  * @brief get expressions by indices
@@ -602,6 +634,7 @@ LoopSummarizer::get_conditions_and_updates(const loop_state_list& final_states) 
                 auto name = get_z3_name(phi->getName().str());
                 auto phi_func = rec_s.z3ctx.function(name.c_str(), rec_s.z3ctx.int_sort(), rec_s.z3ctx.int_sort());
                 eq.insert_or_assign(phi_func(manager->get_ind_var() + 1), tmp_expressions[i].substitute(src, dst));
+                llvm::errs() << phi_func(manager->get_ind_var() + 1).to_string() << tmp_expressions[i].substitute(src, dst).to_string() << "\n";
             }
             rec_eqs.push_back(eq);
         }
@@ -621,8 +654,11 @@ apply_result2expr(z3::apply_result result) {
 
 std::pair<z3::expr, z3::expr>
 LoopSummarizer::get_iterations_constraints(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values) {
+    spdlog::info("Computing the number of iterations");
     auto loop_guard = get_loop_guard_condition(exit_states);
     spdlog::info("Loop guard condition: {}", loop_guard.to_string());
+    auto logic = Logic();
+    auto vars_in_guard = logic.collect_vars(loop_guard);
     auto loop_guard_closed_form = loop_guard.substitute(params, values);
     spdlog::info("Loop guard condition (closed-form): {}", loop_guard_closed_form.to_string());
     auto manager = AnalysisManager::get_instance();
@@ -644,11 +680,24 @@ LoopSummarizer::get_iterations_constraints(const loop_state_list& exit_states, c
     z3::goal g(z3ctx);
     g.add(constraints);
     z3::apply_result result = qe_tactic(g);
-    spdlog::info("Solving for N");
     z3::expr_vector N_vec(z3ctx);
     N_vec.push_back(N);
     auto N_constraints = apply_result2expr(result);
     return {N_constraints, N};
+}
+
+std::pair<z3::expr, z3::expr>
+LoopSummarizer::get_exit_loop_guard(const loop_state_list& exit_states) {
+    auto loop_guard = get_loop_guard_condition(exit_states);
+    auto manager = AnalysisManager::get_instance();
+    z3::expr_vector src(loop_guard.ctx());
+    z3::expr_vector dst(loop_guard.ctx());
+    auto n = manager->get_ind_var();
+    auto N = manager->get_loop_N();
+    src.push_back(n);
+    dst.push_back(N);
+    auto exit_loop_guard = loop_guard.substitute(src, dst);
+    return {!exit_loop_guard, N};
 }
 
 z3::expr

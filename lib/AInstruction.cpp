@@ -488,6 +488,7 @@ AInstructionReturn::execute(state_ptr state) {
         state->status = State::TERMINATED;
         return {state};
     }
+    // llvm::errs() << state->memory.to_string() << "\n";
     auto ret = dyn_cast<llvm::ReturnInst>(inst);
 
     state_ptr new_state = std::make_shared<State>(*state);
@@ -515,17 +516,16 @@ AInstructionReturn::cache_func_value(state_ptr state, z3::expr result) {
     param_list_ty args;
 
     auto model = state->get_model();
-    auto concrete_result = model.eval(result, true);
+    auto concrete_result = model.eval(result, false);
     if (!state->is_concrete(result, concrete_result)) return;
 
     for (auto& param : top_frame.func->args()) {
         auto arg_value = state->evaluate(&param);
         auto concrete_value = model.eval(arg_value, true);
         if (!state->is_concrete(arg_value, concrete_value)) return;
-
         args.push_back(concrete_value.as_int64());
     }
-    cache_instance->cache_func_value(top_frame.func, args, concrete_result);
+    cache_instance->cache_func_value(top_frame.func, args, concrete_result.as_int64());
 }
 
 std::vector<state_ptr>
@@ -609,52 +609,112 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         return {};
     }
 
-    assert(!summary->is_over_approximated() && "Over-approximation is not supported yet");
+    // assert(!summary->is_over_approximated() && "Over-approximation is not supported yet");
+
 
     auto exit_block = loop->getExitBlock();
     // only consider those loops with only one exit block
     assert(exit_block);
 
-    auto& z3ctx = manager->get_z3ctx();
-    z3::expr_vector args(z3ctx);
-    for (auto& inst : *header) {
-        if (auto phi = llvm::dyn_cast_or_null<llvm::PHINode>(&inst)) {
-            auto name = get_z3_name(phi->getName().str());
-            auto phi_expr = z3ctx.int_const(name.c_str());
-            args.push_back(phi_expr);
-        } else if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
-            // for store instruction, we need to get the pointer operand
-            auto ptr = store_inst->getPointerOperand();
-            auto name = get_z3_name(ptr->getName().str());
-            auto ptr_expr = z3ctx.int_const(name.c_str());
-            args.push_back(ptr_expr);
+    state_ptr new_state = std::make_shared<State>(*state);
+    auto entering_block = get_loop_entering_block(loop);
+    if (summary->is_over_approximated()) {
+        for (auto& inst : *header) {
+            if (auto phi = llvm::dyn_cast_or_null<llvm::PHINode>(&inst)) {
+                auto name = get_z3_name(phi->getName().str());
+                auto phi_expr = new_state->z3ctx.int_const(name.c_str());
+                auto initial_value = phi->getIncomingValueForBlock(entering_block);
+                auto initial_value_expr = new_state->evaluate(initial_value);
+                auto evaluated_value = summary->evaluate_expr(phi_expr);
+                auto N = summary->get_N();
+                if (N.has_value()) {
+                    z3::expr_vector src(new_state->z3ctx);
+                    z3::expr_vector dst(new_state->z3ctx);
+                    src.push_back(manager->get_ind_var());
+                    dst.push_back(N.value());
+                    new_state->write(phi, z3::ite(*N == 0, initial_value_expr, evaluated_value.substitute(src, dst)));
+                } else {
+                    new_state->write(phi, evaluated_value);
+                }
+            }
+        }
+        for (auto p : summary->summary_over_approx) {
+            new_state->append_path_condition(p.first == p.second);
+        }
+        new_state->append_path_condition(summary->get_constraints());
+    } else {
+        auto& z3ctx = manager->get_z3ctx();
+        z3::expr_vector args(z3ctx);
+        for (auto& inst : *header) {
+            if (auto phi = llvm::dyn_cast_or_null<llvm::PHINode>(&inst)) {
+                auto name = get_z3_name(phi->getName().str());
+                auto phi_expr = z3ctx.int_const(name.c_str());
+                args.push_back(phi_expr);
+            } else if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
+                // for store instruction, we need to get the pointer operand
+                auto ptr = store_inst->getPointerOperand();
+                auto name = get_z3_name(ptr->getName().str());
+                auto ptr_expr = z3ctx.int_const(name.c_str());
+                args.push_back(ptr_expr);
+            }
+        }
+        auto arrays_ptr = state->memory.get_arrays();
+        for (auto& array_ptr : arrays_ptr) {
+            args.push_back(array_ptr->get_signature());
+        }
+        z3::expr_vector closed_forms = summary->evaluate(args);
+        // auto phi_it = header->phis().begin();
+        auto modified_values = summary->get_modified_values();
+        for (int i = 0; i < closed_forms.size(); i++) {
+            auto modified_value = modified_values[i];
+            auto N = summary->get_N();
+            if (N.has_value()) {
+                z3::expr_vector src(z3ctx);
+                z3::expr_vector dst(z3ctx);
+                src.push_back(manager->get_ind_var());
+                dst.push_back(N.value());
+                new_state->write(modified_value, closed_forms[i].substitute(src, dst));
+            } else {
+                new_state->write(modified_value, closed_forms[i]);
+            }
         }
     }
-    auto arrays_ptr = state->memory.get_arrays();
-    for (auto& array_ptr : arrays_ptr) {
-        args.push_back(array_ptr->get_signature());
-    }
-    z3::expr_vector closed_forms = summary->evaluate(args);
-    state_ptr new_state = std::make_shared<State>(*state);
-    // auto phi_it = header->phis().begin();
-    auto modified_values = summary->get_modified_values();
-    for (int i = 0; i < closed_forms.size(); i++) {
-        auto modified_value = modified_values[i];
-        new_state->write(modified_value, closed_forms[i]);
-    }
+    // loop summary only computes the values of phi nodes and store instructions
+    // so we need to execute the instructions in the header until the terminator
+    // to get closed-form solutions to other values in header, which may also be
+    // used outside the loop
     auto cur_inst = header->getFirstNonPHIOrDbg();
     auto cur_state = new_state;
     cur_state->step_pc(AInstruction::create(cur_inst));
-    while (cur_state->pc->inst != header->getTerminator()) {
-        auto states = cur_state->pc->execute(cur_state);
-        assert(states.size() == 1 && "should only have one state after executing an instruction inside a header");
-        cur_state = states[0];
+    std::queue<state_ptr> states;
+    std::vector<state_ptr> res;
+    states.push(cur_state);
+    while (!states.empty()) {
+        cur_state = states.front();
+        states.pop();
+        if (cur_state->pc->inst == header->getTerminator()) {
+            res.push_back(cur_state);
+            continue;
+        }
+        auto new_states = cur_state->pc->execute(cur_state);
+        for (auto& new_state : new_states) states.push(new_state);
     }
-    new_state = cur_state;
-    new_state->trace.push_back(header);
-    auto new_pc = AInstruction::create(&*exit_block->begin());
-    new_state->step_pc(new_pc);
-    return {new_state};
+    // while (cur_state->pc->inst != header->getTerminator()) {
+    //     llvm::errs() << *cur_state->pc->inst << "\n";
+    //     auto states = cur_state->pc->execute(cur_state);
+    //     assert(states.size() == 1 && "should only have one state after executing an instruction inside a header");
+    //     cur_state = states[0];
+    // }
+    for (auto& state : res) {
+        state->trace.push_back(header);
+        // auto new_pc = AInstruction::create(&*exit_block->begin());
+        auto exit_block_first_inst = &*exit_block->begin();
+        if (exit_block_first_inst->isDebugOrPseudoInst())
+            exit_block_first_inst = exit_block_first_inst->getNextNonDebugInstruction();
+        auto new_pc = AInstruction::create(exit_block_first_inst);
+        state->step_pc(new_pc);
+    }
+    return res;
 }
 
 template<typename state_ty>

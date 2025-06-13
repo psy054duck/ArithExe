@@ -84,6 +84,7 @@ def implicant(atoms, s, snot):
     return z3.Or([z3.mk_not(c) for c in core])
 
 def to_cnf(fml):
+    str(fml)
     atms = atoms(fml)
     s = z3.Solver()
     snot = z3.Solver()

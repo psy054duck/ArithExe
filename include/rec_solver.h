@@ -15,6 +15,8 @@
 #include <set>
 #include <fstream>
 
+#include "common.h"
+
 namespace ari_exe {
     struct ExprCmp {
         bool operator()(const z3::expr& lhs, const z3::expr& rhs) const {
@@ -47,7 +49,6 @@ namespace ari_exe {
             void set_eqs(const std::vector<z3::expr>& _conds, const std::vector<rec_ty>& _exprs);
             void add_initial_values(z3::expr_vector k, z3::expr_vector v);
             void set_ind_var(z3::expr var);
-            void simple_solve();
             closed_form_ty get_res();
             void expr_solve(z3::expr);
             void apply_initial_values();

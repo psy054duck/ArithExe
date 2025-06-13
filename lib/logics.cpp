@@ -140,25 +140,44 @@ namespace ari_exe {
             aux_expr2piecewise(then_expr, cond && cur_cond, conditions, expressions);
             aux_expr2piecewise(else_expr, !cond && cur_cond, conditions, expressions);
 
-        } else if (expr.decl().arity() == 2) {
-            // If the expression is a binary operation, we can recursively process its arguments
-            auto left = expr.arg(0);
-            auto right = expr.arg(1);
-
-            auto [left_conditions, left_expressions] = expr2piecewise(left);
-            auto [right_conditions, right_expressions] = expr2piecewise(right);
-
-            for (int i = 0; i < left_conditions.size(); ++i) {
-                for (int j = 0; j < right_conditions.size(); ++j) {
-                    auto new_cond = left_conditions[i] && right_conditions[j] && cur_cond;
-                    auto new_expr = expr.decl()(left_expressions[i], right_expressions[j]);
-                    conditions.push_back(new_cond);
-                    expressions.push_back(new_expr);
-                }
+        } else if (expr.is_app()){
+            int arity = expr.num_args();
+            std::vector<z3::expr_vector> all_conditions;
+            std::vector<z3::expr_vector> all_expressions;
+            std::vector<int> num_cases;
+            for (auto arg : expr.args()) {
+                auto [cur_conditions, cur_expressions] = expr2piecewise(arg);
+                all_conditions.push_back(cur_conditions);
+                all_expressions.push_back(cur_expressions);
+                num_cases.push_back(cur_conditions.size());
             }
+            for (auto& indices : cartesian_product(num_cases)) {
+                z3::expr acc_condition = expr.ctx().bool_val(true);
+                z3::expr_vector acc_expressions(expr.ctx());
+                for (int i = 0; i < indices.size(); ++i) {
+                    auto cur_condition = all_conditions[i][indices[i]];
+                    acc_condition = acc_condition && cur_condition;
+                    acc_expressions.push_back(all_expressions[i][indices[i]]);
+                }
+                conditions.push_back(acc_condition && cur_cond);
+                auto new_expr = expr.decl()(acc_expressions);
+                expressions.push_back(new_expr);
+            }
+            // // If the expression is a binary operation, we can recursively process its arguments
+            // auto left = expr.arg(0);
+            // auto right = expr.arg(1);
 
-        } else {
-            throw std::invalid_argument("Unsupported expression type for piecewise conversion.");
+            // auto [left_conditions, left_expressions] = expr2piecewise(left);
+            // auto [right_conditions, right_expressions] = expr2piecewise(right);
+
+            // for (int i = 0; i < left_conditions.size(); ++i) {
+            //     for (int j = 0; j < right_conditions.size(); ++j) {
+            //         auto new_cond = left_conditions[i] && right_conditions[j] && cur_cond;
+            //         auto new_expr = expr.decl()(left_expressions[i], right_expressions[j]);
+            //         conditions.push_back(new_cond);
+            //         expressions.push_back(new_expr);
+            //     }
+            // }
         }
     }
 

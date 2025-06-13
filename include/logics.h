@@ -14,6 +14,7 @@
 #include <string>
 #include "AnalysisManager.h"
 #include "LinearAlgebra.h"
+#include "common.h"
 
 namespace ari_exe {
     using Matrix = ari_exe::Algebra::LinearAlgebra::Matrix<z3::expr>;

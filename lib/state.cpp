@@ -85,7 +85,8 @@ State::is_concrete(z3::expr e, z3::expr concrete_value) {
     auto evaluator = z3::solver(z3ctx);
     evaluator.add(get_path_condition());
     evaluator.add(concrete_value != e);
-    return evaluator.check() == z3::check_result::unsat;
+    auto res = evaluator.check() == z3::check_result::unsat;
+    return res;
 }
 
 MStack::StackFrame

@@ -1,12 +1,9 @@
-ari__1((0)) = 0;
-ari__sroa_0_0((0)) = _undef_0;
-if (And((And((true), ((ari__1((ari_loop_n))) == (0)))), (And((true), (true))))) {
-	ari__1(((ari_loop_n) + (1))) = (1) + (ari__1((ari_loop_n)));
-	ari__sroa_0_0(((ari_loop_n) + (1))) = 0;
-} else if (And((And((true), (!((ari__1((ari_loop_n))) == (0))))), (And((true), ((0) == ((ari__1((ari_loop_n))) % (2))))))) {
-	ari__1(((ari_loop_n) + (1))) = (1) + (ari__1((ari_loop_n)));
-	ari__sroa_0_0(((ari_loop_n) + (1))) = (ari__sroa_0_0((ari_loop_n))) + (2);
-} else if (And((And((true), (!((ari__1((ari_loop_n))) == (0))))), (And((true), (!((0) == ((ari__1((ari_loop_n))) % (2)))))))) {
-	ari__1(((ari_loop_n) + (1))) = (1) + (ari__1((ari_loop_n)));
-	ari__sroa_0_0(((ari_loop_n) + (1))) = (ari__sroa_0_0((ari_loop_n))) + (0);
+if (Or(((ari_loop_n) <= (0)), ((i23_array_func_n0) < (0)))) {
+	i23_((i23_array_func_n0), (ari_loop_n)) = i23((i23_array_func_n0));
+} else if (And(((((ari_loop_n) - (1)) % (2)) == (0)), ((i23_array_func_n0) == ((ari_loop_n) - (1))))) {
+	i23_((i23_array_func_n0), (ari_loop_n)) = 2;
+} else if (And((!((((ari_loop_n) - (1)) % (2)) == (0))), ((i23_array_func_n0) == ((ari_loop_n) - (1))))) {
+	i23_((i23_array_func_n0), (ari_loop_n)) = 0;
+} else if (!(Or((Or((Or((false), (Or(((ari_loop_n) <= (0)), ((i23_array_func_n0) < (0)))))), (And(((((ari_loop_n) - (1)) % (2)) == (0)), ((i23_array_func_n0) == ((ari_loop_n) - (1))))))), (And((!((((ari_loop_n) - (1)) % (2)) == (0))), ((i23_array_func_n0) == ((ari_loop_n) - (1)))))))) {
+	i23_((i23_array_func_n0), (ari_loop_n)) = i23_((i23_array_func_n0), ((ari_loop_n) - (1)));
 } 

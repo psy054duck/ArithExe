@@ -12,29 +12,6 @@ combine_vec(z3::expr_vector& vec1, const z3::expr_vector& vec2) {
     }
 }
 
-static bool
-is_simple_rec(z3::func_decl func_decl, z3::expr rhs) {
-    if (rhs.is_numeral() || rhs.is_const()) return true;
-
-    auto args = rhs.args();
-    auto kind = rhs.decl().decl_kind();
-    bool is_all_simple_rec = true;
-    for (auto e : args) {
-        if (!is_simple_rec(func_decl, e)) {
-            is_all_simple_rec = false;
-            break;
-        }
-    }
-    if (kind == Z3_OP_ADD || kind == Z3_OP_MUL || kind == Z3_OP_SUB) {
-        return is_all_simple_rec;
-        // return std::all_of(args.begin(), args.end(), [func_decl](z3::expr e) { return is_simple_rec(func_decl, e); });
-    } else {
-        return func_decl.id() == rhs.decl().id() && is_all_simple_rec;
-        // return func_decl.id() == rhs.decl().id() && std::all_of(args.begin(), args.end(), [func_decl](z3::expr e) { return is_simple_rec(func_decl, e); });
-    }
-    return true;
-}
-
 void
 rec_solver::set_ind_var(z3::expr var) {
     ind_var = var;
@@ -132,26 +109,15 @@ bool rec_solver::solve() {
     return true;
 }
 
-void rec_solver::simple_solve() {
-    res.clear();
-    for (auto& func_eq : rec_eqs) {
-        z3::expr func = func_eq.first;
-        z3::expr eq = func_eq.second;
-        if (is_simple_rec(func.decl(), eq)) {
-            z3::expr_vector all_app = find_all_app_of_decl(func.decl(), eq, z3ctx);
-            z3::expr linear_part = z3ctx.int_val(0);
-            for (auto app : all_app) {
-                linear_part = linear_part + coeff_of(eq, app, z3ctx)*app;
-            }
-            z3::expr const_term = (eq - linear_part).simplify();
-            if (all_app.size() == 1 && coeff_of(eq, all_app[0], z3ctx) == 1) {
-                auto func_decl = func.decl();
-                z3::expr closed = func_decl(0) + ind_var*const_term;
-                res.insert_or_assign(func_decl(ind_var), closed.simplify());
-            }
+static std::set<z3::expr>
+get_all_lhs(const std::vector<rec_ty>& exprs) {
+    std::set<z3::expr> res;
+    for (auto& expr : exprs) {
+        for (auto& eq : expr) {
+            res.insert(eq.first);
         }
     }
-    // apply_initial_values();
+    return res;
 }
 
 void rec_solver::expr_solve(z3::expr e) {
@@ -262,16 +228,20 @@ std::string rec_solver::z3_infix(z3::expr e) {
     for (auto a : args) {
         args_infix.push_back("(" + z3_infix(a) + ")");
     }
+
     if (kind == Z3_OP_ADD) {
-        assert(args.size() == 2);
-        return args_infix[0] + " + " + args_infix[1];
+        // assert(args.size() == 2);
+        std::string args_str = boost::join(args_infix, " + ");
+        return args_str;
+        // return args_infix[0] + " + " + args_infix[1];
     } else if (kind == Z3_OP_MOD) {
         return args_infix[0] + " % " + args_infix[1];
     } else if (kind == Z3_OP_SUB) {
         assert(args.size() == 2);
         return args_infix[0] + " - " + args_infix[1];
     } else if (kind == Z3_OP_MUL) {
-        assert(args.size() == 2);
+        std::string args_str = boost::join(args_infix, " * ");
+        return args_str;
         return args_infix[0] + " * " + args_infix[1];
     } else if (kind == Z3_OP_DIV || kind == Z3_OP_IDIV) {
         assert(args.size() == 2);

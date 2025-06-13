@@ -442,7 +442,7 @@ def symbol2func(sym):
     return z3.Function(sym.decl().name(), z3.IntSort(), z3.IntSort())
 
 def solve_multivariate_rec(rec: MultiRecurrence):
-    # rec.pprint()
+    rec.pprint()
     if rec.is_nearly_tail():
         closed_forms = solve_nearly_tail(rec)
     else:
@@ -450,5 +450,4 @@ def solve_multivariate_rec(rec: MultiRecurrence):
         # new_rec.pprint()
         closed_forms = solve_nearly_tail(new_rec)
         # raise Exception('not a nearly tail recursion')
-    print(closed_forms[0])
     return MultiFuncClosedForm(rec.func_sig, closed_forms[0])
