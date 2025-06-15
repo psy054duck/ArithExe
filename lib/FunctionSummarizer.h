@@ -12,6 +12,7 @@
 #include <vector>
 #include <optional>
 #include <queue>
+#include <algorithm>
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"

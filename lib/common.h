@@ -53,7 +53,7 @@ namespace ari_exe {
      * @brief Get all function applications in the given expression
      *        It is not a set, so elements may repeat.
      */
-    z3::expr_vector get_func_apps(z3::expr e);
+    std::vector<z3::expr> get_func_apps(z3::expr e);
 }
 
 #endif
