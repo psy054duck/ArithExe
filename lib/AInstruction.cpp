@@ -342,6 +342,9 @@ AInstructionCall::execute_unknown(state_ptr state) {
     }
     state_ptr new_state = std::make_shared<State>(*state);
     new_state->write(inst, result);
+    if (called_func->getName().ends_with("uint")) {
+        new_state->append_path_condition(result >= z3ctx.int_val(0));
+    }
     new_state->step_pc();
     return new_state;
 }
@@ -372,21 +375,6 @@ AInstructionCall::execute_if_not_target(state_ptr state, llvm::Function* target)
     if (called_func == target) {
         // TODO: assume all types are int
         return execute_naively(state);
-        // size_t num_args = call_inst->arg_size();
-        // z3::sort_vector domain(z3ctx);
-        // for (int i = 0; i < num_args; i++) domain.push_back(z3ctx.int_sort());
-        // auto func_name = "ari_" + called_func->getName().str();
-        // z3::func_decl f = z3ctx.function(func_name.c_str(), domain, z3ctx.int_sort());
-        // z3::expr_vector args(z3ctx);
-        // for (int i = 0; i < num_args; i++) {
-        //     auto arg = call_inst->getArgOperand(i);
-        //     auto arg_value = state->evaluate(arg);
-        //     args.push_back(arg_value);
-        // }
-        // auto new_state = std::make_shared<State>(*state);
-        // new_state->write(inst, f(args));
-        // new_state->step_pc();
-        // return {new_state};
     } else {
         // execute the called function
         auto new_state = execute_normal(state);
