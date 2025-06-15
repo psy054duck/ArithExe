@@ -95,7 +95,7 @@ def simpliy_solver(e):
 
 def to_sympy(s_z3, is_integer=True):
     # s = str(z3.simplify(s_z3, eq2ineq=True))
-    s = str(z3.simplify(s_z3))
+    s = str(z3.simplify(s_z3)).replace('\n', ' ')
     expr = sp.parse_expr(s, local_dict={'If': ite2piecewise}, evaluate=False, transformations=(standard_transformations + (convert_equals_signs,)))
     if expr is True or expr is False:
         return sp.sympify(expr)

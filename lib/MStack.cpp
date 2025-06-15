@@ -10,8 +10,8 @@ MStack::push_frame(const StackFrame& frame) {
 }
 
 MStack::StackFrame&
-MStack::push_frame() {
-    frames.push(StackFrame());
+MStack::push_frame(llvm::Function* func) {
+    frames.push(StackFrame(func));
     return frames.top();
 }
 
@@ -91,7 +91,11 @@ MStack::StackFrame::write(llvm::Value* symbol, z3::expr_vector index, z3::expr v
 
 std::string
 MStack::StackFrame::to_string() const {
-    std::string result = "StackFrame:\n";
+    std::string result = "StackFrame: ";
+    if (func) {
+        result = result + func->getName().str();
+    }
+    result += "\n";
     // result += memory.to_string() + "\n";
     for (auto& pair : m_objects) {
         result += "  " + pair.first->getName().str() + ": " + pair.second->read().to_string() + "\n";

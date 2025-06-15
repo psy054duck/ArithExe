@@ -64,7 +64,7 @@ namespace ari_exe {
             StackFrame& push_frame(const StackFrame& frame);
 
             // push a new empty frame to the stack
-            StackFrame& push_frame();
+            StackFrame& push_frame(llvm::Function* func=nullptr);
 
             // pop the top frame from the stack
             StackFrame pop_frame();

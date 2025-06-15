@@ -56,4 +56,40 @@ namespace ari_exe {
         }
         return nullptr;
     }
+
+    std::set<llvm::Function*>
+    get_SCC_for(llvm::CallGraph* CG, llvm::Function* F) {
+        std::set<llvm::Function*> SCC;
+        for (auto scc = llvm::scc_begin(CG); scc != llvm::scc_end(CG); ++scc) {
+            auto &node = *scc;
+            auto it = std::find_if(node.begin(), node.end(), [F](llvm::CallGraphNode* n) {
+                                    return n->getFunction() == F;
+                                });
+            if (it != node.end()) {
+                for (auto it = node.begin(); it != node.end(); ++it) {
+                        SCC.insert((*it)->getFunction());
+                }
+                break;
+            }
+        }
+        return SCC;
+    }
+
+    z3::expr_vector
+    get_func_apps(z3::expr e) {
+        z3::expr_vector result(e.ctx());
+        if (e.is_const() || e.is_algebraic()) {
+            return result;
+        } else if (e.is_app() && !e.is_const() && e.decl().decl_kind() == Z3_OP_UNINTERPRETED) {
+            result.push_back(e);
+        } else {
+            for (unsigned i = 0; i < e.num_args(); ++i) {
+                auto sub_exprs = get_func_apps(e.arg(i));
+                for (const auto& sub_expr : sub_exprs) {
+                    result.push_back(sub_expr);
+                }
+            }
+        }
+        return result;
+    }
 }

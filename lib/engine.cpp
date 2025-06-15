@@ -160,7 +160,7 @@ Engine::build_initial_state() {
     }
 
     auto pc = entry->getEntryBlock().getFirstNonPHIOrDbg();
-    memory.push_frame();
+    memory.push_frame(mod->getFunction(ari_exe::default_entry_function_name));
     for (auto& arg : entry->args()) {
         auto name = "ari_" + arg.getName().str();
         auto arg_value = z3ctx.int_const(name.c_str());

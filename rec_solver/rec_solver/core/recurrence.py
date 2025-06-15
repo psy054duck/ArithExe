@@ -24,12 +24,12 @@ class Recurrence:
     @staticmethod
     def mk_loop_recurrence(initial, branches):
         assert(Recurrence.is_loop_recurrence(branches))
-        _, _, recursive_conditions, recursive_transitions = Recurrence.divide_to_base_and_recursive(branches)
+        base_conditions, base_transitions, recursive_conditions, recursive_transitions = Recurrence.divide_to_base_and_recursive(branches)
         ind_var = Recurrence.get_possible_ind_var(recursive_transitions)
         random_rec_case = recursive_transitions[0]
         # initial = {f.subs({ind_var: -1}, simultaneous=True): sp.Symbol(f.name, integer=True) for f in random_rec_case} | initial
         initial = {z3.substitute(f, (ind_var, z3.IntVal(-1))): z3.Int(f.decl().name()) for f in random_rec_case} | initial
-        new_branches = list(zip(recursive_conditions, recursive_transitions))
+        new_branches = list(zip(base_conditions + recursive_conditions, base_transitions + recursive_transitions))
         return LoopRecurrence(initial, new_branches)
 
 
@@ -656,8 +656,12 @@ class LoopRecurrence:
     def _get_app_from_transitions(self):
         app = set()
         for trans in self.transitions:
+            app_from_key = set()
+            for k in trans:
+                last_arg = k.children()[-1]
+                app_from_key.add(z3.simplify(z3.substitute(k, (last_arg, last_arg - 1))))
             trans_app = reduce(set.union, [utils.get_app(expr) for expr in trans.values()], set())
-            app = app | trans_app 
+            app = app | trans_app | app_from_key
         return app
 
     def _get_initial_func(self):

@@ -25,6 +25,8 @@
 #include "rec_solver.h"
 #include "state.h"
 #include "FunctionSummary.h"
+#include "common.h"
+#include "logics.h"
 
 namespace ari_exe {
     class State;
@@ -42,12 +44,14 @@ namespace ari_exe {
             ~RecExecution();
     
             // execute one instruction
-            rec_state_list step(state_ptr state);
+            rec_state_list step(state_ptr state, bool unfold=true);
     
-            // execute the function
-            // return a list of final states
-            rec_state_list run();
-    
+            /**
+             * @brief run the function symbolically and get the final states
+             * @param unfold If true, unfold nested calls
+             */
+            rec_state_list run(bool unfold=true);
+
             // build the initial state
             // assuming the function do not access global variables
             rec_state_ptr build_initial_state();
@@ -81,9 +85,18 @@ namespace ari_exe {
 
         private:
             llvm::Function* F;
-            rec_solver rec_s;
+            z3::context& z3ctx;
             std::optional<FunctionSummary> summary;
             void summarize();
+
+            rec_solver prepare_rec_solver();
+
+            rec_solver prepare_rec_solver_unfold();
+            std::optional<rec_solver> prepare_rec_solver_naive();
+            bool is_base_case(const z3::expr_vector& keys, z3::expr cond);
+
+            std::pair<std::vector<z3::expr>, std::vector<rec_ty>>
+            parse_rec(const rec_state_list& final_states, llvm::Function* f);
     };
 }
 

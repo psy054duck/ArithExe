@@ -25,10 +25,9 @@ def solve_ultimately_periodic_symbolic(rec: LoopRecurrence, bnd=100, preconditio
     # rec.pprint()
     constraints = []
     closed_forms = []
-    local_bnd = 10
     if rec.is_all_initialized():
         return solve_ultimately_periodic_initial(rec, bnd)
-    while z3_solver.check(acc_condition) != z3.unsat and i < local_bnd:
+    while z3_solver.check(acc_condition) != z3.unsat:
         # print(acc_condition)
         i += 1
         model = z3_solver.model()
@@ -68,8 +67,6 @@ def solve_ultimately_periodic_symbolic(rec: LoopRecurrence, bnd=100, preconditio
             closed_forms.append(can_sol.simple_subs(q_sol))
             # closed_forms[-1].pprint()
         # exit(0)
-    if i >= local_bnd:
-        raise UnsolvableError("The recurrence is not solvable within %d iterations." % local_bnd)
     res = SymbolicClosedForm(constraints, closed_forms, rec.ind_var)
     return res
     
@@ -124,7 +121,7 @@ def verify(rec: Recurrence, candidate_sol: PiecewiseClosedForm, pattern: list):
     n = z3.Int('__n')
     k = z3.Int('__k')
     n_range = n >= start
-    candidate_sol.pprint()
+    # candidate_sol.pprint()
     smallest = None
     for r, i in enumerate(periodic_index_seq):
         cond = conditions[i]

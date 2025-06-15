@@ -371,27 +371,53 @@ AInstructionCall::execute_if_not_target(state_ptr state, llvm::Function* target)
 
     if (called_func == target) {
         // TODO: assume all types are int
-        size_t num_args = call_inst->arg_size();
-        z3::sort_vector domain(z3ctx);
-        for (int i = 0; i < num_args; i++) domain.push_back(z3ctx.int_sort());
-        auto func_name = "ari_" + called_func->getName().str();
-        z3::func_decl f = z3ctx.function(func_name.c_str(), domain, z3ctx.int_sort());
-        z3::expr_vector args(z3ctx);
-        for (int i = 0; i < num_args; i++) {
-            auto arg = call_inst->getArgOperand(i);
-            auto arg_value = state->evaluate(arg);
-            args.push_back(arg_value);
-        }
-        auto new_state = std::make_shared<State>(*state);
-        new_state->write(inst, f(args));
-        new_state->step_pc();
-        return {new_state};
+        return execute_naively(state);
+        // size_t num_args = call_inst->arg_size();
+        // z3::sort_vector domain(z3ctx);
+        // for (int i = 0; i < num_args; i++) domain.push_back(z3ctx.int_sort());
+        // auto func_name = "ari_" + called_func->getName().str();
+        // z3::func_decl f = z3ctx.function(func_name.c_str(), domain, z3ctx.int_sort());
+        // z3::expr_vector args(z3ctx);
+        // for (int i = 0; i < num_args; i++) {
+        //     auto arg = call_inst->getArgOperand(i);
+        //     auto arg_value = state->evaluate(arg);
+        //     args.push_back(arg_value);
+        // }
+        // auto new_state = std::make_shared<State>(*state);
+        // new_state->write(inst, f(args));
+        // new_state->step_pc();
+        // return {new_state};
     } else {
         // execute the called function
         auto new_state = execute_normal(state);
         // return execute_if_not_target(new_state, target);
         return {new_state};
     }
+}
+
+std::vector<state_ptr>
+AInstructionCall::execute_naively(state_ptr state) {
+    // execute the function call f(args) by simply creating z3::expr f(args)
+    auto call_inst = dyn_cast<llvm::CallInst>(inst);
+    auto called_func = call_inst->getCalledFunction();
+
+    auto& z3ctx = state->z3ctx;
+
+    size_t num_args = call_inst->arg_size();
+    z3::sort_vector domain(z3ctx);
+    for (int i = 0; i < num_args; i++) domain.push_back(z3ctx.int_sort());
+    auto func_name = "ari_" + called_func->getName().str();
+    z3::func_decl f = z3ctx.function(func_name.c_str(), domain, z3ctx.int_sort());
+    z3::expr_vector args(z3ctx);
+    for (int i = 0; i < num_args; i++) {
+        auto arg = call_inst->getArgOperand(i);
+        auto arg_value = state->evaluate(arg);
+        args.push_back(arg_value);
+    }
+    auto new_state = std::make_shared<State>(*state);
+    new_state->write(inst, f(args));
+    new_state->step_pc();
+    return {new_state};
 }
 
 bool
@@ -699,12 +725,7 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         auto new_states = cur_state->pc->execute(cur_state);
         for (auto& new_state : new_states) states.push(new_state);
     }
-    // while (cur_state->pc->inst != header->getTerminator()) {
-    //     llvm::errs() << *cur_state->pc->inst << "\n";
-    //     auto states = cur_state->pc->execute(cur_state);
-    //     assert(states.size() == 1 && "should only have one state after executing an instruction inside a header");
-    //     cur_state = states[0];
-    // }
+
     for (auto& state : res) {
         state->trace.push_back(header);
         // auto new_pc = AInstruction::create(&*exit_block->begin());

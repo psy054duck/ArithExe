@@ -2,6 +2,9 @@
 #define COMMON_H
 
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/ADT/SCCIterator.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Analysis/CallGraph.h"
 
 #include <string>
 #include <algorithm>
@@ -40,6 +43,17 @@ namespace ari_exe {
      * @brief get the entering block of the given loop
      */
     llvm::BasicBlock* get_loop_entering_block(llvm::Loop* loop);
+
+    /**
+     * @brief Get SCC of the given function
+     */
+    std::set<llvm::Function*> get_SCC_for(llvm::CallGraph* CG, llvm::Function* F);
+
+    /**
+     * @brief Get all function applications in the given expression
+     *        It is not a set, so elements may repeat.
+     */
+    z3::expr_vector get_func_apps(z3::expr e);
 }
 
 #endif

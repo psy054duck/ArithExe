@@ -73,13 +73,16 @@ namespace ari_exe {
     class AInstructionCall: public AInstruction {
         public:
             AInstructionCall(llvm::Instruction* inst): AInstruction(inst) {};
-            std::vector<state_ptr> execute(state_ptr state) override;
+            state_list execute(state_ptr state) override;
 
             // This method should only be called when we are doing function summarization.
             // execute the called function if it is not the given function.
             // if the called function is the given one,
             // do not execute it, just save the function application as the value
-            std::vector<state_ptr> execute_if_not_target(state_ptr state, llvm::Function* target);
+            state_list execute_if_not_target(state_ptr state, llvm::Function* target);
+
+            // execute the function call f(args) by simply creating z3::expr f(args)
+            state_list execute_naively(state_ptr state);
 
             // summarize the called function completely
             // That is, no path condition is given for summarization
@@ -94,9 +97,11 @@ namespace ari_exe {
             state_ptr execute_assume(state_ptr state);
             state_ptr execute_normal(state_ptr state);
             state_ptr execute_malloc(state_ptr state);
+
             // if this function call is cached, execute the cache
             state_ptr execute_cache(state_ptr state);
             state_ptr execute_reach_error(state_ptr state);
+
     };
 
     class AInstructionBranch: public AInstruction {

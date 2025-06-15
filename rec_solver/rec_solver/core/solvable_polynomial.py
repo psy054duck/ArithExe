@@ -51,7 +51,10 @@ def solve_for_exponential_polynomial(bases_multi_dict, func_decls, first_n_value
         eqs = []
         for i, value in enumerate(first_n_values):
             cur_func_value = value[func(i)]
-            eqs.append(deno*utils.to_sympy(cur_func_value) - utils.to_sympy(template).subs(utils.to_sympy(ind_var), i))
+            cur_func_value_sp = utils.to_sympy(cur_func_value)
+            ind_var_sp = utils.to_sympy(ind_var)
+            template_sp = utils.to_sympy(template)
+            eqs.append(deno*cur_func_value_sp - template_sp.subs(ind_var_sp, i))
             # eqs.append(cur_func_value - z3.substitute(template, (ind_var, z3.IntVal(i))))
             # solver.add(cur_func_value == z3.simplify(z3.substitute(template, (ind_var, z3.IntVal(i)))))
         # sol = sp.solve(eqs, [utils.to_sympy(c) for c in coeffs] + [deno])
