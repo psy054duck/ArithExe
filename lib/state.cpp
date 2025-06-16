@@ -42,6 +42,11 @@ State::write(llvm::Value* v, z3::expr value) {
 }
 
 void
+State::write(llvm::Value* v, MemoryObjectPtr memory_object) {
+    memory.write(v, memory_object);
+}
+
+void
 State::step_pc(AInstruction* next_pc) {
     prev_pc = pc;
     if (next_pc) {

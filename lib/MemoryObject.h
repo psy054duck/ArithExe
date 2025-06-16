@@ -30,6 +30,9 @@ namespace ari_exe {
 
             // write the value, which is a scalar value or the first element of an array
             virtual MemoryObjectPtr write(z3::expr value) = 0;
+
+            virtual void write_in_place(z3::expr value) = 0;
+
             // write the value at the given index
             virtual MemoryObjectPtr write(z3::expr_vector index, z3::expr value) = 0;
 
@@ -67,7 +70,10 @@ namespace ari_exe {
 
             MemoryObjectPtr write(z3::expr value) override;
 
+            void write_in_place(z3::expr value) override;
+
             MemoryObjectPtr write(z3::expr_vector index, z3::expr value) override;
+
 
             z3::expr_vector get_dims() const override;
 
@@ -97,6 +103,8 @@ namespace ari_exe {
             MemoryObjectPtr write(z3::expr value) override;
 
             MemoryObjectPtr write(z3::expr_vector index, z3::expr value) override;
+
+            void write_in_place(z3::expr value) override;
 
             z3::expr_vector get_dims() const override;
 

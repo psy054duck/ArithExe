@@ -152,6 +152,11 @@ MemoryObjectScalar::write(z3::expr value) {
     return std::make_shared<MemoryObjectScalar>(get_llvm_value(), value);
 }
 
+void
+MemoryObjectScalar::write_in_place(z3::expr value) {
+    scalar = value;
+}
+
 MemoryObjectPtr
 MemoryObjectScalar::write(z3::expr_vector index, z3::expr value) {
     // Scalar does not support writing with index, just return itself
@@ -165,6 +170,13 @@ MemoryObjectArray::write(z3::expr value) {
     new_array->conditions = in_conditions;
     new_array->expressions = in_expressions;
     return new_array;
+}
+
+void
+MemoryObjectArray::write_in_place(z3::expr value) {
+    auto [in_conditions, in_expressions] = expr2piecewise(value);
+    conditions = in_conditions;
+    expressions = in_expressions;
 }
 
 MemoryObjectPtr

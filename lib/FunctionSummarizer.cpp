@@ -8,9 +8,7 @@ RecExecution::RecExecution(z3::context& z3ctx, llvm::Function* F): z3ctx(z3ctx),
     states.push(initial_state);
 }
 
-RecExecution::~RecExecution() {
-    assert(states.empty());
-}
+RecExecution::~RecExecution() {}
 
 RecExecution::TestResult
 RecExecution::test(state_ptr state) {

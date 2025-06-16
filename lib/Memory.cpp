@@ -17,8 +17,9 @@ Memory::allocate(llvm::Value* value, z3::expr_vector dims) {
 
 void
 Memory::allocate(llvm::Value* value, z3::expr scalar_value) {
-    auto mem_obj = std::make_shared<MemoryObjectScalar>(value, scalar_value);
-    m_heap.insert_or_assign(value, mem_obj);
+    // auto mem_obj = std::make_shared<MemoryObjectScalar>(value, scalar_value);
+    m_stack.write(value, scalar_value);
+    // m_heap.insert_or_assign(value, mem_obj);
 }
 
 void
@@ -195,8 +196,12 @@ Memory::write(llvm::Value* value, z3::expr val) {
                 m_heap.insert_or_assign(value, new_mem_obj);
                 return;
             }
+        } else {
+            auto obj_opt = get_memory_object(value);
+            assert(obj_opt.has_value() && "Unsupported pointer type for writing");
+            auto obj = obj_opt.value();
+            obj->write_in_place(val);
         }
-        assert(false && "Unsupported pointer type for writing");
     }
 
     if (m_stack.read(value).has_value()) {
@@ -236,6 +241,12 @@ Memory::write(llvm::Value* value, z3::expr_vector index, z3::expr val) {
             }
         }
     }
+}
+
+void
+Memory::write(llvm::Value* value, MemoryObjectPtr memory_object) {
+    // TODO: currently write the memory object to the stack
+    m_stack.write(value, memory_object);
 }
 
 std::optional<z3::expr>

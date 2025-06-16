@@ -59,6 +59,24 @@ TEST(BENCHMARK_RECURSION, true_11) {
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/recursion/true_11.c";
 }
 
+TEST(BENCHMARK_RECURSION, true_12) {
+    auto engine = Engine("../../test/benchmark/recursion/true_12.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/recursion/true_12.c";
+}
+
+TEST(BENCHMARK_RECURSION, true_13) {
+    auto engine = Engine("../../test/benchmark/recursion/true_13.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/recursion/true_13.c";
+}
+
+TEST(BENCHMARK_RECURSION, true_14) {
+    auto engine = Engine("../../test/benchmark/recursion/true_14.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/recursion/true_14.c";
+}
+
 TEST(BENCHMARK_RECURSION, true_2) {
     auto engine = Engine("../../test/benchmark/recursion/true_2.c");
     auto veri_res = engine.verify();
@@ -117,6 +135,12 @@ TEST(BENCHMARK_LOOP_FREE, true_4) {
     auto engine = Engine("../../test/benchmark/loop_free/true_4.c");
     auto veri_res = engine.verify();
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loop_free/true_4.c";
+}
+
+TEST(BENCHMARK_PTR, true_1) {
+    auto engine = Engine("../../test/benchmark/ptr/true_1.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/ptr/true_1.c";
 }
 
 TEST(BENCHMARK_ARRAYS_LOOP_FREE, false_1) {

@@ -180,5 +180,11 @@ namespace ari_exe {
             AInstructionGEP(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<state_ptr> execute(state_ptr state) override;
     };
+
+    class AInstructionAlloca: public AInstruction {
+        public:
+            AInstructionAlloca(llvm::Instruction* inst): AInstruction(inst) {};
+            std::vector<state_ptr> execute(state_ptr state) override;
+    };
 }
 #endif

@@ -78,6 +78,9 @@ namespace ari_exe {
             // if value is not found on both sites, it will be inserted to the stack
             void write(llvm::Value* v, z3::expr value);
 
+            // for pointer assignment
+            void write(llvm::Value* v, MemoryObjectPtr memory_object);
+
             /**
              * @brief store gep
              */

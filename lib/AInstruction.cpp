@@ -40,6 +40,8 @@ AInstruction::create(llvm::Instruction* inst) {
         res = new AInstructionStore(store_inst);
     } else if (auto gep_inst = llvm::dyn_cast_or_null<llvm::GetElementPtrInst>(inst)) {
         res = new AInstructionGEP(gep_inst);
+    } else if (auto alloca_inst = llvm::dyn_cast_or_null<llvm::AllocaInst>(inst)) {
+        res = new AInstructionAlloca(alloca_inst);
     } else {
         llvm::errs() << "Unsupported instruction type\n";
         assert(false);
@@ -160,6 +162,22 @@ AInstructionICmp::execute(state_ptr state) {
 }
 
 std::vector<state_ptr>
+AInstructionAlloca::execute(state_ptr state) {
+    auto alloca_inst = dyn_cast<llvm::AllocaInst>(inst);
+    auto& z3ctx = state->z3ctx;
+
+    assert(!alloca_inst->isArrayAllocation() && "Array allocation is not supported yet");
+    // Allocate memory for the alloca instruction
+    auto size = alloca_inst->getAllocatedType()->getPrimitiveSizeInBits() / 8;
+    
+    z3::expr non_det(z3ctx);
+    state_ptr new_state = std::make_shared<State>(*state);
+    new_state->memory.allocate(inst, non_det);
+    new_state->step_pc();
+    return {new_state};
+}
+
+std::vector<state_ptr>
 AInstructionCall::execute(state_ptr state) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = call_inst->getCalledFunction();
@@ -228,9 +246,14 @@ AInstructionCall::execute_normal(state_ptr state) {
     // push the arguments to the stack
     for (unsigned i = 0; i < call_inst->arg_size(); i++) {
         auto arg = call_inst->getArgOperand(i);
-        auto arg_value = state->evaluate(arg);
         auto param = called_func->getArg(i);
-        new_state->write(param, arg_value);
+        if (arg->getType()->isPointerTy()) {
+            auto obj = state->get_memory_object(arg);
+            new_state->write(param, obj);
+        } else {
+            auto arg_value = state->evaluate(arg);
+            new_state->write(param, arg_value);
+        }
     }
     auto called_first_inst = &*called_func->getEntryBlock().getFirstNonPHIOrDbg();
     auto next_pc = AInstruction::create(called_first_inst);
@@ -343,7 +366,7 @@ AInstructionCall::execute_unknown(state_ptr state) {
     }
     state_ptr new_state = std::make_shared<State>(*state);
     new_state->write(inst, result);
-    if (called_func->getName().ends_with("uint")) {
+    if (called_func && called_func->getName().ends_with("uint")) {
         new_state->append_path_condition(result >= z3ctx.int_val(0));
     }
     new_state->step_pc();

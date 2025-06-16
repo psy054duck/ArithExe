@@ -13,7 +13,6 @@ LoopSummary::LoopSummary(const LoopSummary& other): params(other.params), summar
 
 z3::expr_vector
 LoopSummary::evaluate(const z3::expr_vector& args) {
-    assert(args.size() == params.size());
     z3::expr_vector result(args.ctx());
     if (is_over_approx) {
         for (auto& v : summary_over_approx) {

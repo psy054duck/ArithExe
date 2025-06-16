@@ -45,6 +45,13 @@ MStack::write(llvm::Value* v, z3::expr value) {
 }
 
 void
+MStack::write(llvm::Value* v, MemoryObjectPtr memory_object) {
+    assert(!frames.empty());
+    auto& top_frame = frames.top();
+    top_frame.write(v, memory_object);
+}
+
+void
 MStack::write(llvm::Value* v, z3::expr_vector index, z3::expr value) {
     assert(!frames.empty());
     auto& top_frame = frames.top();
@@ -87,6 +94,11 @@ MStack::StackFrame::write(llvm::Value* symbol, z3::expr_vector index, z3::expr v
     assert(it != m_objects.end() && "Memory object not found in the stack frame.");
     new_obj = it->second->write(value);
     m_objects.insert_or_assign(symbol, new_obj);
+}
+
+void
+MStack::StackFrame::write(llvm::Value* symbol, MemoryObjectPtr obj) {
+    m_objects.insert_or_assign(symbol, obj);
 }
 
 std::string

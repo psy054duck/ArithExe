@@ -34,6 +34,9 @@ namespace ari_exe {
 
                 void write(llvm::Value* symbol, z3::expr_vector index, z3::expr value);
 
+                // used for pointer assignment
+                void write(llvm::Value* symbol, MemoryObjectPtr memory_object);
+
                 std::optional<z3::expr> read(llvm::Value* v) const;
 
                 std::optional<MemoryObjectPtr> get_memory_object(llvm::Value* v) const;
@@ -85,6 +88,7 @@ namespace ari_exe {
             // add or update a value in the top frame
             void write(llvm::Value* v, z3::expr value);
             void write(llvm::Value* v, z3::expr_vector index, z3::expr value);
+            void write(llvm::Value* v, MemoryObjectPtr memory_object);
 
             // get the number of frames in the stack
             size_t size() const {

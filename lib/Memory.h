@@ -51,6 +51,11 @@ namespace ari_exe {
             void write(llvm::Value* value, z3::expr_vector index, z3::expr val);
 
             /**
+             * @brief Write the memory object to the stack, heap, or globals based on the LLVM value.
+             */
+            void write(llvm::Value* value, MemoryObjectPtr memory_object);
+
+            /**
              * @brief Store gep
              */
             void store_gep(llvm::GetElementPtrInst* gep);
