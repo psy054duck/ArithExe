@@ -195,8 +195,9 @@ AInstructionCall::execute_normal(state_ptr state) {
     auto called_func = call_inst->getCalledFunction();
 
     // check if the function is recursive and not yet summarized
+    auto ret_type = called_func->getReturnType();
     bool is_visited = Cache::get_instance()->is_visited(called_func);
-    if (!is_visited && !state->is_summarizing() && is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
+    if (!ret_type->isVoidTy() && !is_visited && !state->is_summarizing() && is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
         Cache::get_instance()->mark_visited(called_func);
         auto summary = summarize_complete(state->z3ctx);
         if (summary.has_value()) {

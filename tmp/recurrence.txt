@@ -1,0 +1,5 @@
+if (And((true), ((ari_arg) == (0)))) {
+	ari_sum((ari_arg), (ari_arg5)) = ari_arg5;
+} else if (And((true), (!((ari_arg) == (0))))) {
+	ari_sum((ari_arg), (ari_arg5)) = ari_sum((((- 1)) + (ari_arg)), ((1) + (ari_arg5)));
+} 
