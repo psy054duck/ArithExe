@@ -174,19 +174,19 @@ namespace ari_exe {
              *        Thus, this function is added another parameter to denote
              *        the loop counter.
              */
-            z3::func_decl get_array_rec_func(const MemoryObjectArrayPtr array);
+            z3::func_decl get_array_rec_func(const MemoryObjectPtr array);
 
             /**
              * @brief get base case for array summarization
              * @return A pair of (condition , transition)
              */
-            std::pair<z3::expr, rec_ty> get_array_base_case(const MemoryObjectArrayPtr array);
+            std::pair<z3::expr, rec_ty> get_array_base_case(const MemoryObjectPtr array);
 
             /**
              * @brief convert a finial state to recursive case
              * @return A pair of (condition , transition)
              */
-            std::pair<std::vector<z3::expr>, std::vector<rec_ty>> get_array_recursive_case(loop_state_ptr final_state, const MemoryObjectArrayPtr array);
+            std::pair<std::vector<z3::expr>, std::vector<rec_ty>> get_array_recursive_case(loop_state_ptr final_state, const MemoryObjectPtr array);
 
             /**
              * @brief solve recurrence
@@ -197,7 +197,7 @@ namespace ari_exe {
              * @brief get the frame case for array summarization
              * @return A pair of (condition , transition)
              */
-            std::pair<z3::expr, rec_ty> get_array_frame_case(std::vector<z3::expr> conditions, const MemoryObjectArrayPtr array);
+            std::pair<z3::expr, rec_ty> get_array_frame_case(std::vector<z3::expr> conditions, const MemoryObjectPtr array);
 
             /**
              * @brief get all header phis in order

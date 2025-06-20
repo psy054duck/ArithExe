@@ -25,36 +25,22 @@ namespace ari_exe {
         public:
             struct StackFrame {
                 StackFrame() = default;
-                StackFrame(llvm::Function* func): func(func) {}
-                StackFrame(const StackFrame&) = default;
+                StackFrame(const Expression& base, llvm::Function* func): base(base), func(func) {}
+                StackFrame(const StackFrame& other): prev_pc(other.prev_pc), base(other.base), locals(other.locals), temp_objects(other.temp_objects), func(other.func) {}
                 StackFrame& operator=(const StackFrame&) = default;
 
-                // insert or assign a value to the stack frame
-                void write(llvm::Value* symbol, z3::expr value);
+                MemoryObjectPtr get_object(llvm::Value* v) const;
 
-                void write(llvm::Value* symbol, z3::expr_vector index, z3::expr value);
-
-                // used for pointer assignment
-                void write(llvm::Value* symbol, MemoryObjectPtr memory_object);
-
-                std::optional<z3::expr> read(llvm::Value* v) const;
-
-                std::optional<MemoryObjectPtr> get_memory_object(llvm::Value* v) const;
-
-                // get all arrays in the stack frame
-                std::vector<MemoryObjectArrayPtr> get_arrays() const;
-
-                // record values for stack variables
-                // SymbolTable<z3::expr> table;
-                // Memory memory;
-                std::map<llvm::Value*, MemoryObjectPtr> m_objects; // map of values in the stack frame
-
-                // record the called site
                 AInstruction* prev_pc = nullptr;
 
-                std::string to_string() const;
+                Expression base;
 
-                // representing the 
+                std::vector<MemoryObject> locals; // local variables in the stack frame
+
+                // temporary objects created in the stack frame, used for storing intermediate results
+                MemoryObjectPtr put_temp(llvm::Value* llvm_value, const Expression& value);
+                MemoryObjectPtr put_temp(llvm::Value* llvm_value, const MemoryAddress_ty& ptr_value);
+                std::map<llvm::Value*, MemoryObject> temp_objects;
                 llvm::Function* func;
             };
 
@@ -70,37 +56,39 @@ namespace ari_exe {
             StackFrame& push_frame(llvm::Function* func=nullptr);
 
             // pop the top frame from the stack
-            StackFrame pop_frame();
+            StackFrame& pop_frame();
 
-            // get the top frame from the stack
-            StackFrame& top_frame() const;
-            StackFrame& top_frame();
+            // get the top frame of the stack
+            StackFrame& top_frame() { 
+                assert(!frames.empty() && "Stack is empty");
+                return frames.top(); 
+            }
 
-            // get the value of a variable in the top frame
-            std::optional<z3::expr> read(llvm::Value* v) const;
-
-            // get the memory object of a variable in the top frame
-            std::optional<MemoryObjectPtr> get_memory_object(llvm::Value* v) const;
-
-            // get all arrays in the top frame
-            std::vector<MemoryObjectArrayPtr> get_arrays() const;
-
-            // add or update a value in the top frame
-            void write(llvm::Value* v, z3::expr value);
-            void write(llvm::Value* v, z3::expr_vector index, z3::expr value);
-            void write(llvm::Value* v, MemoryObjectPtr memory_object);
-
-            // get the number of frames in the stack
             size_t size() const {
                 return frames.size();
             }
 
-            std::string top_frame_to_string() const {
-                return frames.top().to_string();
-            }
+            MemoryObjectPtr allocate(llvm::Value* value, z3::expr_vector dims);
+
+            Expression load(const MemoryAddress_ty& addr);
+
+            void store(const MemoryAddress_ty& addr, const Expression& value);
+
+            MemoryObjectPtr put_temp(llvm::Value* llvm_value, const Expression& value);
+            MemoryObjectPtr put_temp(llvm::Value* llvm_value, const MemoryAddress_ty& ptr_value);
+
+            // Get the object created by the given llvm::Value
+            MemoryObjectPtr get_object(llvm::Value* v) const;
+
+            // given a memory address, get the memory object pointed by the base
+            MemoryObjectPtr get_object(const MemoryAddress_ty& addr) const;
+
+            std::vector<MemoryObjectPtr> get_arrays() const;
 
         private:
             std::stack<StackFrame> frames;
+
+            std::vector<MemoryObject> objects;
     };
 }
 #endif

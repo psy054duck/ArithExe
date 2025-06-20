@@ -50,7 +50,7 @@ Engine::run(state_ptr state) {
         states.pop();
         spdlog::debug("Current Instruction: {}", cur_state->pc->inst->getName().str());
         llvm::errs() << *cur_state->pc->inst << "\n";
-        llvm::errs() << cur_state->memory.to_string() << "\n";
+        // llvm::errs() << cur_state->memory.to_string() << "\n";
 
         if (cur_state->status == State::TERMINATED) {
             continue;
@@ -111,8 +111,8 @@ Engine::run() {
 Engine::VeriResult
 Engine::verify(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->get_path_condition());
-    assumptions.push_back(!state->verification_condition);
+    assumptions.push_back(state->get_path_condition().as_expr());
+    assumptions.push_back(!state->verification_condition.as_expr());
     auto res = solver.check(assumptions);
     Engine::VeriResult result;
     switch (res) {
@@ -133,7 +133,7 @@ Engine::verify(state_ptr state) {
 Engine::TestResult
 Engine::test(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->get_path_condition());
+    assumptions.push_back(state->get_path_condition().as_expr());
     auto res = solver.check(assumptions);
     Engine::TestResult result;
     switch (res) {
@@ -164,7 +164,9 @@ Engine::build_initial_state() {
     for (auto& arg : entry->args()) {
         auto name = "ari_" + arg.getName().str();
         auto arg_value = z3ctx.int_const(name.c_str());
-        memory.write(&arg, arg_value);
+        // memory.allocate(&arg, arg_value);
+        auto obj = memory.allocate(&arg, z3::expr_vector(z3ctx));
+        obj->write(arg_value);
     }
     auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr,
                                memory, z3ctx.bool_val(true), {}));

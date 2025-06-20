@@ -98,7 +98,7 @@ AInstructionBinary::execute(state_ptr state) {
     auto op1_value = state->evaluate(op1);
 
     auto& z3ctx = op0_value.ctx();
-    z3::expr result(z3ctx);
+    Expression result;
 
     if (opcode == llvm::Instruction::Add) {
         result = op0_value + op1_value;
@@ -111,9 +111,9 @@ AInstructionBinary::execute(state_ptr state) {
     } else if (opcode == llvm::Instruction::SRem || opcode == llvm::Instruction::URem) {
         result = op0_value % op1_value;
     } else if (opcode == llvm::Instruction::And) {
-        result = op0_value & op1_value;
+        result = op0_value && op1_value;
     } else if (opcode == llvm::Instruction::Or) {
-        result = op0_value | op1_value;
+        result = op0_value || op1_value;
     } else if (opcode == llvm::Instruction::Xor) {
         result = op0_value ^ op1_value;
     } else {
@@ -121,7 +121,7 @@ AInstructionBinary::execute(state_ptr state) {
     }
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(inst, result);
+    new_state->memory.put_temp(inst, result);
     new_state->step_pc();
 
     return {new_state};
@@ -137,7 +137,7 @@ AInstructionICmp::execute(state_ptr state) {
     auto op0_value = state->evaluate(op0);
     auto op1_value = state->evaluate(op1);
     auto& z3ctx = op0_value.ctx();
-    z3::expr result(z3ctx);
+    Expression result;
 
     if (pred == llvm::ICmpInst::ICMP_EQ) {
         result = op0_value == op1_value;
@@ -156,7 +156,7 @@ AInstructionICmp::execute(state_ptr state) {
         assert(false);
     }
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(inst, result);
+    new_state->memory.put_temp(inst, result);
     new_state->step_pc();
     return {new_state};
 }
@@ -170,9 +170,10 @@ AInstructionAlloca::execute(state_ptr state) {
     // Allocate memory for the alloca instruction
     auto size = alloca_inst->getAllocatedType()->getPrimitiveSizeInBits() / 8;
     
-    z3::expr non_det(z3ctx);
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->memory.allocate(inst, non_det);
+    z3::expr_vector sizes(z3ctx);
+    sizes.push_back(z3ctx.int_val(size));
+    new_state->memory.allocate(inst, sizes);
     new_state->step_pc();
     return {new_state};
 }
@@ -228,13 +229,16 @@ AInstructionCall::execute_normal(state_ptr state) {
 
     if (summary.has_value()) {
         state_ptr new_state = std::make_shared<State>(*state);
-        z3::expr_vector args(z3ctx);
+        std::vector<Expression> args;
         for (unsigned i = 0; i < call_inst->arg_size(); i++) {
             auto arg = call_inst->getArgOperand(i);
             auto arg_value = state->evaluate(arg);
             args.push_back(arg_value);
         }
-        new_state->write(inst, summary->evaluate(args));
+
+        auto function_value = summary->evaluate(args);
+        // new_state->memory.allocate(inst, z3::expr_vector(z3ctx));
+        new_state->memory.put_temp(inst, function_value);
         new_state->step_pc();
         return new_state;
     }
@@ -242,17 +246,20 @@ AInstructionCall::execute_normal(state_ptr state) {
     z3::expr result(z3ctx);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->push_frame(called_func);
+    auto& frame = new_state->memory.push_frame(called_func);
+    frame.prev_pc = state->pc;
     // push the arguments to the stack
     for (unsigned i = 0; i < call_inst->arg_size(); i++) {
         auto arg = call_inst->getArgOperand(i);
         auto param = called_func->getArg(i);
-        if (arg->getType()->isPointerTy()) {
-            auto obj = state->get_memory_object(arg);
-            new_state->write(param, obj);
+        if (param->getType()->isPointerTy()) {
+            auto target_obj = new_state->memory.get_object(arg);
+            // auto addr = new_state->memory.allocate(param, target_obj->get_address());
+            new_state->memory.put_temp(param, target_obj->get_addr());
         } else {
-            auto arg_value = state->evaluate(arg);
-            new_state->write(param, arg_value);
+            auto obj = state->memory.get_object(arg);
+            // new_state->memory.allocate(param, obj->read());
+            new_state->memory.put_temp(param, obj->read());
         }
     }
     auto called_first_inst = &*called_func->getEntryBlock().getFirstNonPHIOrDbg();
@@ -273,7 +280,7 @@ AInstructionCall::execute_cache(state_ptr state) {
     for (int i = 0; i < call_inst->arg_size(); i++) {
         auto arg = call_inst->getArgOperand(i);
         auto state_value = state->evaluate(arg);
-        auto concrete_value = model.eval(state_value, true);
+        auto concrete_value = model.eval(state_value.as_expr(), true);
         if (!state->is_concrete(state_value, concrete_value)) {
             return nullptr;
         }
@@ -284,7 +291,9 @@ AInstructionCall::execute_cache(state_ptr state) {
         // if the function is cached, return the cached value
         state_ptr new_state = std::make_shared<State>(*state);
         auto& z3ctx = state->z3ctx;
-        new_state->write(inst, z3ctx.int_val(cached_value.value()));
+        auto value = z3ctx.int_val(cached_value.value());
+        // new_state->memory.allocate(inst, value);
+        new_state->memory.put_temp(inst, value);
         new_state->step_pc();
         return new_state;
     }
@@ -306,7 +315,7 @@ AInstructionCall::execute_assert(state_ptr state) {
     state_ptr new_state = std::make_shared<State>(*state);
     new_state->step_pc();
     new_state->status = State::VERIFYING;
-    if (cond_value.is_bool()) {
+    if (cond_value.as_expr().is_bool()) {
         new_state->verification_condition = cond_value;
     } else {
         new_state->verification_condition = cond_value != z3ctx.int_val(0);
@@ -348,7 +357,7 @@ AInstructionCall::execute_unknown(state_ptr state) {
 
     auto& z3ctx = state->z3ctx;
 
-    z3::expr result(z3ctx);
+    Expression result(z3ctx);
 
     // external function value is unknown, so symbolic
     auto name = "ari_" + inst->getName();
@@ -365,7 +374,8 @@ AInstructionCall::execute_unknown(state_ptr state) {
         assert(false);
     }
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(inst, result);
+    new_state->memory.put_temp(inst, result);
+    // new_state->write(inst, result);
     if (called_func && called_func->getName().ends_with("uint")) {
         new_state->append_path_condition(result >= z3ctx.int_val(0));
     }
@@ -382,7 +392,7 @@ AInstructionCall::execute_malloc(state_ptr state) {
     // TODO: assume it an integer array and the size of an int is 32 bits;
     // TODO: assume it is 1-d
     z3::expr_vector dims(state->z3ctx);
-    dims.push_back((size_bytes_expr / state->z3ctx.int_val(4)).simplify());
+    dims.push_back((size_bytes_expr / state->z3ctx.int_val(4)).as_expr().simplify());
     auto new_state = std::make_shared<State>(*state);
     new_state->memory.allocate(call_inst, dims);
     new_state->step_pc();
@@ -424,10 +434,12 @@ AInstructionCall::execute_naively(state_ptr state) {
     for (int i = 0; i < num_args; i++) {
         auto arg = call_inst->getArgOperand(i);
         auto arg_value = state->evaluate(arg);
-        args.push_back(arg_value);
+        args.push_back(arg_value.as_expr());
     }
     auto new_state = std::make_shared<State>(*state);
-    new_state->write(inst, f(args));
+    // new_state->write(inst, f(args));
+    // new_state->memory.allocate(inst, f(args));
+    new_state->memory.put_temp(inst, f(args));
     new_state->step_pc();
     return {new_state};
 }
@@ -530,7 +542,7 @@ AInstructionReturn::execute(state_ptr state) {
     auto ret = dyn_cast<llvm::ReturnInst>(inst);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    auto frame = new_state->pop_frame();
+    auto& frame = new_state->memory.pop_frame();
 
     auto ret_value = ret->getReturnValue();
     new_state->step_pc(frame.prev_pc);
@@ -540,7 +552,8 @@ AInstructionReturn::execute(state_ptr state) {
 
         // go back to the called site
         assert(call_inst);
-        new_state->write(call_inst, ret_expr);
+        // new_state->memory.allocate(call_inst, ret_expr);
+        new_state->memory.put_temp(call_inst, ret_expr);
         cache_func_value(state, ret_expr);
     }
     new_state->step_pc();
@@ -548,18 +561,18 @@ AInstructionReturn::execute(state_ptr state) {
 }
 
 void
-AInstructionReturn::cache_func_value(state_ptr state, z3::expr result) {
+AInstructionReturn::cache_func_value(state_ptr state, const Expression& result) {
     auto cache_instance = Cache::get_instance();
-    auto& top_frame = state->top_frame();
+    auto& top_frame = state->memory.top_frame();
     param_list_ty args;
 
     auto model = state->get_model();
-    auto concrete_result = model.eval(result, false);
+    auto concrete_result = model.eval(result.as_expr(), false);
     if (!state->is_concrete(result, concrete_result)) return;
 
     for (auto& param : top_frame.func->args()) {
         auto arg_value = state->evaluate(&param);
-        auto concrete_value = model.eval(arg_value, true);
+        auto concrete_value = model.eval(arg_value.as_expr(), true);
         if (!state->is_concrete(arg_value, concrete_value)) return;
         args.push_back(concrete_value.as_int64());
     }
@@ -575,7 +588,9 @@ AInstructionZExt::execute(state_ptr state) {
     z3::expr result(z3ctx);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(inst, op_value);
+    // new_state->write(inst, op_value);
+    // new_state->memory.allocate(inst, op_value);
+    new_state->memory.put_temp(inst, op_value);
     new_state->step_pc();
     return {new_state};
 }
@@ -589,7 +604,9 @@ AInstructionSExt::execute(state_ptr state) {
     z3::expr result(z3ctx);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(inst, op_value);
+    // new_state->write(inst, op_value);
+    // new_state->memory.allocate(inst, op_value);
+    new_state->memory.put_temp(inst, op_value);
     new_state->step_pc();
     return {new_state};
 }
@@ -620,7 +637,9 @@ AInstructionPhi::execute(state_ptr state) {
     auto selected_value_expr = state->evaluate(selected_value);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(inst, selected_value_expr);
+    // new_state->write(inst, selected_value_expr);
+    // new_state->memory.allocate(inst, selected_value_expr);
+    new_state->memory.put_temp(inst, selected_value_expr);
     new_state->step_pc();
 
     return {new_state};
@@ -670,9 +689,13 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                     z3::expr_vector dst(new_state->z3ctx);
                     src.push_back(manager->get_ind_var());
                     dst.push_back(N.value());
-                    new_state->write(phi, z3::ite(*N == 0, initial_value_expr, evaluated_value.substitute(src, dst)));
+                    // new_state->write(phi, z3::ite(*N == 0, initial_value_expr, evaluated_value.substitute(src, dst)));
+                    // new_state->memory.allocate(phi, z3::ite(*N == 0, initial_value_expr, evaluated_value.substitute(src, dst)));
+                    new_state->memory.put_temp(phi, z3::ite(*N == 0, initial_value_expr.as_expr(), evaluated_value.substitute(src, dst)));
                 } else {
-                    new_state->write(phi, evaluated_value);
+                    // new_state->write(phi, evaluated_value);
+                    // new_state->memory.allocate(phi, evaluated_value);
+                    new_state->memory.put_temp(phi, evaluated_value);
                 }
             }
         }
@@ -697,7 +720,9 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
             }
         }
         auto arrays_ptr = state->memory.get_arrays();
-        for (auto& array_ptr : arrays_ptr) {
+        for (int i = 0; i < arrays_ptr.size(); i++) {
+            // for each array, we need to get the signature
+            auto array_ptr = arrays_ptr[i];
             args.push_back(array_ptr->get_signature());
         }
         z3::expr_vector closed_forms = summary->evaluate(args);
@@ -711,9 +736,13 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                 z3::expr_vector dst(z3ctx);
                 src.push_back(manager->get_ind_var());
                 dst.push_back(N.value());
-                new_state->write(modified_value, closed_forms[i].substitute(src, dst));
+                // new_state->write(modified_value, closed_forms[i].substitute(src, dst));
+                // new_state->memory.allocate(modified_value, closed_forms[i].substitute(src, dst));
+                new_state->memory.put_temp(modified_value, closed_forms[i].substitute(src, dst));
             } else {
-                new_state->write(modified_value, closed_forms[i]);
+                // new_state->write(modified_value, closed_forms[i]);
+                // new_state->memory.allocate(modified_value, closed_forms[i]);
+                new_state->memory.put_temp(modified_value, closed_forms[i]);
             }
         }
     }
@@ -760,7 +789,9 @@ AInstructionSelect::_execute(std::shared_ptr<state_ty> state) {
     auto true_value = select_inst->getTrueValue();
     auto true_value_expr = state->evaluate(true_value);
     auto true_state = std::make_shared<state_ty>(*state);
-    true_state->write(inst, true_value_expr);
+    // true_state->memory.allocate(inst, true_value_expr);
+    // true_state->write(inst, true_value_expr);
+    true_state->memory.put_temp(inst, true_value_expr);
     true_state->status = State::TESTING;
     // true_state->path_condition = state->path_condition && cond_value;
     true_state->append_path_condition(cond_value);
@@ -769,7 +800,9 @@ AInstructionSelect::_execute(std::shared_ptr<state_ty> state) {
     auto false_value = select_inst->getFalseValue();
     auto false_value_expr = state->evaluate(false_value);
     auto false_state = std::make_shared<state_ty>(*state);
-    false_state->write(inst, false_value_expr);
+    // false_state->memory.allocate(inst, false_value_expr);
+    false_state->memory.put_temp(inst, false_value_expr);
+    // false_state->write(inst, false_value_expr);
     false_state->status = State::TESTING;
     // false_state->path_condition = state->path_condition && !cond_value;
     false_state->append_path_condition(!cond_value);
@@ -799,7 +832,9 @@ AInstructionLoad::execute(state_ptr state) {
     auto ptr = load_inst->getPointerOperand();
     auto load_value = state->evaluate(ptr);
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(inst, load_value);
+    // new_state->write(inst, load_value);
+    // new_state->memory.allocate(inst, load_value);
+    new_state->memory.put_temp(inst, load_value);
     new_state->step_pc();
     return {new_state};
     // auto ptr_value = state->evaluate(ptr);
@@ -814,8 +849,10 @@ AInstructionStore::execute(state_ptr state) {
     auto value_expr = state->evaluate(value);
 
     state_ptr new_state = std::make_shared<State>(*state);
-    new_state->write(ptr, value_expr);
-    // new_state->write(inst, value_expr);
+    // new_state->write(ptr, value_expr);
+    // new_state->memory.allocate(ptr, value_expr);
+    auto obj = new_state->memory.get_object(ptr);
+    obj->write(value_expr);
     new_state->step_pc();
     return {new_state};
 }
@@ -825,7 +862,7 @@ AInstructionGEP::execute(state_ptr state) {
     auto gep = dyn_cast_or_null<llvm::GetElementPtrInst>(inst);
     assert(gep);
     auto new_state = std::make_shared<State>(*state);
-    new_state->store_gep(gep);
+    // new_state->store_gep(gep);
     new_state->step_pc();
     return {new_state};
 }

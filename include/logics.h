@@ -67,6 +67,11 @@ namespace ari_exe {
     z3::expr piecewise2ite(const z3::expr_vector& conditions, const z3::expr_vector& expressions);
 
     /**
+     * @brief check if the fml is feasible
+     */
+    bool is_feasible(const z3::expr& fml, std::optional<z3::expr> assumption = std::nullopt);
+
+    /**
      * @brief simplify the given expression under assumptions
      * @param expr the expression to be simplified
      * @param assumptions the assumptions to be used for simplification
@@ -79,7 +84,6 @@ namespace ari_exe {
      * @return a minimized conjunction of the literals
      */
     z3::expr_vector minimize_conjunction(const z3::expr_vector& conjuncts, int pivot = 0);
-
 
     /**
      * @brief merge cases for piecewise expressions

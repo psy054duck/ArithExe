@@ -5,6 +5,8 @@ using namespace ari_exe;
 
 AnalysisManager* AnalysisManager::instance = new AnalysisManager();
 
+// z3::context AnalysisManager::z3ctx;
+
 int AnalysisManager::unknown_counter = 0;
 
 std::unique_ptr<llvm::Module>

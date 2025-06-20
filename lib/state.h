@@ -11,6 +11,7 @@
 #include "z3++.h"
 
 #include "Memory.h"
+#include "Expr.h"
 
 namespace ari_exe {
     class AInstruction;
@@ -46,7 +47,7 @@ namespace ari_exe {
     class State {
         private:
             // path condition collected so far
-            z3::expr path_condition;
+            Expression path_condition;
 
         public:
             enum Status {
@@ -58,54 +59,21 @@ namespace ari_exe {
             };
 
         public:
-            State(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, z3::expr path_condition, const trace_ty& trace, Status status = RUNNING): z3ctx(z3ctx), pc(pc), prev_pc(prev_pc), memory(memory), path_condition(path_condition), trace(trace), status(status) {};
+            State(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const trace_ty& trace, Status status = RUNNING): z3ctx(z3ctx), pc(pc), prev_pc(prev_pc), memory(memory), path_condition(path_condition), trace(trace), status(status) {};
             State(const State& state): z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition) {};
 
             // if the state is in the process of summarizing a loop
             virtual bool is_summarizing() const { return false; }
 
-            virtual void append_path_condition(z3::expr _path_condition);
+            virtual void append_path_condition(const Expression& _path_condition);
 
             /**
              * @brief check if the given e is concrete and equal to concrete_value in the current state
              */
-            bool is_concrete(z3::expr e, z3::expr concrete_value);
+            bool is_concrete(const Expression& e, const Expression& concrete_value);
 
             // step the pc
             void step_pc(AInstruction* next_pc = nullptr);
-
-            // define or assign a value to the stack or global
-            // if value is not found on both sites, it will be inserted to the stack
-            void write(llvm::Value* v, z3::expr value);
-
-            // for pointer assignment
-            void write(llvm::Value* v, MemoryObjectPtr memory_object);
-
-            /**
-             * @brief store gep
-             */
-            void store_gep(llvm::GetElementPtrInst* v);
-
-            /**
-             * @brief get gep
-             */
-            Memory::ObjectPtr get_gep(llvm::GetElementPtrInst* v) const;
-
-            /**
-             * @brief load a value from memory
-             * @param v a pointer
-             */
-            z3::expr load(llvm::Value* v) const;
-
-            // push a new variables to the stack
-            // void push_value(llvm::Value* v, z3::expr value);
-
-            // allocate a new stack frame
-            MStack::StackFrame& push_frame(llvm::Function* func);
-
-            MStack::StackFrame pop_frame();
-
-            MStack::StackFrame& top_frame();
 
             // The context for Z3
             z3::context& z3ctx;
@@ -118,7 +86,7 @@ namespace ari_exe {
             // memory model for symbolic execution
             Memory memory;
 
-            z3::expr evaluate(llvm::Value* v);
+            Expression evaluate(llvm::Value* v);
 
             trace_ty trace;
 
@@ -126,7 +94,7 @@ namespace ari_exe {
             Status status = RUNNING;
 
             // verification condition
-            z3::expr verification_condition = z3ctx.bool_val(true);
+            Expression verification_condition = z3ctx.bool_val(true);
 
             // Function summarization result shared by all states
             static SymbolTable<FunctionSummary>* func_summaries;
@@ -134,13 +102,13 @@ namespace ari_exe {
             // Loop summary result shared by all states
             static SymbolTable<LoopSummary>* loop_summaries;
 
-            z3::expr get_path_condition() const { return path_condition; }
+            Expression get_path_condition() const { return path_condition; }
 
-            Memory::ObjectPtr parse_pointer(llvm::Value* value) const {
-                return memory.parse_pointer(value);
-            }
+            // Memory::ObjectPtr parse_pointer(llvm::Value* value) const {
+            //     return memory.parse_pointer(value);
+            // }
 
-            MemoryObjectPtr get_memory_object(llvm::Value* value) const;
+            // MemoryObjectPtr get_memory_object(llvm::Value* value) const;
 
             /**
              * @brief get a model for current path condition
@@ -156,7 +124,7 @@ namespace ari_exe {
 
     class LoopState: public State {
         public:
-            LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
+            LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
             LoopState(const State& state): State(state), path_condition_in_loop(state.z3ctx.bool_val(true)) {};
             LoopState(const LoopState& state): State(state), path_condition_in_loop(state.path_condition_in_loop) {};
 
@@ -166,11 +134,11 @@ namespace ari_exe {
             // append a new path condition to the current state
             // besides, it also appends the path condition in loop body
             // if this state is not exiting the loop
-            void append_path_condition(z3::expr _path_condition) override;
+            void append_path_condition(const Expression& _path_condition) override;
 
             // path condition in loop body, loop guard is discarded
             // should only be used when summarize a loop
-            z3::expr path_condition_in_loop;
+            Expression path_condition_in_loop;
 
             /**
              * @brief store modified values by the loop
@@ -180,7 +148,7 @@ namespace ari_exe {
 
     class RecState: public State {
         public:
-            RecState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, z3::expr path_condition, z3::expr path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
+            RecState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
             RecState(const State& state): State(state) {};
             RecState(const RecState& state): State(state) {};
 

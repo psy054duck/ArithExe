@@ -2,10 +2,10 @@
 
 using namespace ari_exe;
 
-z3::expr
-FunctionSummary::evaluate(const z3::expr_vector& args) {
+Expression
+FunctionSummary::evaluate(const std::vector<Expression>& args) {
     assert(args.size() == params.size());
-    z3::expr result = summary.substitute(params, args);
+    auto result = summary.subs(params, args);
     return result;
 }
 

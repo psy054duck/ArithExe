@@ -2,6 +2,7 @@
 #define FUNCTIONSUMMARY_H
 
 #include "z3++.h"
+#include "Expr.h"
 
 namespace ari_exe {
 
@@ -14,14 +15,14 @@ namespace ari_exe {
             FunctionSummary(const FunctionSummary& other);
             
             // evaluate the function with the given arguments
-            z3::expr evaluate(const z3::expr_vector& args);
+            Expression evaluate(const std::vector<Expression>& args);
 
         private:
             // formal parameters of the function
             z3::expr_vector params;
 
             // function value
-            z3::expr summary;
+            Expression summary;
     };
 }
 

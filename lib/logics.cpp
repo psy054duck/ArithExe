@@ -118,6 +118,16 @@ namespace ari_exe {
         return piecewise2ite(feasible_conditions, feasible_expressions);
     }
 
+    bool is_feasible(const z3::expr& fml, std::optional<z3::expr> assumption) {
+        auto& z3ctx = fml.ctx();
+        z3::solver s(z3ctx);
+        if (assumption.has_value()) {
+            s.add(assumption.value());
+        }
+        s.add(fml);
+        return s.check() == z3::sat;
+    }
+
     bool is_equivalent(const z3::expr& f1, const z3::expr& f2) {
         auto& z3ctx = f1.ctx();
         z3::solver s(z3ctx);
@@ -228,6 +238,11 @@ namespace ari_exe {
         if (conditions.size() != expressions.size()) {
             throw std::invalid_argument("Conditions and expressions must have the same size.");
         }
+
+        if (conditions.size() == 1) {
+            return expressions[0];
+        }
+
         auto [new_conditions, new_expressions] = merge_cases(conditions, expressions);
         z3::expr ite_expr = new_expressions.back();
         for (int i = (int) new_conditions.size() - 2; i >= 0; --i) {

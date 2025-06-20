@@ -13,7 +13,7 @@ RecExecution::~RecExecution() {}
 RecExecution::TestResult
 RecExecution::test(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->get_path_condition());
+    assumptions.push_back(state->get_path_condition().as_expr());
     auto res = solver.check(assumptions);
     RecExecution::TestResult result;
     switch (res) {
@@ -38,7 +38,9 @@ RecExecution::build_initial_state() {
     for (auto& arg : F->args()) {
         auto name = "ari_" + arg.getName().str();
         auto arg_value = z3ctx.int_const(name.c_str());
-        memory.write(&arg, arg_value);
+        // memory.write(&arg, arg_value);
+        // memory.allocate(&arg, arg_value);
+        memory.put_temp(&arg, arg_value);
     }
     auto pc = F->getEntryBlock().getFirstNonPHIOrDbg();
     auto initial_state = std::make_shared<RecState>(State(z3ctx, AInstruction::create(pc), nullptr, memory, z3ctx.bool_val(true), {}));
@@ -260,10 +262,10 @@ FunctionSummarizer::parse_rec(const rec_state_list& final_states, llvm::Function
     std::vector<rec_ty> rec_eqs;
     z3::expr func = function_app_z3(f);
     for (auto state : final_states) {
-        path_conds.push_back(state->get_path_condition());
+        path_conds.push_back(state->get_path_condition().as_expr());
         auto ret_inst = dyn_cast_or_null<llvm::ReturnInst>(state->pc->inst);
         assert(ret_inst);
-        z3::expr one_case = state->evaluate(ret_inst->getReturnValue());
+        z3::expr one_case = state->evaluate(ret_inst->getReturnValue()).as_expr();
         rec_ty eq = {{func, one_case}};
         rec_eqs.push_back(eq);
     }

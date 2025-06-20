@@ -108,6 +108,8 @@ namespace ari_exe {
             // counter for unknowns
             static int unknown_counter;
 
+            static z3::context& get_ctx() { return z3ctx; }
+
         private :
             AnalysisManager(): ind_var(z3ctx.int_const("ari_loop_n")), loop_N(z3ctx.int_const("ari_loop_N")) {}
             static AnalysisManager* instance;
@@ -130,7 +132,7 @@ namespace ari_exe {
 
             llvm::CallGraph* CG = nullptr;
 
-            z3::context z3ctx;
+            inline static z3::context z3ctx;
 
             // The symbolic variable for the loop induction variable
             z3::expr ind_var;

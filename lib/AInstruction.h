@@ -121,7 +121,7 @@ namespace ari_exe {
             std::vector<state_ptr> execute(state_ptr state) override;
 
         private:
-            void cache_func_value(state_ptr state, z3::expr result);
+            void cache_func_value(state_ptr state, const Expression& result);
     };
 
     class AInstructionZExt: public AInstruction {

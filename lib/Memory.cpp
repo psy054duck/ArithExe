@@ -9,26 +9,19 @@ using namespace ari_exe;
 //     m_heap.insert_or_assign(value, mem_obj);
 // }
 
-void
+MemoryObjectPtr
 Memory::allocate(llvm::Value* value, z3::expr_vector dims) {
-    auto mem_obj = std::make_shared<MemoryObjectArray>(value, dims);
-    m_heap.insert_or_assign(value, mem_obj);
+    return m_stack.allocate(value, dims);
 }
 
-void
-Memory::allocate(llvm::Value* value, z3::expr scalar_value) {
-    // auto mem_obj = std::make_shared<MemoryObjectScalar>(value, scalar_value);
-    m_stack.write(value, scalar_value);
-    // m_heap.insert_or_assign(value, mem_obj);
-}
-
-void
+MemoryObjectPtr
 Memory::add_global(llvm::GlobalVariable& gv) {
     auto manager = AnalysisManager::get_instance();
     auto& z3ctx = manager->get_z3ctx();
 
     llvm::Type* value_type = gv.getValueType();
     auto initial_value = gv.getInitializer();
+    z3::expr_vector dims(z3ctx);
     z3::expr value(z3ctx);
     if (value_type->isArrayTy()) {
         // implement for 1-d array first
@@ -53,252 +46,104 @@ Memory::add_global(llvm::GlobalVariable& gv) {
         } else {
             llvm::errs() << "Unsupported global variable initializer type\n";
         }
+        dims.push_back(z3ctx.int_val(value_type->getArrayNumElements()));
     } else if (value_type->isIntegerTy()) {
         if (auto constant = dyn_cast_or_null<llvm::ConstantInt>(initial_value)) {
             value = z3ctx.int_val(constant->getSExtValue());
-            auto mem_obj = std::make_shared<MemoryObjectScalar>(&gv, value);
-            m_globals.insert_or_assign(&gv, mem_obj);
         } else {
             llvm::errs() << "Unsupported global variable initializer type\n";
         }
     }
+    auto obj_ptr = heap_alloca(&gv, dims);
+    obj_ptr->write(Expression(value));
+    return obj_ptr;
 }
 
-std::optional<z3::expr>
-Memory::read(llvm::Value* value) const {
+MemoryObjectPtr
+Memory::get_object(llvm::Value* value) const {
     // if value is constant, return the constant value
     auto manager = AnalysisManager::get_instance();
     auto& z3ctx = manager->get_z3ctx();
-    if (auto undef = dyn_cast_or_null<llvm::UndefValue>(value)) {
-        auto name = "_undef_" + std::to_string(manager->unknown_counter++);
-        return z3ctx.int_const(name.c_str());
-    }
-    if (auto const_value = dyn_cast_or_null<llvm::ConstantInt>(value)) {
-        if (const_value->getBitWidth() == 1) {
-            return const_value->getZExtValue() ? z3ctx.bool_val(true) : z3ctx.bool_val(false);
-        } else {
-            return z3ctx.int_val(const_value->getSExtValue());
-        }
+
+    auto stack_query = m_stack.get_object(value);
+    if (stack_query) {
+        return stack_query;
     }
 
-    // if the value is a pointer
-    auto value_type = value->getType();
-    if (value_type->isPointerTy()) {
-        // check if the value is a global variable
-        if (auto global_var = dyn_cast_or_null<llvm::GlobalVariable>(value)) {
-            auto it_globals = m_globals.find(global_var);
-            if (it_globals != m_globals.end()) {
-                return it_globals->second->read();
-            }
-        } else if (auto alloca_inst = dyn_cast_or_null<llvm::AllocaInst>(value)) {
-            // check if the value is an alloca instruction
-            // this is a stack variable, so we can read it from the stack
-            return m_stack.read(value);
-        } else if (auto gep = dyn_cast_or_null<llvm::GetElementPtrInst>(value)) {
-            // if the value is a GEP, we need to parse it to get the base pointer and the indices
-            auto gep_info = parse_gep(gep);
-            auto base_ptr = gep_info.first;
-            auto indices = gep_info.second;
-
-            // read the base pointer from the stack or heap
-            return read(base_ptr, indices);
-        } else if (auto call = dyn_cast_or_null<llvm::CallInst>(value)) {
-            // if the value is a call instruction, we can read the return value from the stack
-            if (call->getCalledFunction()->getName() == "malloc") {
-                return m_heap.at(value)->read();
-            }
-        }
+    auto it = std::find_if(m_objects.begin(), m_objects.end(),
+                           [value](const MemoryObject& obj) { return obj.get_llvm_value() == value; });
+    if (it != m_objects.end()) {
+        return const_cast<MemoryObjectPtr>(&(*it));
     }
-
-
-    auto v = m_stack.read(value);
-    if (v.has_value()) {
-        return v.value();
-    }
-    auto it_heap = m_heap.find(value);
-    if (it_heap != m_heap.end()) {
-        return it_heap->second->read();
-    }
-    auto it_globals = m_globals.find(value);
-    if (it_globals != m_globals.end()) {
-        return it_globals->second->read();
-    }
-    return std::nullopt; // Value not found in stack, heap, or globals
-}
-
-Memory::ObjectPtr
-Memory::parse_gep(llvm::GetElementPtrInst* gep) const {
-    // get the base pointer and the indices
-    auto& z3ctx = AnalysisManager::get_instance()->get_z3ctx();
-    llvm::Value* base_ptr = gep->getPointerOperand();
-
-    z3::expr_vector indices(z3ctx);
-    if (auto gep_inst = dyn_cast_or_null<llvm::GetElementPtrInst>(base_ptr)) {
-        // if the base pointer is also a GEP, recursively parse it
-        auto base = parse_gep(gep_inst);
-        base_ptr = base.first;
-        for (const auto& index : base.second) {
-            indices.push_back(index);
-        }
-    }
-    for (auto& idx : gep->indices()) {
-        auto idx_value = idx.get();
-        auto cur_idx_value = read(idx_value);
-        assert(cur_idx_value.has_value() && "GEP index value should be readable");
-        indices.push_back(cur_idx_value.value());
-    }
-    return std::make_pair(base_ptr, indices);
+    return nullptr;
 }
 
 void
-Memory::store_gep(llvm::GetElementPtrInst* gep) {
-    // parse the GEP to get the base pointer and the indices
-    auto gep_info = parse_gep(gep);
-    m_pointers.insert_or_assign(gep, gep_info);
-}
+Memory::store(const MemoryAddress_ty& target, const Expression& val) {
+    auto m_obj_opt = get_object(target);
+    assert(m_obj_opt != nullptr && "Memory object should be found for the given address");
 
-Memory::ObjectPtr
-Memory::get_gep(llvm::GetElementPtrInst* gep) const {
-    return m_pointers.at(gep);
-}
-
-void
-Memory::write(llvm::Value* value, z3::expr val) {
-    // if value is a pointer
-    val = val.simplify(); // Simplify the value before writing
-    auto value_type = value->getType();
-    if (value_type->isPointerTy()) {
-        // check if the value is a global variable
-        if (auto global_var = dyn_cast_or_null<llvm::GlobalVariable>(value)) {
-            auto it_globals = m_globals.find(global_var);
-            if (it_globals != m_globals.end()) {
-                it_globals->second = it_globals->second->write(val);
-                return;
-            }
-        } else if (auto alloca_inst = dyn_cast_or_null<llvm::AllocaInst>(value)) {
-            // this is a stack variable, so we can write it to the stack
-            m_stack.write(value, val);
-            return;
-        } else if (auto gep = dyn_cast_or_null<llvm::GetElementPtrInst>(value)) {
-            // if the value is a GEP, we need to parse it to get the base pointer and the indices
-            auto gep_info = parse_gep(gep);
-            auto base_ptr = gep_info.first;
-            auto indices = gep_info.second;
-
-            // write the value to the base pointer with the indices
-
-            write(base_ptr, indices, val);
-            return;
-        } else if (auto call = dyn_cast_or_null<llvm::CallInst>(value)) {
-            // if the value is a call instruction, we can write the return value to the heap
-            if (call->getCalledFunction()->getName() == "malloc") {
-                auto new_mem_obj = m_heap.at(value)->write(val);
-                m_heap.insert_or_assign(value, new_mem_obj);
-                return;
-            }
-        } else {
-            auto obj_opt = get_memory_object(value);
-            assert(obj_opt.has_value() && "Unsupported pointer type for writing");
-            auto obj = obj_opt.value();
-            obj->write_in_place(val);
-        }
-    }
-
-    if (m_stack.read(value).has_value()) {
-        m_stack.write(value, val);
+    // if the memory object is a scalar, write the value directly
+    if (m_obj_opt->is_scalar()) {
+        m_obj_opt->write(val);
+    } else if (m_obj_opt->is_array()) {
+        // if it is an array, write the value at the given index
+        m_obj_opt->write(target.offset, val);
     } else {
-        auto it_heap = m_heap.find(value);
-        if (it_heap != m_heap.end()) {
-            it_heap->second->write(val);
-        } else {
-            auto it_globals = m_globals.find(value);
-            if (it_globals != m_globals.end()) {
-                it_globals->second->write(val);
-            } else {
-                // If the value is not found in stack, heap, or globals,
-                // write it to the stack.
-                m_stack.write(value, val);
-            }
-        }
+        llvm::errs() << "Unsupported memory object type\n";
     }
 }
 
-void 
-Memory::write(llvm::Value* value, z3::expr_vector index, z3::expr val) {
-    val = val.simplify(); // Simplify the value before writing
-    if (m_stack.read(value).has_value()) {
-        m_stack.write(value, index, val);
+MemoryObjectPtr
+Memory::get_object(const MemoryAddress_ty& addr) const {
+    if (addr.loc == STACK) {
+        return m_stack.get_object(addr);
     } else {
-        auto it_heap = m_heap.find(value);
-        if (it_heap != m_heap.end()) {
-            it_heap->second = it_heap->second->write(index, val);
-        } else {
-            auto it_globals = m_globals.find(value);
-            if (it_globals != m_globals.end()) {
-                it_globals->second = it_globals->second->write(index, val);
-            } else {
-                throw std::runtime_error("Memory object not found for writing");
-            }
+        auto it = std::find_if(m_objects.begin(), m_objects.end(),
+                               [&addr](const MemoryObject& obj) { return obj.get_addr().base.as_expr().get_numeral_int() == addr.base.as_expr().get_numeral_int(); });
+        if (it != m_objects.end()) {
+            return const_cast<MemoryObjectPtr>(&(*it));
         }
     }
+    return nullptr;
 }
 
-void
-Memory::write(llvm::Value* value, MemoryObjectPtr memory_object) {
-    // TODO: currently write the memory object to the stack
-    m_stack.write(value, memory_object);
-}
-
-std::optional<z3::expr>
-Memory::read(llvm::Value* value, z3::expr_vector index) const {
-    auto v = m_stack.read(value);
-    if (v.has_value()) {
-        return v.value();
-    }
-    auto it_heap = m_heap.find(value);
-    if (it_heap != m_heap.end()) {
-        return it_heap->second->read(index);
-    }
-    auto it_globals = m_globals.find(value);
-    if (it_globals != m_globals.end()) {
-        return it_globals->second->read(index);
-    }
-    return std::nullopt;
-}
-
-Memory::ObjectPtr
-Memory::parse_pointer(llvm::Value* value) const {
-    // if value is a pointer, return the base pointer and the indices
-    auto& z3ctx = AnalysisManager::get_instance()->get_z3ctx();
-    if (auto gep = dyn_cast_or_null<llvm::GetElementPtrInst>(value)) {
-        return parse_gep(gep);
-    }
-    // assume it points to a memory object with zero offset
-    auto m_obj_opt = get_memory_object(value);
-    assert(m_obj_opt.has_value() && "Memory object should be found for the given value");
-    auto m_obj = m_obj_opt.value();
-    z3::expr_vector indices(z3ctx);
-    for (int i = 0; i < m_obj->get_dims().size(); i++) {
-        indices.push_back(z3ctx.int_val(0));
-    }
-    return std::make_pair(value, indices);
-}
-
-std::vector<MemoryObjectArrayPtr>
+std::vector<MemoryObjectPtr>
 Memory::get_arrays() const {
-    std::vector<MemoryObjectArrayPtr> arrays = m_stack.get_arrays();
-
-    for (const auto& [key, value] : m_heap) {
-        if (value->is_array()) {
-            arrays.push_back(dynamic_pointer_cast<MemoryObjectArray>(value));
+    auto arrays = m_stack.get_arrays();
+    for (auto& obj : m_objects) {
+        if (obj.is_array()) {
+            arrays.push_back(const_cast<MemoryObjectPtr>(&obj));
         }
     }
-
-    for (const auto& [key, value] : m_globals) {
-        if (value->is_array()) {
-            arrays.push_back(dynamic_pointer_cast<MemoryObjectArray>(value));
-        }
-    }
-
     return arrays;
+}
+
+MemoryObjectPtr
+Memory::heap_alloca(llvm::Value* value, z3::expr_vector dims) {
+    auto& z3ctx = AnalysisManager::get_ctx();
+    int id = m_objects.size();
+    MemoryAddress_ty mem_obj_addr{STACK, Expression(z3ctx.int_val(id)), {}};
+    auto indices  = z3::expr_vector(z3ctx);
+    for (int i = 0; i < dims.size(); ++i) {
+        indices.push_back(z3ctx.int_const(("i" + std::to_string(i)).c_str()));
+    }
+    std::vector<Expression> sizes;
+    for (const auto& dim : dims) {
+        if (dim.is_numeral()) {
+            sizes.emplace_back(dim);
+        }
+    }
+    m_objects.emplace_back(value, mem_obj_addr, Expression(), std::nullopt, indices, sizes, value->getName().str());
+    return &m_objects.back();
+}
+
+MemoryObjectPtr
+Memory::put_temp(llvm::Value* value, const Expression& expr) {
+    return m_stack.put_temp(value, expr);
+}
+
+MemoryObjectPtr
+Memory::put_temp(llvm::Value* value, const MemoryAddress_ty& addr) {
+    return m_stack.put_temp(value, addr);
 }
