@@ -257,9 +257,9 @@ AInstructionCall::execute_normal(state_ptr state) {
             // auto addr = new_state->memory.allocate(param, target_obj->get_address());
             new_state->memory.put_temp(param, target_obj->get_ptr_value());
         } else {
-            auto obj = state->memory.get_object(arg);
+            auto arg_value = state->evaluate(arg);
             // new_state->memory.allocate(param, obj->read());
-            new_state->memory.put_temp(param, obj->read());
+            new_state->memory.put_temp(param, arg_value);
         }
     }
     auto called_first_inst = &*called_func->getEntryBlock().getFirstNonPHIOrDbg();
