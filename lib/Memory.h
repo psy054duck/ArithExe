@@ -51,6 +51,11 @@ namespace ari_exe {
             Expression load(const MemoryAddress_ty& addr);
 
             /**
+             * @brief get the object pointed by the given LLVM value, which is assumed to be a pointer
+             */
+            MemoryObjectPtr get_object_pointed_by(llvm::Value* value) const;
+
+            /**
              * @brief store the value to the address.
              */
             void store(const MemoryAddress_ty& addr, const Expression& value);

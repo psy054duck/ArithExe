@@ -47,6 +47,7 @@ Memory::add_global(llvm::GlobalVariable& gv) {
             llvm::errs() << "Unsupported global variable initializer type\n";
         }
         dims.push_back(z3ctx.int_val(value_type->getArrayNumElements()));
+        llvm::errs() << z3ctx.int_val(value_type->getArrayNumElements()).to_string() << "\n";
     } else if (value_type->isIntegerTy()) {
         if (auto constant = dyn_cast_or_null<llvm::ConstantInt>(initial_value)) {
             value = z3ctx.int_val(constant->getSExtValue());
@@ -134,7 +135,8 @@ Memory::heap_alloca(llvm::Value* value, z3::expr_vector dims) {
             sizes.emplace_back(dim);
         }
     }
-    m_objects.emplace_back(value, mem_obj_addr, Expression(), std::nullopt, indices, sizes, value->getName().str());
+    auto name = get_z3_name(value->getName().str());
+    m_objects.emplace_back(value, mem_obj_addr, Expression(), std::nullopt, indices, sizes, name);
     return &m_objects.back();
 }
 
@@ -146,4 +148,14 @@ Memory::put_temp(llvm::Value* value, const Expression& expr) {
 MemoryObjectPtr
 Memory::put_temp(llvm::Value* value, const MemoryAddress_ty& addr) {
     return m_stack.put_temp(value, addr);
+}
+
+MemoryObjectPtr
+Memory::get_object_pointed_by(llvm::Value* value) const {
+    auto m_obj = get_object(value);
+    if (m_obj && m_obj->is_pointer()) {
+        auto addr = m_obj->get_ptr_value();
+        return get_object(addr);
+    }
+    return nullptr;
 }

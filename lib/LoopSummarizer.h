@@ -218,7 +218,6 @@ namespace ari_exe {
              */
             std::pair<z3::expr, z3::expr> get_exit_loop_guard(const loop_state_list& exit_states);
 
-
             /**
              * @brief get the loop guard condition
              * @param exit_states The exit states

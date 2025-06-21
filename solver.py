@@ -15,7 +15,8 @@ def main(filename, inv_var):
     solver = z3.Solver()
     closed_dict = closed.as_dict()
     # apps = reduce(set.union, [k.atoms(AppliedUndef) | v.atoms(AppliedUndef) for k, v in closed_dict.items()])
-    apps = reduce(set.union, [get_applied_functions(k) | get_applied_functions(v) for k, v in closed_dict.items()])
+    apps = reduce(set.union, [get_applied_functions(k) for k in closed_dict])
+    # apps = reduce(set.union, [get_applied_functions(k) | get_applied_functions(v) for k, v in closed_dict.items()])
 
     # remove the last argument from the function applications
     remove_func_mapping = []

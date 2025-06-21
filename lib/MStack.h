@@ -46,7 +46,7 @@ namespace ari_exe {
 
         public:
             MStack() = default;
-            MStack(const MStack&) = default;
+            MStack(const MStack& other): frames(other.frames), objects(other.objects) {}
             MStack& operator=(const MStack&) = default;
 
             // push a new frame to the stack

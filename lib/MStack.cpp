@@ -72,6 +72,9 @@ MStack::allocate(llvm::Value* value, z3::expr_vector dims) {
         }
     }
     objects.emplace_back(value, mem_obj_addr, Expression(), std::nullopt, indices, sizes, value->getName().str());
+    
+    put_temp(value, mem_obj_addr);
+
     return &objects.back();
 }
 
@@ -111,7 +114,8 @@ MemoryObjectPtr
 MStack::StackFrame::put_temp(llvm::Value* llvm_value, const MemoryAddress_ty& ptr_value) {
     auto obj = MemoryObject(llvm_value, MemoryAddress_ty{STACK, Expression(), {}}, Expression(), ptr_value, z3::expr_vector(AnalysisManager::get_ctx()), {}, llvm_value->getName().str());
     temp_objects.insert_or_assign(llvm_value, obj);
-    return &temp_objects.at(llvm_value);
+    auto res = &temp_objects.at(llvm_value);
+    return res;
 }
 
 MemoryObjectPtr

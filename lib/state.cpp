@@ -21,6 +21,9 @@ Expression
 State::evaluate(llvm::Value* v) {
     if (auto constant = llvm::dyn_cast_or_null<llvm::ConstantInt>(v)) {
         // If the value is a constant, return its value directly
+        if (constant->getBitWidth() == 1) {
+            return Expression(z3ctx.bool_val(constant->getSExtValue()));
+        }
         return Expression(z3ctx.int_val(constant->getSExtValue()));
     }
     auto obj = memory.get_object(v);

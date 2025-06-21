@@ -253,9 +253,9 @@ AInstructionCall::execute_normal(state_ptr state) {
         auto arg = call_inst->getArgOperand(i);
         auto param = called_func->getArg(i);
         if (param->getType()->isPointerTy()) {
-            auto target_obj = new_state->memory.get_object(arg);
+            auto target_obj = state->memory.get_object(arg);
             // auto addr = new_state->memory.allocate(param, target_obj->get_address());
-            new_state->memory.put_temp(param, target_obj->get_addr());
+            new_state->memory.put_temp(param, target_obj->get_ptr_value());
         } else {
             auto obj = state->memory.get_object(arg);
             // new_state->memory.allocate(param, obj->read());
@@ -270,11 +270,17 @@ AInstructionCall::execute_normal(state_ptr state) {
 
 state_ptr
 AInstructionCall::execute_cache(state_ptr state) {
-    auto cache = Cache::get_instance();
     auto call_inst = dyn_cast_or_null<llvm::CallInst>(inst);
     assert(call_inst);
     auto called_func = call_inst->getCalledFunction();
 
+    for (auto& arg : call_inst->args()) {
+        if (arg->getType()->isPointerTy()) {
+            return nullptr;
+        }
+    }
+
+    auto cache = Cache::get_instance();
     auto model = state->get_model();
     param_list_ty args;
     for (int i = 0; i < call_inst->arg_size(); i++) {
@@ -830,10 +836,14 @@ std::vector<state_ptr>
 AInstructionLoad::execute(state_ptr state) {
     auto load_inst = dyn_cast<llvm::LoadInst>(inst);
     auto ptr = load_inst->getPointerOperand();
-    auto load_value = state->evaluate(ptr);
     state_ptr new_state = std::make_shared<State>(*state);
-    // new_state->write(inst, load_value);
-    // new_state->memory.allocate(inst, load_value);
+    // auto ptr_obj = new_state->memory.get_object(ptr);
+    // assert(ptr_obj && ptr_obj->is_pointer() && "Pointer operand must be a pointer object");
+    // auto addr = ptr_obj->get_addr();
+    auto pointed_obj = new_state->memory.get_object_pointed_by(ptr);
+    assert(pointed_obj && "Pointed object must exist");
+
+    auto load_value = pointed_obj->read();
     new_state->memory.put_temp(inst, load_value);
     new_state->step_pc();
     return {new_state};
@@ -847,12 +857,15 @@ AInstructionStore::execute(state_ptr state) {
     auto value = store_inst->getValueOperand();
     // auto ptr_value = state->evaluate(ptr);
     auto value_expr = state->evaluate(value);
-
     state_ptr new_state = std::make_shared<State>(*state);
-    // new_state->write(ptr, value_expr);
-    // new_state->memory.allocate(ptr, value_expr);
-    auto obj = new_state->memory.get_object(ptr);
-    obj->write(value_expr);
+    // auto ptr_obj = new_state->memory.get_object(ptr);
+    // assert(ptr_obj && ptr_obj->is_pointer() && "Pointer operand must be a pointer object");
+    // auto addr = ptr_obj->get_addr();
+    // auto pointed_obj = new_state->memory.get_object(addr);
+    auto pointed_obj = new_state->memory.get_object_pointed_by(ptr);
+    assert(pointed_obj && "Pointed object must exist");
+    pointed_obj->write(value_expr);
+
     new_state->step_pc();
     return {new_state};
 }

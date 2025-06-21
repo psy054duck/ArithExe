@@ -93,7 +93,8 @@ namespace ari_exe {
     }
 
     z3::expr Expression::as_expr() const {
-        return piecewise2ite(conditions, expressions);
+        auto res = piecewise2ite(conditions, expressions);
+        return res;
     }
 
     Expression Expression::bin_operator(const Expression& lhs, const Expression& rhs, 

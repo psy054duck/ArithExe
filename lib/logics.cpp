@@ -173,21 +173,6 @@ namespace ari_exe {
                 auto new_expr = expr.decl()(acc_expressions);
                 expressions.push_back(new_expr);
             }
-            // // If the expression is a binary operation, we can recursively process its arguments
-            // auto left = expr.arg(0);
-            // auto right = expr.arg(1);
-
-            // auto [left_conditions, left_expressions] = expr2piecewise(left);
-            // auto [right_conditions, right_expressions] = expr2piecewise(right);
-
-            // for (int i = 0; i < left_conditions.size(); ++i) {
-            //     for (int j = 0; j < right_conditions.size(); ++j) {
-            //         auto new_cond = left_conditions[i] && right_conditions[j] && cur_cond;
-            //         auto new_expr = expr.decl()(left_expressions[i], right_expressions[j]);
-            //         conditions.push_back(new_cond);
-            //         expressions.push_back(new_expr);
-            //     }
-            // }
         }
     }
 

@@ -88,7 +88,6 @@ namespace ari_exe {
                 next_loop_state->modified_values.insert(modified_value);
             }
         }
-
         return new_states;
     }
 
@@ -114,6 +113,7 @@ namespace ari_exe {
         while (!states.empty()) {
             auto cur_state = states.front();
             spdlog::debug("Current state: {}", cur_state->pc->inst->getName().str());
+            llvm::errs() << *cur_state->pc->inst << "\n";
             states.pop();
             if (back_edge_taken(cur_state)) {
                 continue;
@@ -479,6 +479,7 @@ namespace ari_exe {
                 summary->add_closed_form(array_ptr->get_signature(), closed_form);
             }
         }
+        spdlog::info("finish summarization");
     }
 
     closed_form_ty
