@@ -121,9 +121,9 @@ namespace ari_exe {
         new_expressions.push_back(expr);
         z3::expr acc_cond = condition;
         for (int i = 0; i < conditions.size(); ++i) {
-            acc_cond = acc_cond || conditions[i];
             new_conditions.push_back(simplify(!acc_cond && conditions[i]));
             new_expressions.push_back(expressions[i]);
+            acc_cond = acc_cond || conditions[i];
         }
         conditions = new_conditions;
         expressions = new_expressions;

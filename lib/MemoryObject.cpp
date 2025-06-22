@@ -6,6 +6,15 @@ std::map<std::string, int> MemoryObject::name_counter;
 
 Expression
 MemoryObject::read(const std::vector<Expression>& index) const {
+    if (index.size() == 0 && get_sizes().size() > 0) {
+        // If no index is provided, default to zero for each dimension
+        auto& z3ctx = AnalysisManager::get_ctx();
+        std::vector<Expression> zeros;
+        for (int i = 0; i < get_sizes().size(); i++) {
+            zeros.push_back(Expression(z3ctx.int_val(0))); // default index is 0 for each dimension
+        }
+        return read(zeros);
+    }
     assert(index.size() == get_sizes().size() && "Index size does not match array dimensions");
     return value.subs(indices, index);
 }
@@ -30,10 +39,16 @@ MemoryObject::write(const Expression& v) {
 }
 
 void
-MemoryObject::write(const std::vector<Expression>& index, const Expression& v) {
+MemoryObject::write(const std::vector<Expression>& _index, const Expression& v) {
+    auto& z3ctx = AnalysisManager::get_ctx();
+    std::vector<Expression> index = _index;
+    if (index.size() == 0 && get_sizes().size() > 0) {
+        for (int i = 0; i < get_sizes().size(); i++) {
+            index.push_back(Expression(z3ctx.int_val(0))); // default index is 0 for each dimension
+        }
+    }
     assert(index.size() == get_sizes().size() && "Index size does not match array dimensions");
 
-    auto& z3ctx = AnalysisManager::get_ctx();
     z3::expr new_condition = z3ctx.bool_val(true);
     z3::expr_vector z3_index(z3ctx);
     for (int i = 0; i < index.size(); i++) {

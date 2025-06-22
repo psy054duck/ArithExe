@@ -400,7 +400,7 @@ AInstructionCall::execute_malloc(state_ptr state) {
     z3::expr_vector dims(state->z3ctx);
     dims.push_back((size_bytes_expr / state->z3ctx.int_val(4)).as_expr().simplify());
     auto new_state = std::make_shared<State>(*state);
-    new_state->memory.allocate(call_inst, dims);
+    new_state->memory.heap_alloca(call_inst, dims);
     new_state->step_pc();
     return {new_state};
 }
@@ -832,18 +832,57 @@ AInstruction::get_block() {
     return inst->getParent();
 }
 
+static MemoryAddress_ty
+parse_ptr(const MemoryObjectPtr ptr, state_ptr state) {
+    assert(ptr->is_pointer() && "Pointer object expected");
+    auto pointed_addr = ptr->get_ptr_value();
+    auto pointed_obj = state->memory.get_object(pointed_addr);
+    if (!pointed_obj->is_pointer()) {
+        return pointed_addr;
+    }
+    auto addr = parse_ptr(pointed_obj, state);
+    for (auto& offset : pointed_addr.offset) {
+        addr.offset.push_back(offset);
+    }
+    return addr;
+}
+
+static MemoryAddress_ty
+parse_gep(llvm::GetElementPtrInst* gep, state_ptr state) {
+    // This function parses the GEP instruction and returns the memory address
+    // it points to, based on the operands and the current state.
+    auto& z3ctx = state->z3ctx;
+    auto ptr_operand = gep->getPointerOperand();
+    auto pointed_obj = state->memory.get_object_pointed_by(ptr_operand);
+
+    std::vector<Expression> offsets;
+
+    MemoryAddress_ty addr;
+    if (!pointed_obj->is_pointer()) {
+        auto ptr_obj = state->memory.get_object(ptr_operand);
+        addr = ptr_obj->get_ptr_value();
+    } else {
+        addr = parse_ptr(pointed_obj, state);
+    }
+
+    for (auto& idx : gep->indices()) {
+        auto idx_value = state->evaluate(idx.get());
+        addr.offset.push_back(idx_value);
+    }
+    return addr;
+}
+
 std::vector<state_ptr>
 AInstructionLoad::execute(state_ptr state) {
     auto load_inst = dyn_cast<llvm::LoadInst>(inst);
     auto ptr = load_inst->getPointerOperand();
     state_ptr new_state = std::make_shared<State>(*state);
-    // auto ptr_obj = new_state->memory.get_object(ptr);
-    // assert(ptr_obj && ptr_obj->is_pointer() && "Pointer operand must be a pointer object");
-    // auto addr = ptr_obj->get_addr();
-    auto pointed_obj = new_state->memory.get_object_pointed_by(ptr);
+
+    auto addr = parse_ptr(new_state->memory.get_object(ptr), new_state);
+    auto pointed_obj = new_state->memory.get_object(addr);
     assert(pointed_obj && "Pointed object must exist");
 
-    auto load_value = pointed_obj->read();
+    auto load_value = pointed_obj->read(addr.offset);
     new_state->memory.put_temp(inst, load_value);
     new_state->step_pc();
     return {new_state};
@@ -858,13 +897,14 @@ AInstructionStore::execute(state_ptr state) {
     // auto ptr_value = state->evaluate(ptr);
     auto value_expr = state->evaluate(value);
     state_ptr new_state = std::make_shared<State>(*state);
-    // auto ptr_obj = new_state->memory.get_object(ptr);
-    // assert(ptr_obj && ptr_obj->is_pointer() && "Pointer operand must be a pointer object");
-    // auto addr = ptr_obj->get_addr();
-    // auto pointed_obj = new_state->memory.get_object(addr);
+
+    auto pointer_obj = new_state->memory.get_object(ptr);
+
+    auto offset = pointer_obj->get_ptr_value().offset;
+
     auto pointed_obj = new_state->memory.get_object_pointed_by(ptr);
     assert(pointed_obj && "Pointed object must exist");
-    pointed_obj->write(value_expr);
+    pointed_obj->write(offset, value_expr);
 
     new_state->step_pc();
     return {new_state};
@@ -875,6 +915,8 @@ AInstructionGEP::execute(state_ptr state) {
     auto gep = dyn_cast_or_null<llvm::GetElementPtrInst>(inst);
     assert(gep);
     auto new_state = std::make_shared<State>(*state);
+    auto addr = parse_gep(gep, new_state);
+    new_state->memory.put_temp(inst, addr);
     // new_state->store_gep(gep);
     new_state->step_pc();
     return {new_state};

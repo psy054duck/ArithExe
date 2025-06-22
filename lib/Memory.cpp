@@ -139,8 +139,10 @@ Memory::heap_alloca(llvm::Value* value, z3::expr_vector dims) {
     int id = m_objects.size();
     MemoryAddress_ty mem_obj_addr{HEAP, Expression(z3ctx.int_val(id)), {}};
     auto indices  = z3::expr_vector(z3ctx);
+    z3::sort_vector index_sorts(z3ctx);
     for (int i = 0; i < dims.size(); ++i) {
         indices.push_back(z3ctx.int_const(("i" + std::to_string(i)).c_str()));
+        index_sorts.push_back(z3ctx.int_sort());
     }
     std::vector<Expression> sizes;
     for (const auto& dim : dims) {
@@ -149,7 +151,8 @@ Memory::heap_alloca(llvm::Value* value, z3::expr_vector dims) {
         }
     }
     auto name = get_z3_name(value->getName().str());
-    auto& obj = m_objects.emplace_back(value, mem_obj_addr, Expression(), std::nullopt, indices, sizes, name);
+    auto func = z3ctx.function(name.c_str(), index_sorts, z3ctx.int_sort());
+    auto& obj = m_objects.emplace_back(value, mem_obj_addr, Expression(func(indices)), std::nullopt, indices, sizes, name);
     int ptr_id = m_variables.size();
     MemoryAddress_ty mem_obj_ptr_addr{HEAP, Expression(z3ctx.int_val(ptr_id)), {}};
     auto obj_ptr = m_variables.emplace_back(value, mem_obj_ptr_addr, Expression(), mem_obj_addr, indices, sizes, name);

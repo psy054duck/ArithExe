@@ -49,7 +49,7 @@ Engine::run(state_ptr state) {
         auto cur_state = states.top();
         states.pop();
         spdlog::debug("Current Instruction: {}", cur_state->pc->inst->getName().str());
-        llvm::errs() << *cur_state->pc->inst << "\n";
+        // llvm::errs() << *cur_state->pc->inst << "\n";
         // llvm::errs() << cur_state->memory.to_string() << "\n";
 
         if (cur_state->status == State::TERMINATED) {
@@ -113,6 +113,8 @@ Engine::verify(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->get_path_condition().as_expr());
     assumptions.push_back(!state->verification_condition.as_expr());
+    // llvm::errs() << state->get_path_condition().as_expr().to_string() << "\n";
+    // llvm::errs() << assumptions.to_string() << "\n";
     auto res = solver.check(assumptions);
     Engine::VeriResult result;
     switch (res) {
