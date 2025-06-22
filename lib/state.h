@@ -143,7 +143,7 @@ namespace ari_exe {
             /**
              * @brief store modified values by the loop
              */
-            std::set<llvm::Value*> modified_values;
+            // std::set<llvm::Value*> modified_values;
     };
 
     class RecState: public State {

@@ -17,9 +17,9 @@ namespace ari_exe {
             // this is used to a pointer to some object as a result of GEP
             // using ObjectPtr = std::pair<llvm::Value*, z3::expr_vector>;
 
-            Memory() = default;
+            Memory();
 
-            Memory(const Memory& other): m_stack(other.m_stack), m_objects(other.m_objects) {}
+            Memory(const Memory& other);
 
             // Destructor to clean up memory objects
             ~Memory() = default;
@@ -116,7 +116,11 @@ namespace ari_exe {
             std::vector<MemoryObjectPtr> get_arrays() const ;
 
             // currently, only output the scalar values in the memory
-            std::string to_string();
+            std::string to_string() const;
+
+            // Get all memory objects accessible in current state.
+            // They globals, heap variables, and local variables in the top frame.
+            std::vector<MemoryObjectPtr> get_accessible_objects() const;
 
         private:
             // /**
@@ -128,6 +132,8 @@ namespace ari_exe {
 
             // all global variables and heap variables
             std::vector<MemoryObject> m_objects;
+
+            std::vector<MemoryObject> m_variables;
 
             // record the next id for each value
             std::map<llvm::Value*, int> next_id;

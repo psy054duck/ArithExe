@@ -28,7 +28,8 @@ State::evaluate(llvm::Value* v) {
     }
     auto obj = memory.get_object(v);
     if (obj) {
-        return obj->read().as_expr();
+        auto res = obj->read().as_expr();
+        return res;
     }
     assert(false && "Value not found in memory");
     return Expression(); // return something to avoid compiler warning

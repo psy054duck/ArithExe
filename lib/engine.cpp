@@ -165,8 +165,9 @@ Engine::build_initial_state() {
         auto name = "ari_" + arg.getName().str();
         auto arg_value = z3ctx.int_const(name.c_str());
         // memory.allocate(&arg, arg_value);
-        auto obj = memory.allocate(&arg, z3::expr_vector(z3ctx));
-        obj->write(arg_value);
+        // auto obj = memory.allocate(&arg, z3::expr_vector(z3ctx));
+        // obj->write(arg_value);
+        memory.put_temp(&arg, arg_value);
     }
     auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr,
                                memory, z3ctx.bool_val(true), {}));

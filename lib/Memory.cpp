@@ -9,6 +9,21 @@ using namespace ari_exe;
 //     m_heap.insert_or_assign(value, mem_obj);
 // }
 
+Memory::Memory() {
+    // It is necessary to reserve enough space to avoid reallocation,
+    // because all objects created are then accessed through pointers to
+    // members of m_objects. If reallocation happens, the pointers will be invalidated.
+    m_objects.reserve(100); 
+}
+
+Memory::Memory(const Memory& other)
+    : m_stack(other.m_stack), m_objects(other.m_objects), m_variables(other.m_variables) {
+    // It is necessary to reserve enough space to avoid reallocation,
+    // because all objects created are then accessed through pointers to
+    // members of m_objects. If reallocation happens, the pointers will be invalidated.
+    m_objects.reserve(100);
+}
+
 MemoryObjectPtr
 Memory::allocate(llvm::Value* value, z3::expr_vector dims) {
     return m_stack.allocate(value, dims);
@@ -47,7 +62,6 @@ Memory::add_global(llvm::GlobalVariable& gv) {
             llvm::errs() << "Unsupported global variable initializer type\n";
         }
         dims.push_back(z3ctx.int_val(value_type->getArrayNumElements()));
-        llvm::errs() << z3ctx.int_val(value_type->getArrayNumElements()).to_string() << "\n";
     } else if (value_type->isIntegerTy()) {
         if (auto constant = dyn_cast_or_null<llvm::ConstantInt>(initial_value)) {
             value = z3ctx.int_val(constant->getSExtValue());
@@ -71,9 +85,9 @@ Memory::get_object(llvm::Value* value) const {
         return stack_query;
     }
 
-    auto it = std::find_if(m_objects.begin(), m_objects.end(),
+    auto it = std::find_if(m_variables.begin(), m_variables.end(),
                            [value](const MemoryObject& obj) { return obj.get_llvm_value() == value; });
-    if (it != m_objects.end()) {
+    if (it != m_variables.end()) {
         return const_cast<MemoryObjectPtr>(&(*it));
     }
     return nullptr;
@@ -100,10 +114,9 @@ Memory::get_object(const MemoryAddress_ty& addr) const {
     if (addr.loc == STACK) {
         return m_stack.get_object(addr);
     } else {
-        auto it = std::find_if(m_objects.begin(), m_objects.end(),
-                               [&addr](const MemoryObject& obj) { return obj.get_addr().base.as_expr().get_numeral_int() == addr.base.as_expr().get_numeral_int(); });
-        if (it != m_objects.end()) {
-            return const_cast<MemoryObjectPtr>(&(*it));
+        auto base = addr.base.as_expr();
+        if (base.is_numeral()) {
+            return const_cast<MemoryObjectPtr>(&m_objects[base.get_numeral_int()]);
         }
     }
     return nullptr;
@@ -124,7 +137,7 @@ MemoryObjectPtr
 Memory::heap_alloca(llvm::Value* value, z3::expr_vector dims) {
     auto& z3ctx = AnalysisManager::get_ctx();
     int id = m_objects.size();
-    MemoryAddress_ty mem_obj_addr{STACK, Expression(z3ctx.int_val(id)), {}};
+    MemoryAddress_ty mem_obj_addr{HEAP, Expression(z3ctx.int_val(id)), {}};
     auto indices  = z3::expr_vector(z3ctx);
     for (int i = 0; i < dims.size(); ++i) {
         indices.push_back(z3ctx.int_const(("i" + std::to_string(i)).c_str()));
@@ -136,8 +149,12 @@ Memory::heap_alloca(llvm::Value* value, z3::expr_vector dims) {
         }
     }
     auto name = get_z3_name(value->getName().str());
-    m_objects.emplace_back(value, mem_obj_addr, Expression(), std::nullopt, indices, sizes, name);
-    return &m_objects.back();
+    auto& obj = m_objects.emplace_back(value, mem_obj_addr, Expression(), std::nullopt, indices, sizes, name);
+    int ptr_id = m_variables.size();
+    MemoryAddress_ty mem_obj_ptr_addr{HEAP, Expression(z3ctx.int_val(ptr_id)), {}};
+    auto obj_ptr = m_variables.emplace_back(value, mem_obj_ptr_addr, Expression(), mem_obj_addr, indices, sizes, name);
+    return &obj;
+
 }
 
 MemoryObjectPtr
@@ -158,4 +175,29 @@ Memory::get_object_pointed_by(llvm::Value* value) const {
         return get_object(addr);
     }
     return nullptr;
+}
+
+std::vector<MemoryObjectPtr>
+Memory::get_accessible_objects() const {
+    auto res = m_stack.get_top_objects();
+    for (int i = 0; i < m_objects.size(); ++i) {
+        res.push_back(const_cast<MemoryObjectPtr>(&m_objects[i]));
+    }
+    return res;
+}
+
+std::string
+Memory::to_string() const {
+    std::string res = "Memory:\n";
+    res += "****************** Stack ******************\n";
+    res += m_stack.to_string();
+    res += "****************** Objects ******************\n";
+    for (const auto& obj : m_objects) {
+        res += obj.to_string();
+    }
+    res += "****************** Variables ******************\n";
+    for (const auto& var : m_variables) {
+        res += var.to_string();
+    }
+    return res;
 }

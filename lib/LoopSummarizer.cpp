@@ -48,29 +48,13 @@ namespace ari_exe {
 
     loop_state_ptr
     LoopExecution::build_initial_state() {
-        // set up the stack
-        // auto stack = AStack();
-        // auto parent_top_frame = parent_state->stack.top_frame();
-        // stack.push_frame(parent_top_frame);
-        auto memory = Memory(parent_state->memory);
-
-        // auto header = loop->getHeader();
         auto manager = AnalysisManager::get_instance();
         auto& z3ctx = manager->get_z3ctx();
-        auto modified_values = get_scalar_modified_values();
-        // auto prev_block = parent_state->trace.back();
-        for (auto& m_value: modified_values) {
-            auto written_value = m_value;
-            if (auto store_inst = dyn_cast_or_null<llvm::StoreInst>(m_value)) {
-                written_value = store_inst->getValueOperand();
-            }
-            auto name = get_z3_name(written_value->getName().str());
-            auto z3_value = z3ctx.int_const(name.c_str());
-            auto obj = memory.allocate(written_value, z3::expr_vector(z3ctx));
-            obj->write(z3_value);
-        }
+        auto memory = Memory(parent_state->memory);
         auto initial_pc = AInstruction::create(loop->getHeader()->getFirstNonPHIOrDbg());
         auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, memory, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
+
+        put_header_phis_in_initial_state(initial_state);
         return initial_state;
     }
 
@@ -78,15 +62,15 @@ namespace ari_exe {
     LoopExecution::step(loop_state_ptr state) {
         auto pc = state->pc;
         loop_state_list new_states;
-        auto modified_values = state->modified_values;
+        // auto modified_values = state->modified_values;
         for (auto next_state : pc->execute(state)) {
             auto next_loop_state = std::make_shared<LoopState>(LoopState(*next_state));
             new_states.push_back(next_loop_state);
-            next_loop_state->modified_values = modified_values;
-            auto modified_value = get_modified_value(state, pc->inst);
-            if (modified_value) {
-                next_loop_state->modified_values.insert(modified_value);
-            }
+            // next_loop_state->modified_values = modified_values;
+            // auto modified_value = get_modified_value(state, pc->inst);
+            // if (modified_value) {
+            //     next_loop_state->modified_values.insert(modified_value);
+            // }
         }
         return new_states;
     }
@@ -114,6 +98,7 @@ namespace ari_exe {
             auto cur_state = states.front();
             spdlog::debug("Current state: {}", cur_state->pc->inst->getName().str());
             llvm::errs() << *cur_state->pc->inst << "\n";
+            llvm::errs() << cur_state->memory.to_string() << "\n";
             states.pop();
             if (back_edge_taken(cur_state)) {
                 continue;
@@ -170,9 +155,9 @@ namespace ari_exe {
 
         summarize_scalar(final_states, exit_states);
 
-        if (summary.has_value()) {//  && !summary.value().is_over_approximated()) {
-            summarize_array(final_states, exit_states);
-        }
+        // if (summary.has_value()) {//  && !summary.value().is_over_approximated()) {
+        //     summarize_array(final_states, exit_states);
+        // }
     }
 
     void
@@ -250,16 +235,21 @@ namespace ari_exe {
         for (auto& inst: *loop->getHeader()) {
             if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
                 auto ptr = store_inst->getPointerOperand();
-                if (!isa<llvm::GetElementPtrInst>(ptr)) {
-                    continue;
-                }
-                auto written_value = store_inst->getValueOperand();
-                modified_values.push_back(written_value);
-                auto name = get_z3_name(ptr->getName().str());
+                auto ptr_obj = final_states[0]->memory.get_object(ptr);
+                auto name = get_z3_name(ptr_obj->get_llvm_value()->getName().str());
+
+                // auto written_value = store_inst->getValueOperand();
+                // modified_values.push_back(written_value);
+                // auto name = get_z3_name(ptr->getNa().str());
                 auto store_func = rec_s.z3ctx.int_const(name.c_str());
-                auto stored_value_z3 = final_states[0]->evaluate(written_value).as_expr().substitute(params, params_values).simplify();
-                params.push_back(store_func);
-                params_values.push_back(stored_value_z3);
+                auto it = closed.find(store_func);
+                if (it != closed.end()) {
+                    auto closed_form = it->second;
+                    params.push_back(store_func);
+                    params_values.push_back(closed_form);
+                } else {
+                    is_approximate = true;
+                }
             }
         }
         //---------------------------- End of Collecting Parameters ----------------
@@ -543,37 +533,83 @@ namespace ari_exe {
         auto scalar_and_func = get_header_phis_scalar_and_func();
         auto func = scalar_and_func.second;
         auto header = loop->getHeader();
-        z3::expr_vector values(func.ctx());
+        auto& z3ctx = func.ctx();
+        z3::expr_vector values(z3ctx);
         auto prev_block = parent_state->trace.back();
         for (auto& phi : header->phis()) {
             // get the incoming value from the preheader
             auto phi_value = phi.getIncomingValueForBlock(prev_block);
             values.push_back(parent_state->evaluate(phi_value).as_expr().simplify());
         }
+        auto accessible_objects = parent_state->memory.get_accessible_objects();
+        for (auto obj : accessible_objects) {
+            if (obj->is_scalar()) {
+                auto name = get_z3_name(obj->get_llvm_value()->getName().str());
+                auto z3_value = obj->read().as_expr().simplify();
+                func.push_back(z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort())(z3ctx.int_val(0)));
+                values.push_back(z3_value);
+            }
+        }
+
         z3::expr_vector func_0(func.ctx());
         for (auto f : func) { func_0.push_back(f.decl()(0)); }
         return {func_0, values};
     }
 
-    std::vector<llvm::Value*>
-    LoopExecution::get_scalar_modified_values() {
-        std::vector<llvm::Value*> modified_values;
+    // std::vector<llvm::Value*>
+    // LoopExecution::get_scalar_modified_values() {
+    //     std::vector<llvm::Value*> modified_values;
+    //     auto header = loop->getHeader();
+    //     for (auto& phi : header->phis()) {
+    //         modified_values.push_back(&phi);
+    //     }
+    //     for (auto& block : loop->blocks()) {
+    //         for (auto& inst : *block) {
+    //             if (auto store_inst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
+    //                 auto ptr = store_inst->getPointerOperand();
+    //                 if (!isa<llvm::GetElementPtrInst>(ptr)) {
+    //                     modified_values.push_back(store_inst->getPointerOperand());
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     return modified_values;
+    // }
+    std::vector<MemoryObjectPtr>
+    LoopExecution::get_modified_objects(loop_state_ptr initial_state) {
+        std::vector<MemoryObjectPtr> modified_objects;
         auto header = loop->getHeader();
         for (auto& phi : header->phis()) {
-            modified_values.push_back(&phi);
+            auto obj = initial_state->memory.get_object(&phi);
+            assert(obj->is_scalar() && "Phi nodes should be scalar values");
+            modified_objects.push_back(obj);
         }
+
         for (auto& block : loop->blocks()) {
             for (auto& inst : *block) {
                 if (auto store_inst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
                     auto ptr = store_inst->getPointerOperand();
-                    if (!isa<llvm::GetElementPtrInst>(ptr)) {
-                        modified_values.push_back(store_inst->getPointerOperand());
-                    }
+                    auto ptr_obj = initial_state->memory.get_object_pointed_by(ptr);
+                    modified_objects.push_back(ptr_obj);
                 }
             }
         }
-        return modified_values;
+        return modified_objects;
     }
+
+    void
+    LoopExecution::put_header_phis_in_initial_state(loop_state_ptr state) {
+        auto& memory = state->memory;
+        auto header = loop->getHeader();
+        auto manager = AnalysisManager::get_instance();
+        z3::context& z3ctx = manager->get_z3ctx();
+        for (auto& phi : header->phis()) {
+            auto name = get_z3_name(phi.getName().str());
+            auto z3_value = z3ctx.int_const(name.c_str());
+            memory.put_temp(&phi, z3_value);
+        }
+    }
+
 
 
     llvm::BasicBlock*
@@ -799,11 +835,6 @@ namespace ari_exe {
             updates.push_back(phi_value.as_expr());
         }
         return updates;
-    }
-
-    bool
-    LoopSummarizer::is_invariant(const loop_state_ptr final_state, llvm::Value* value) const {
-        return final_state->modified_values.find(value) == final_state->modified_values.end();
     }
 
     bool

@@ -81,6 +81,8 @@ namespace ari_exe {
 
             z3::expr_vector get_indices() const { return indices; }
 
+            std::string to_string() const;
+
         private:
             // the instruction that creates this memory object
             llvm::Value* llvm_value;

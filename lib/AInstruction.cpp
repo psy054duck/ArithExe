@@ -725,12 +725,12 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                 args.push_back(ptr_expr);
             }
         }
-        auto arrays_ptr = state->memory.get_arrays();
-        for (int i = 0; i < arrays_ptr.size(); i++) {
-            // for each array, we need to get the signature
-            auto array_ptr = arrays_ptr[i];
-            args.push_back(array_ptr->get_signature());
-        }
+        // auto arrays_ptr = state->memory.get_arrays();
+        // for (int i = 0; i < arrays_ptr.size(); i++) {
+        //     // for each array, we need to get the signature
+        //     auto array_ptr = arrays_ptr[i];
+        //     args.push_back(array_ptr->get_signature());
+        // }
         z3::expr_vector closed_forms = summary->evaluate(args);
         // auto phi_it = header->phis().begin();
         auto modified_values = summary->get_modified_values();

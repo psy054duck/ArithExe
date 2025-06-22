@@ -62,3 +62,30 @@ MemoryObject::get_ptr_value() const {
         throw std::runtime_error("MemoryObject does not have a pointer value");
     }
 }
+
+std::string
+MemoryObject::to_string() const {
+    std::string result;
+    if (!is_pointer()) {
+        result = "MemoryObject: " + get_llvm_value()->getName().str() + "\n";
+        result += "Address: " + std::to_string(addr.loc) + "\n";
+        // result += "Pointer Value: " + (ptr_value.has_value() ? ptr_value.value().to_string() : "None") + "\n";
+        // result += "Indices: ";
+        // for (const auto& index : indices) {
+        //     result += index.to_string() + " ";
+        // }
+        result += "\nSizes: ";
+        for (const auto& size : sizes)
+            result += size.as_expr().to_string() + " ";
+        result += "\n";
+    } else {
+        result = "MemoryObject (Pointer -> " + get_llvm_value()->getName().str() + ")\n";
+        // result += "Address: " + std::to_string(addr.loc) + "\n";
+        if (ptr_value.has_value()) {
+            result += "Pointer Value: " + ptr_value.value().base.as_expr().to_string() + "\n";
+        } else {
+            result += "Pointer Value: None\n";
+        }
+    }
+    return result;
+}

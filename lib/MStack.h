@@ -26,7 +26,7 @@ namespace ari_exe {
             struct StackFrame {
                 StackFrame() = default;
                 StackFrame(const Expression& base, llvm::Function* func): base(base), func(func) {}
-                StackFrame(const StackFrame& other): prev_pc(other.prev_pc), base(other.base), locals(other.locals), temp_objects(other.temp_objects), func(other.func) {}
+                StackFrame(const StackFrame& other): prev_pc(other.prev_pc), base(other.base), temp_objects(other.temp_objects), func(other.func) {}
                 StackFrame& operator=(const StackFrame&) = default;
 
                 MemoryObjectPtr get_object(llvm::Value* v) const;
@@ -35,11 +35,14 @@ namespace ari_exe {
 
                 Expression base;
 
-                std::vector<MemoryObject> locals; // local variables in the stack frame
+                // std::vector<MemoryObject> locals; // local variables in the stack frame
 
                 // temporary objects created in the stack frame, used for storing intermediate results
                 MemoryObjectPtr put_temp(llvm::Value* llvm_value, const Expression& value);
                 MemoryObjectPtr put_temp(llvm::Value* llvm_value, const MemoryAddress_ty& ptr_value);
+
+                std::string to_string() const;
+
                 std::map<llvm::Value*, MemoryObject> temp_objects;
                 llvm::Function* func;
             };
@@ -83,7 +86,12 @@ namespace ari_exe {
             // given a memory address, get the memory object pointed by the base
             MemoryObjectPtr get_object(const MemoryAddress_ty& addr) const;
 
+            // get all objects accessible in the top frame
+            std::vector<MemoryObjectPtr> get_top_objects() const;
+
             std::vector<MemoryObjectPtr> get_arrays() const;
+
+            std::string to_string() const;
 
         private:
             std::stack<StackFrame> frames;

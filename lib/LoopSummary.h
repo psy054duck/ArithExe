@@ -112,6 +112,7 @@ namespace ari_exe {
 
             /**
              * @brief LLVM values that are modified by the loop.
+             *        It consists of header phis, stack alloca, heap malloc, and global variables modified by the loop.
              */
             std::vector<llvm::Value*> modified_values;
 
@@ -127,7 +128,6 @@ namespace ari_exe {
              * @brief the closed-form solutions of the loop
              */
             z3::expr_vector summary_closed_form;
-
 
 
             /**

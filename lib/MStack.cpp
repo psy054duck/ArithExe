@@ -9,6 +9,18 @@ using namespace ari_exe;
 //     return frames.top();
 // }
 
+std::string
+MStack::StackFrame::to_string() const {
+    std::string res = "StackFrame for Function: " + (func ? func->getName().str() : "nullptr") + "\n";
+    res += "Temporary Objects:\n";
+    res += "*********\n";
+    for (const auto& [key, obj] : temp_objects) {
+        res += "  " + key->getName().str() + ": " + obj.to_string();
+        res += "*********\n";
+    }
+    return res;
+}
+
 MemoryObjectPtr
 MStack::StackFrame::get_object(llvm::Value* v) const {
     auto it = temp_objects.find(v);
@@ -25,6 +37,19 @@ MStack::push_frame(llvm::Function* func) {
     auto base = Expression(z3ctx.int_val(num_objs));
     frames.push(StackFrame(base, func));
     return frames.top();
+}
+
+std::vector<MemoryObjectPtr>
+MStack::get_top_objects() const {
+    std::vector<MemoryObjectPtr> top_objects;
+    auto& top_frame = frames.top();
+    auto cur_base = top_frame.base.as_expr();
+    assert(cur_base.is_numeral() && "Only support concrete get_top_objects for now");
+    int cur_base_int = cur_base.get_numeral_int();
+    for (int i = cur_base_int; i < objects.size(); ++i) {
+        top_objects.push_back(const_cast<MemoryObjectPtr>(&objects[i]));
+    }
+    return top_objects;
 }
 
 MStack::StackFrame&
@@ -137,4 +162,19 @@ MStack::get_arrays() const {
         }
     }
     return arrays;
+}
+
+std::string
+MStack::to_string() const {
+    std::string res = "MStack:\n";
+    auto& top_frame = frames.top();
+    res += "Top frame:\n";
+    res += top_frame.to_string();
+    res += std::to_string(objects.size()) + " objects: \n";
+    res += "************\n";
+    for (int i = top_frame.base.as_expr().get_numeral_int(); i < objects.size(); ++i) {
+        res += objects[i].to_string();
+        res += "************\n";
+    }
+    return res;
 }

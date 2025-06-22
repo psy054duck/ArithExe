@@ -109,7 +109,17 @@ namespace ari_exe {
              * @brief get all values that modified by this loop,
              *        for which wee need to summarize.
              */
-            std::vector<llvm::Value*> get_scalar_modified_values();
+            // std::vector<llvm::Value*> get_scalar_modified_values();
+
+            /**
+             * @brief Get all memory objects that are modified by the loop.
+             */
+            std::vector<MemoryObjectPtr> get_modified_objects(loop_state_ptr initial_state);
+
+            /**
+             * @brief Put all header phis in the initial state, by putting them into the stack
+             */
+            void put_header_phis_in_initial_state(loop_state_ptr state);
 
             llvm::Loop* loop;
 
@@ -271,10 +281,6 @@ namespace ari_exe {
              */
             void log_states(const loop_state_list& final_states, const loop_state_list& exit_states);
 
-            /**
-             * @brief check if some object is invariant in the loop
-             */
-            bool is_invariant(const loop_state_ptr final_state, llvm::Value* v) const;
     };
 }
 
