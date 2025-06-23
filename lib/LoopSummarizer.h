@@ -92,6 +92,11 @@ namespace ari_exe {
             bool is_final_state(loop_state_ptr state);
 
             /**
+             * @brief get all store instructions in a loop
+             */
+            std::vector<llvm::StoreInst*> get_all_stores(llvm::Loop* loop);
+
+            /**
              * @brief Check if the given state is an exit state
              * @param state The current state
              * @return true if the current state is an exit state
@@ -120,6 +125,11 @@ namespace ari_exe {
              * @brief Put all header phis in the initial state, by putting them into the stack
              */
             void put_header_phis_in_initial_state(loop_state_ptr state);
+
+            /**
+             * @brief Make all stored object symbolic, used for building initial state.
+             */
+            void symbolize_stores(loop_state_ptr state);
 
             llvm::Loop* loop;
 
@@ -196,7 +206,7 @@ namespace ari_exe {
              * @brief convert a finial state to recursive case
              * @return A pair of (condition , transition)
              */
-            std::pair<std::vector<z3::expr>, std::vector<rec_ty>> get_array_recursive_case(loop_state_ptr final_state, const MemoryObjectPtr array);
+            std::pair<std::vector<z3::expr>, std::vector<rec_ty>> get_array_recursive_case(loop_state_ptr final_state, llvm::Value* array);
 
             /**
              * @brief solve recurrence

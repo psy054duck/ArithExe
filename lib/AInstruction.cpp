@@ -718,19 +718,18 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                 auto phi_expr = z3ctx.int_const(name.c_str());
                 args.push_back(phi_expr);
             } else if (auto store_inst = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
-                // for store instruction, we need to get the pointer operand
                 auto ptr = store_inst->getPointerOperand();
                 auto name = get_z3_name(ptr->getName().str());
                 auto ptr_expr = z3ctx.int_const(name.c_str());
                 args.push_back(ptr_expr);
             }
         }
-        // auto arrays_ptr = state->memory.get_arrays();
-        // for (int i = 0; i < arrays_ptr.size(); i++) {
-        //     // for each array, we need to get the signature
-        //     auto array_ptr = arrays_ptr[i];
-        //     args.push_back(array_ptr->get_signature());
-        // }
+        auto arrays_ptr = state->memory.get_arrays();
+        for (int i = 0; i < arrays_ptr.size(); i++) {
+            // for each array, we need to get the signature
+            auto array_ptr = arrays_ptr[i];
+            args.push_back(array_ptr->get_signature());
+        }
         z3::expr_vector closed_forms = summary->evaluate(args);
         // auto phi_it = header->phis().begin();
         auto modified_values = summary->get_modified_values();
@@ -744,10 +743,13 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                 dst.push_back(N.value());
                 // new_state->write(modified_value, closed_forms[i].substitute(src, dst));
                 // new_state->memory.allocate(modified_value, closed_forms[i].substitute(src, dst));
-                new_state->memory.put_temp(modified_value, closed_forms[i].substitute(src, dst));
+                if (auto obj = new_state->memory.get_object_pointed_by(modified_value)) {
+                    obj->write(closed_forms[i].substitute(src, dst));
+                } else {
+                    new_state->memory.put_temp(modified_value, closed_forms[i].substitute(src, dst));
+                }
+
             } else {
-                // new_state->write(modified_value, closed_forms[i]);
-                // new_state->memory.allocate(modified_value, closed_forms[i]);
                 new_state->memory.put_temp(modified_value, closed_forms[i]);
             }
         }
@@ -887,6 +889,57 @@ AInstructionLoad::execute(state_ptr state) {
     new_state->step_pc();
     return {new_state};
     // auto ptr_value = state->evaluate(ptr);
+}
+
+// loop_state_list
+// AInstructionLoad::execute(loop_state_ptr state) {
+//     auto manager = AnalysisManager::get_instance();
+//     auto& LI = manager->get_LI(state->pc->inst->getFunction());
+//     auto loop = LI.getLoopFor(state->pc->inst->getParent());
+// 
+//     auto load_inst = dyn_cast<llvm::LoadInst>(inst);
+//     auto ptr = load_inst->getPointerOperand();
+//     state_ptr new_state = std::make_shared<State>(*state);
+// 
+//     if (is_invariant(state, loop, ptr)) {
+//         // if the load instruction is invariant in the loop, we can optimize it
+//         auto cached_value = state->memory.get_temp(inst);
+//         if (cached_value) {
+//             state_ptr new_state = std::make_shared<State>(*state);
+//             new_state->memory.put_temp(inst, cached_value);
+//             new_state->step_pc();
+//             return {new_state};
+//         }
+//     }
+// 
+// 
+//     auto addr = parse_ptr(new_state->memory.get_object(ptr), new_state);
+//     auto pointed_obj = new_state->memory.get_object(addr);
+//     assert(pointed_obj && "Pointed object must exist");
+// 
+//     auto load_value = pointed_obj->read(addr.offset);
+//     new_state->memory.put_temp(inst, load_value);
+//     new_state->step_pc();
+//     return {new_state};
+//     // auto ptr_value = state->evaluate(ptr);
+// }
+
+bool
+AInstructionLoad::is_invariant(loop_state_ptr state, llvm::Loop* loop, llvm::Value* ptr) const {
+    auto addr = parse_ptr(state->memory.get_object(ptr), state);
+    auto pointed_obj = state->memory.get_object(addr);
+    for (auto bb : loop->blocks()) {
+        for (auto &inst : *bb) {
+            if (auto store_inst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
+                auto stored_ptr = store_inst->getPointerOperand();
+                auto stored_addr = parse_ptr(state->memory.get_object(stored_ptr), state);
+                if (pointed_obj == state->memory.get_object(stored_addr)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
 }
 
 std::vector<state_ptr>

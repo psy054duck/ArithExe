@@ -146,9 +146,7 @@ Memory::heap_alloca(llvm::Value* value, z3::expr_vector dims) {
     }
     std::vector<Expression> sizes;
     for (const auto& dim : dims) {
-        if (dim.is_numeral()) {
-            sizes.emplace_back(dim);
-        }
+        sizes.emplace_back(dim);
     }
     auto name = get_z3_name(value->getName().str());
     auto func = z3ctx.function(name.c_str(), index_sorts, z3ctx.int_sort());

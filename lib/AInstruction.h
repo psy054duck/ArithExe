@@ -166,6 +166,11 @@ namespace ari_exe {
         public:
             AInstructionLoad(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<state_ptr> execute(state_ptr state) override;
+            // loop_state_list execute(loop_state_ptr state) override;
+
+        private:
+            // check if the object pointed by ptr is an invariant
+            bool is_invariant(loop_state_ptr state, llvm::Loop* loop, llvm::Value* ptr) const;
     };
 
     class AInstructionStore: public AInstruction {

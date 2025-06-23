@@ -19,6 +19,24 @@ State::append_path_condition(const Expression& _path_condition) {
 
 Expression
 State::evaluate(llvm::Value* v) {
+    if (auto undef = llvm::dyn_cast_or_null<llvm::UndefValue>(v)) {
+        // If the value is an undef, return a fresh symbolic variable
+        auto ty = v->getType();
+        std::string name = (undef->getName() + v->getName()).str();
+        if (ty->isIntegerTy()) {
+            if (ty->getIntegerBitWidth() == 1) {
+                // For boolean types, we can use a boolean constant
+                return Expression(z3ctx.bool_const(name.c_str()));
+            } else {
+                return Expression(z3ctx.int_const(name.c_str()));
+            }
+        } else if (ty->isFloatingPointTy()) {
+            // For floating point types, we can use a real constant
+            return Expression(z3ctx.real_const(name.c_str()));
+        } else {
+            assert(false && "Unsupported type for undef value");
+        }
+    }
     if (auto constant = llvm::dyn_cast_or_null<llvm::ConstantInt>(v)) {
         // If the value is a constant, return its value directly
         if (constant->getBitWidth() == 1) {

@@ -55,6 +55,7 @@ namespace ari_exe {
         auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, memory, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
 
         put_header_phis_in_initial_state(initial_state);
+        symbolize_stores(initial_state);
         return initial_state;
     }
 
@@ -66,11 +67,6 @@ namespace ari_exe {
         for (auto next_state : pc->execute(state)) {
             auto next_loop_state = std::make_shared<LoopState>(LoopState(*next_state));
             new_states.push_back(next_loop_state);
-            // next_loop_state->modified_values = modified_values;
-            // auto modified_value = get_modified_value(state, pc->inst);
-            // if (modified_value) {
-            //     next_loop_state->modified_values.insert(modified_value);
-            // }
         }
         return new_states;
     }
@@ -97,8 +93,8 @@ namespace ari_exe {
         while (!states.empty()) {
             auto cur_state = states.front();
             spdlog::debug("Current state: {}", cur_state->pc->inst->getName().str());
-            llvm::errs() << *cur_state->pc->inst << "\n";
-            llvm::errs() << cur_state->memory.to_string() << "\n";
+            // llvm::errs() << *cur_state->pc->inst << "\n";
+            // llvm::errs() << cur_state->memory.to_string() << "\n";
             states.pop();
             if (back_edge_taken(cur_state)) {
                 continue;
@@ -155,9 +151,10 @@ namespace ari_exe {
 
         summarize_scalar(final_states, exit_states);
 
-        // if (summary.has_value()) {//  && !summary.value().is_over_approximated()) {
-        //     summarize_array(final_states, exit_states);
-        // }
+        if (summary.has_value()) {//  && !summary.value().is_over_approximated()) {
+            summarize_array(final_states, exit_states);
+        }
+        spdlog::info("finish summarization");
     }
 
     void
@@ -366,13 +363,14 @@ namespace ari_exe {
     }
 
     std::pair<std::vector<z3::expr>, std::vector<rec_ty>>
-    LoopSummarizer::get_array_recursive_case(loop_state_ptr state, const MemoryObjectPtr array) {
+    LoopSummarizer::get_array_recursive_case(loop_state_ptr state, llvm::Value* array_ptr) {
         auto manager = AnalysisManager::get_instance();
         auto& z3ctx = manager->get_z3ctx();
+        auto array = state->memory.get_object_pointed_by(array_ptr);
         auto sig = array->get_signature();
         auto path_condition = state->path_condition_in_loop;
-        auto array_ptr = state->memory.get_object(array->get_llvm_value());
-        auto rec_func = get_array_rec_func(array_ptr);
+        // auto array_ptr = state->memory.get_object(array->get_llvm_value());
+        auto rec_func = get_array_rec_func(array);
         z3::expr_vector go_back_src(z3ctx);
         z3::expr_vector go_back_dst(z3ctx);
         go_back_src.push_back(manager->get_ind_var());
@@ -383,7 +381,7 @@ namespace ari_exe {
         // retrieve closed-form solutions to scalar variables
         // and substitute them into the array update
         auto scalars = summary.value();
-        auto update = scalars.evaluate_expr(array_ptr->read().as_expr()).simplify();
+        auto update = scalars.evaluate_expr(array->get_value().as_expr()).simplify();
         auto apps_of_arr = get_app_of(update, sig.decl());
         for (auto app : apps_of_arr) {
             sub_src.push_back(app);
@@ -397,8 +395,8 @@ namespace ari_exe {
         std::vector<z3::expr> conditions;
         std::vector<rec_ty> eqs;
         // assume the last condition and expression represent the frame part
-        auto array_conditions = array_ptr->read().get_conditions();
-        auto array_expressions = array_ptr->read().get_expressions();
+        auto array_conditions = array->get_value().get_conditions();
+        auto array_expressions = array->get_value().get_expressions();
         for (int i = 0; i < array_conditions.size() - 1; i++) {
             auto condition = scalars.evaluate_expr(path_condition.as_expr() && array_conditions[i]).simplify();
             conditions.push_back(condition.substitute(go_back_src, go_back_dst));
@@ -426,22 +424,22 @@ namespace ari_exe {
             std::vector<rec_ty> eqs;
 
             auto arbitrary_state = final_states[0];
-            auto array_ptr = arbitrary_state->memory.get_object(array->get_llvm_value());
+            // auto array_ptr = arbitrary_state->memory.get_object(array->get_llvm_value());
 
             //------------------ get recurrence for arrays -------------------------
             // base case: if any argument is negative or the loop counter is non-positive
-            auto [base_cond, base_eq] = get_array_base_case(array_ptr);
+            auto [base_cond, base_eq] = get_array_base_case(array);
             conditions.push_back(base_cond);
             eqs.push_back(base_eq);
 
             for (auto state : final_states) {
-                auto [case_conditions, case_eqs] = get_array_recursive_case(state, array_ptr);
+                auto [case_conditions, case_eqs] = get_array_recursive_case(state, array->get_llvm_value());
                 conditions.insert(conditions.end(), case_conditions.begin(), case_conditions.end());
                 eqs.insert(eqs.end(), case_eqs.begin(), case_eqs.end());
             }
 
             // add the frame part
-            auto [frame_cond, frame_eq] = get_array_frame_case(conditions, array_ptr);
+            auto [frame_cond, frame_eq] = get_array_frame_case(conditions, array);
             auto acc_cond = z3ctx.bool_val(false);
             conditions.push_back(frame_cond);
             eqs.push_back(frame_eq);
@@ -457,19 +455,18 @@ namespace ari_exe {
             z3::expr_vector N_dst(z3ctx);
             auto N = scalar_summary.get_N().value_or(manager->get_loop_N());
             N_dst.push_back(N);
-            auto dims = array_ptr->get_sizes();
+            auto dims = array->get_sizes();
             z3::expr domain(z3ctx.bool_val(true));
-            auto indices = array_ptr->get_indices();
+            auto indices = array->get_indices();
             for (int i = 0 ; i < dims.size(); i++) {
                 domain = domain && 0 <= indices[i] && indices[i] < dims[i].as_expr() && 0 <= N;
             }
             for (auto& [func, expr] : closed) {
                 spdlog::info("Restricting array summaries to the domain");
                 auto closed_form = restrict_to_domain(expr.substitute(n_src, N_dst), domain).simplify();
-                summary->add_closed_form(array_ptr->get_signature(), closed_form);
+                summary->add_closed_form(array->get_signature(), closed_form);
             }
         }
-        spdlog::info("finish summarization");
     }
 
     closed_form_ty
@@ -610,7 +607,52 @@ namespace ari_exe {
         }
     }
 
+    static llvm::Value*
+    get_base_value(llvm::Value* v) {
+        if (llvm::isa<llvm::GlobalVariable>(v)) {
+            return v;
+        }
+        if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(v)) {
+            auto called_func = call_inst->getCalledFunction();
+            if (called_func->getName() == "malloc") {
+                return v;
+            }
+        }
+        if (llvm::isa<llvm::AllocaInst>(v)) {
+            return v;
+        }
+        if (auto gep = llvm::dyn_cast_or_null<llvm::GetElementPtrInst>(v)) {
+            return get_base_value(gep->getPointerOperand());
+        }
+        assert(false && "not supported yet");
+    }
 
+    void
+    LoopExecution::symbolize_stores(loop_state_ptr state) {
+        auto manager = AnalysisManager::get_instance();
+        auto& z3ctx = manager->get_z3ctx();
+        auto stores = get_all_stores(loop);
+        for (auto store : stores) {
+            auto ptr = store->getPointerOperand();
+            auto base_value = get_base_value(ptr);
+            auto written_obj = state->memory.get_object_pointed_by(base_value);
+            assert(written_obj);
+            written_obj->write(written_obj->get_signature());
+        }
+    }
+
+    std::vector<llvm::StoreInst*>
+    LoopExecution::get_all_stores(llvm::Loop* loop) {
+        std::vector<llvm::StoreInst*> res;
+        for (auto bb : loop->blocks()) {
+            for (auto& inst : *bb) {
+                if (auto store = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
+                    res.push_back(store);
+                }
+            }
+        }
+        return res;
+    }
 
     llvm::BasicBlock*
     LoopSummarizer::get_predecessor() {
@@ -675,7 +717,6 @@ namespace ari_exe {
                     auto name = get_z3_name(phi->getName().str());
                     auto phi_func = rec_s.z3ctx.function(name.c_str(), rec_s.z3ctx.int_sort(), rec_s.z3ctx.int_sort());
                     eq.insert_or_assign(phi_func(manager->get_ind_var() + 1), tmp_expressions[i].substitute(src, dst));
-                    llvm::errs() << phi_func(manager->get_ind_var() + 1).to_string() << tmp_expressions[i].substitute(src, dst).to_string() << "\n";
                 }
                 rec_eqs.push_back(eq);
             }

@@ -68,6 +68,8 @@ namespace ari_exe {
 
             bool is_pointer() const { return ptr_value.has_value(); };
 
+            Expression get_value() const { return value; }
+
             MemoryAddress_ty get_ptr_value() const;
 
             // get the z3 function signature of the memory object
