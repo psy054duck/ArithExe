@@ -18,7 +18,7 @@ State::append_path_condition(const Expression& _path_condition) {
 }
 
 Expression
-State::evaluate(llvm::Value* v) {
+State::evaluate(llvm::Value* v, bool is_signed) {
     if (auto undef = llvm::dyn_cast_or_null<llvm::UndefValue>(v)) {
         // If the value is an undef, return a fresh symbolic variable
         auto ty = v->getType();
@@ -42,7 +42,10 @@ State::evaluate(llvm::Value* v) {
         if (constant->getBitWidth() == 1) {
             return Expression(z3ctx.bool_val(constant->getSExtValue()));
         }
-        return Expression(z3ctx.int_val(constant->getSExtValue()));
+        if (is_signed)
+            return Expression(z3ctx.int_val(constant->getSExtValue()));
+        else
+            return Expression(z3ctx.int_val(constant->getZExtValue()));
     }
     auto obj = memory.get_object(v);
     if (obj) {

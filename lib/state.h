@@ -86,7 +86,7 @@ namespace ari_exe {
             // memory model for symbolic execution
             Memory memory;
 
-            Expression evaluate(llvm::Value* v);
+            Expression evaluate(llvm::Value* v, bool is_signed = true);
 
             trace_ty trace;
 

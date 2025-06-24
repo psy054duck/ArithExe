@@ -625,6 +625,7 @@ namespace ari_exe {
             return get_base_value(gep->getPointerOperand());
         }
         assert(false && "not supported yet");
+        return nullptr;
     }
 
     void

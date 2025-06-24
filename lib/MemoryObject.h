@@ -43,7 +43,8 @@ namespace ari_exe {
                          std::optional<MemoryAddress_ty> ptr_value,
                          const z3::expr_vector& indices,
                          const std::vector<Expression>& sizes,
-                         const std::string& name): llvm_value(llvm_value), addr(obj_addr), value(value), ptr_value(ptr_value), indices(indices), sizes(sizes), name(name + std::to_string(name_counter[name])) {}
+                         const std::string& name,
+                         bool _is_signed = true): llvm_value(llvm_value), addr(obj_addr), value(value), ptr_value(ptr_value), indices(indices), sizes(sizes), name(name + std::to_string(name_counter[name])), _is_signed(_is_signed) {}
 
             // read the first value of the memory object
             Expression read() const;
@@ -85,6 +86,10 @@ namespace ari_exe {
 
             std::string to_string() const;
 
+            bool is_signed() const { return _is_signed; }
+
+            void set_signed(bool is_signed) { _is_signed = is_signed; }
+
         private:
             // the instruction that creates this memory object
             llvm::Value* llvm_value;
@@ -105,6 +110,7 @@ namespace ari_exe {
             // the size of each dimension of the array
             std::vector<Expression> sizes;
 
+            bool _is_signed = true;
             // the name of this object, used for generate z3 function.
             std::string name;
 

@@ -102,6 +102,8 @@ namespace ari_exe {
             state_ptr execute_cache(state_ptr state);
             state_ptr execute_reach_error(state_ptr state);
 
+            static std::map<llvm::Value*, int> value_counter;
+
     };
 
     class AInstructionBranch: public AInstruction {
@@ -189,6 +191,12 @@ namespace ari_exe {
     class AInstructionAlloca: public AInstruction {
         public:
             AInstructionAlloca(llvm::Instruction* inst): AInstruction(inst) {};
+            std::vector<state_ptr> execute(state_ptr state) override;
+    };
+
+    class AInstructionDebug: public AInstruction {
+        public:
+            AInstructionDebug(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<state_ptr> execute(state_ptr state) override;
     };
 }

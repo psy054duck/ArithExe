@@ -133,7 +133,9 @@ int main()
   unsigned d;
   unsigned e;
   unsigned uint32_max;
-  uint32_max = 0xffffffff;
+  // uint32_max = 4294967295U;
+  uint32_max = 0xffffffffu;
+  // uint32_max = 3;
   {
     a = 0;
     func_to_recursive_line_10_to_11_0(&uint32_max, &c, &b, &a, &e, &d);

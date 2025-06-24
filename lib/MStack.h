@@ -97,6 +97,8 @@ namespace ari_exe {
             std::stack<StackFrame> frames;
 
             std::vector<MemoryObject> objects;
+
+            std::map<llvm::Value*, int> value_counter;
     };
 }
 #endif

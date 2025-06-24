@@ -96,7 +96,10 @@ MStack::allocate(llvm::Value* value, z3::expr_vector dims) {
             sizes.emplace_back(dim);
         }
     }
-    objects.emplace_back(value, mem_obj_addr, Expression(), std::nullopt, indices, sizes, value->getName().str());
+
+    std::string name = value->getName().str() + std::to_string(value_counter[value]++) + "_undef";
+    Expression undef(z3ctx.int_const(name.c_str()));
+    objects.emplace_back(value, mem_obj_addr, undef, std::nullopt, indices, sizes, value->getName().str());
     
     put_temp(value, mem_obj_addr);
 

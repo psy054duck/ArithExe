@@ -8,6 +8,9 @@ using namespace ari_exe;
 std::map<llvm::Instruction*, AInstruction*>
 AInstruction::cached_instructions;
 
+std::map<llvm::Value*, int>
+AInstructionCall::value_counter;
+
 AInstruction*
 AInstruction::create(llvm::Instruction* inst) {
     if (cached_instructions.find(inst) != cached_instructions.end()) {
@@ -15,7 +18,9 @@ AInstruction::create(llvm::Instruction* inst) {
     }
 
     AInstruction* res = nullptr;
-    if (auto bin_inst = llvm::dyn_cast_or_null<llvm::BinaryOperator>(inst)) {
+    if (inst->isDebugOrPseudoInst()) {
+        res = new AInstructionDebug(inst);
+    } else if (auto bin_inst = llvm::dyn_cast_or_null<llvm::BinaryOperator>(inst)) {
         res = new AInstructionBinary(bin_inst);
     } else if (auto cmp_inst = llvm::dyn_cast_or_null<llvm::ICmpInst>(inst)) {
         res = new AInstructionICmp(cmp_inst);
@@ -43,8 +48,7 @@ AInstruction::create(llvm::Instruction* inst) {
     } else if (auto alloca_inst = llvm::dyn_cast_or_null<llvm::AllocaInst>(inst)) {
         res = new AInstructionAlloca(alloca_inst);
     } else {
-        llvm::errs() << "Unsupported instruction type\n";
-        assert(false);
+        assert(false && "Unspported instruction type");
     }
     cached_instructions.insert_or_assign(inst, res);
     return res;
@@ -75,7 +79,8 @@ AInstruction::execute(rec_state_ptr state) {
 
 AInstruction*
 AInstruction::get_next_instruction() {
-    auto next_inst = inst->getNextNonDebugInstruction();
+    // auto next_inst = inst->getNextNonDebugInstruction();
+    auto next_inst = inst->getNextNode();
     if (next_inst) {
         return create(next_inst);
     }
@@ -366,15 +371,15 @@ AInstructionCall::execute_unknown(state_ptr state) {
     Expression result(z3ctx);
 
     // external function value is unknown, so symbolic
-    auto name = "ari_" + inst->getName();
+    auto name = "ari_" + inst->getName().str() + "_" + std::to_string(value_counter[inst]++);
     auto ret_type = call_inst->getType();
 
     if (ret_type->isIntegerTy()) {
-        result = z3ctx.int_const(name.str().c_str());
+        result = z3ctx.int_const(name.c_str());
     } else if (ret_type->isDoubleTy()) {
-        result = z3ctx.real_const(name.str().c_str());
+        result = z3ctx.real_const(name.c_str());
     } else if (ret_type->isFloatTy()) {
-        result = z3ctx.real_const(name.str().c_str());
+        result = z3ctx.real_const(name.c_str());
     } else {
         llvm::errs() << "Unsupported return type for call instruction\n";
         assert(false);
@@ -384,6 +389,9 @@ AInstructionCall::execute_unknown(state_ptr state) {
     // new_state->write(inst, result);
     if (called_func && called_func->getName().ends_with("uint")) {
         new_state->append_path_condition(result >= z3ctx.int_val(0));
+    } else if (called_func && called_func->getName().ends_with("uchar")) {
+        new_state->append_path_condition(result >= z3ctx.int_val(0));
+        new_state->append_path_condition(result <= z3ctx.int_val(255));
     }
     new_state->step_pc();
     return new_state;
@@ -779,8 +787,8 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         state->trace.push_back(header);
         // auto new_pc = AInstruction::create(&*exit_block->begin());
         auto exit_block_first_inst = &*exit_block->begin();
-        if (exit_block_first_inst->isDebugOrPseudoInst())
-            exit_block_first_inst = exit_block_first_inst->getNextNonDebugInstruction();
+        // if (exit_block_first_inst->isDebugOrPseudoInst())
+        //     exit_block_first_inst = exit_block_first_inst->getNextNonDebugInstruction();
         auto new_pc = AInstruction::create(exit_block_first_inst);
         state->step_pc(new_pc);
     }
@@ -888,41 +896,7 @@ AInstructionLoad::execute(state_ptr state) {
     new_state->memory.put_temp(inst, load_value);
     new_state->step_pc();
     return {new_state};
-    // auto ptr_value = state->evaluate(ptr);
 }
-
-// loop_state_list
-// AInstructionLoad::execute(loop_state_ptr state) {
-//     auto manager = AnalysisManager::get_instance();
-//     auto& LI = manager->get_LI(state->pc->inst->getFunction());
-//     auto loop = LI.getLoopFor(state->pc->inst->getParent());
-// 
-//     auto load_inst = dyn_cast<llvm::LoadInst>(inst);
-//     auto ptr = load_inst->getPointerOperand();
-//     state_ptr new_state = std::make_shared<State>(*state);
-// 
-//     if (is_invariant(state, loop, ptr)) {
-//         // if the load instruction is invariant in the loop, we can optimize it
-//         auto cached_value = state->memory.get_temp(inst);
-//         if (cached_value) {
-//             state_ptr new_state = std::make_shared<State>(*state);
-//             new_state->memory.put_temp(inst, cached_value);
-//             new_state->step_pc();
-//             return {new_state};
-//         }
-//     }
-// 
-// 
-//     auto addr = parse_ptr(new_state->memory.get_object(ptr), new_state);
-//     auto pointed_obj = new_state->memory.get_object(addr);
-//     assert(pointed_obj && "Pointed object must exist");
-// 
-//     auto load_value = pointed_obj->read(addr.offset);
-//     new_state->memory.put_temp(inst, load_value);
-//     new_state->step_pc();
-//     return {new_state};
-//     // auto ptr_value = state->evaluate(ptr);
-// }
 
 bool
 AInstructionLoad::is_invariant(loop_state_ptr state, llvm::Loop* loop, llvm::Value* ptr) const {
@@ -948,7 +922,6 @@ AInstructionStore::execute(state_ptr state) {
     auto ptr = store_inst->getPointerOperand();
     auto value = store_inst->getValueOperand();
     // auto ptr_value = state->evaluate(ptr);
-    auto value_expr = state->evaluate(value);
     state_ptr new_state = std::make_shared<State>(*state);
 
     auto pointer_obj = new_state->memory.get_object(ptr);
@@ -956,6 +929,7 @@ AInstructionStore::execute(state_ptr state) {
     auto offset = pointer_obj->get_ptr_value().offset;
 
     auto pointed_obj = new_state->memory.get_object_pointed_by(ptr);
+    auto value_expr = state->evaluate(value, pointed_obj->is_signed());
     assert(pointed_obj && "Pointed object must exist");
     pointed_obj->write(offset, value_expr);
 
@@ -973,4 +947,43 @@ AInstructionGEP::execute(state_ptr state) {
     // new_state->store_gep(gep);
     new_state->step_pc();
     return {new_state};
+}
+
+std::vector<state_ptr>
+AInstructionDebug::execute(state_ptr state) {
+    // Debug instructions are not executed, just skipped
+    if (auto dbg_declare = llvm::dyn_cast_or_null<llvm::DbgDeclareInst>(inst)) {
+        auto* var = dbg_declare->getVariable();
+        auto llvm_value = dbg_declare->getAddress();
+        assert(llvm_value->getType()->isPointerTy() && "Expected a pointer type for debug declare");
+        if (auto* diType = var->getType()) {
+            if (diType->getName().contains("unsigned char")) {
+                auto addr = parse_ptr(state->memory.get_object(llvm_value), state);
+                auto pointed_obj = state->memory.get_object(addr);
+                pointed_obj->set_signed(true);
+                state->append_path_condition(pointed_obj->get_value() >= state->z3ctx.int_val(0));
+                state->append_path_condition(pointed_obj->get_value() <= state->z3ctx.int_val(255));
+            } else if (diType->getName().contains("unsigned")) {
+                auto addr = parse_ptr(state->memory.get_object(llvm_value), state);
+                auto pointed_obj = state->memory.get_object(addr);
+                pointed_obj->set_signed(false);
+                state->append_path_condition(pointed_obj->get_value() >= state->z3ctx.int_val(0));
+            }
+        }
+    } else if (auto dbg_value = llvm::dyn_cast_or_null<llvm::DbgValueInst>(inst)) {
+        auto* llvm_value = dbg_value->getValue();
+        if (auto* diType = dbg_value->getVariable()->getType()) {
+            auto obj = state->memory.get_object(llvm_value);
+            if (diType->getName().contains("unsigned char")) {
+                obj->set_signed(false);
+                state->append_path_condition(state->evaluate(llvm_value) >= state->z3ctx.int_val(0));
+                state->append_path_condition(state->evaluate(llvm_value) <= state->z3ctx.int_val(255));
+            } else if (diType->getName().contains("unsigned")) {
+                obj->set_signed(false);
+                state->append_path_condition(state->evaluate(llvm_value) >= state->z3ctx.int_val(0));
+            }
+        }
+    }
+    state->step_pc();
+    return {state};
 }

@@ -68,6 +68,7 @@ Engine::run(state_ptr state) {
         } else if (cur_state->status == State::REACH_ERROR) {
             auto res = test(cur_state);
             if (res == FEASIBLE) {
+                llvm::errs() << cur_state->get_path_condition().as_expr().to_string() << "\n";
                 results.push_back(FAIL);
                 return;
             }

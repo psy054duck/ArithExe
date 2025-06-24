@@ -60,6 +60,7 @@ namespace ari_exe {
             
             z3::expr_vector conditions;
             z3::expr_vector expressions;
+
     };
 } // namespace ari_exe
 
