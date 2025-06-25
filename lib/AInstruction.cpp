@@ -173,7 +173,8 @@ AInstructionAlloca::execute(state_ptr state) {
 
     assert(!alloca_inst->isArrayAllocation() && "Array allocation is not supported yet");
     // Allocate memory for the alloca instruction
-    auto size = alloca_inst->getAllocatedType()->getPrimitiveSizeInBits() / 8;
+    // auto size = alloca_inst->getAllocatedType()->getPrimitiveSizeInBits() / 8;
+    auto size = z3ctx.int_val(1);
     
     state_ptr new_state = std::make_shared<State>(*state);
     z3::expr_vector sizes(z3ctx);
@@ -221,7 +222,7 @@ AInstructionCall::execute_normal(state_ptr state) {
     // check if the function is recursive and not yet summarized
     auto ret_type = called_func->getReturnType();
     bool is_visited = Cache::get_instance()->is_visited(called_func);
-    if (!ret_type->isVoidTy() && !is_visited && !state->is_summarizing() && is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
+    if (!is_visited && !state->is_summarizing() && is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
         Cache::get_instance()->mark_visited(called_func);
         auto summary = summarize_complete(state->z3ctx);
         if (summary.has_value()) {
@@ -232,8 +233,8 @@ AInstructionCall::execute_normal(state_ptr state) {
     auto summary = State::func_summaries->get_value(called_func);
     auto& z3ctx = state->z3ctx;
 
-    if (summary.has_value()) {
-        state_ptr new_state = std::make_shared<State>(*state);
+    state_ptr new_state = std::make_shared<State>(*state);
+    if (summary.has_value() && !summary->is_over_approximated()) {
         std::vector<Expression> args;
         for (unsigned i = 0; i < call_inst->arg_size(); i++) {
             auto arg = call_inst->getArgOperand(i);
@@ -247,10 +248,37 @@ AInstructionCall::execute_normal(state_ptr state) {
         new_state->step_pc();
         return new_state;
     }
+    if (summary.has_value() && summary->is_over_approximated()) {
+        z3::expr_vector unknowns(z3ctx);
+        z3::expr_vector initial_values(z3ctx);
+        for (int i = 0; i < call_inst->arg_size(); i++) {
+            auto arg = call_inst->getArgOperand(i);
+            assert(arg->getType()->isPointerTy() && "Over-approximated function should only have pointer arguments");
+            auto arg_obj = new_state->memory.get_object_pointed_by(arg);
+            auto arg_value = arg_obj->read().as_expr();
+            initial_values.push_back(arg_value);
+            auto name = arg->getName() + "_unknwon_over_approximated" + std::to_string(value_counter[inst]++);
+            auto unknown = z3ctx.int_const(name.str().c_str());
+            unknowns.push_back(unknown);
+            arg_obj->write(unknown);
+        }
+
+        closed_form_ty closed_form;
+        auto params = summary->get_params();
+        for (auto closed : summary->get_over_approx()) {
+            auto lhs = closed.first;
+            auto rhs = closed.second;
+            lhs = lhs.substitute(params, unknowns);
+            rhs = rhs.substitute(params, initial_values).simplify();
+            new_state->append_path_condition(lhs == rhs);
+        }
+        new_state->append_path_condition(summary->get_exit_condition().substitute(params, unknowns));
+        new_state->step_pc();
+        return new_state;
+    }
 
     z3::expr result(z3ctx);
 
-    state_ptr new_state = std::make_shared<State>(*state);
     auto& frame = new_state->memory.push_frame(called_func);
     frame.prev_pc = state->pc;
     // push the arguments to the stack
@@ -381,8 +409,7 @@ AInstructionCall::execute_unknown(state_ptr state) {
     } else if (ret_type->isFloatTy()) {
         result = z3ctx.real_const(name.c_str());
     } else {
-        llvm::errs() << "Unsupported return type for call instruction\n";
-        assert(false);
+        throw std::runtime_error("Unsupported return type for call instruction");
     }
     state_ptr new_state = std::make_shared<State>(*state);
     new_state->memory.put_temp(inst, result);
@@ -447,12 +474,15 @@ AInstructionCall::execute_naively(state_ptr state) {
     z3::expr_vector args(z3ctx);
     for (int i = 0; i < num_args; i++) {
         auto arg = call_inst->getArgOperand(i);
-        auto arg_value = state->evaluate(arg);
-        args.push_back(arg_value.as_expr());
+        if (arg->getType()->isPointerTy()) {
+            auto arg_value = state->memory.get_object(arg);
+            args.push_back(arg_value->get_ptr_value().base.as_expr());
+        } else {
+            auto arg_value = state->evaluate(arg);
+            args.push_back(arg_value.as_expr());
+        }
     }
     auto new_state = std::make_shared<State>(*state);
-    // new_state->write(inst, f(args));
-    // new_state->memory.allocate(inst, f(args));
     new_state->memory.put_temp(inst, f(args));
     new_state->step_pc();
     return {new_state};
@@ -972,17 +1002,22 @@ AInstructionDebug::execute(state_ptr state) {
         }
     } else if (auto dbg_value = llvm::dyn_cast_or_null<llvm::DbgValueInst>(inst)) {
         auto* llvm_value = dbg_value->getValue();
-        if (auto* diType = dbg_value->getVariable()->getType()) {
-            auto obj = state->memory.get_object(llvm_value);
-            if (diType->getName().contains("unsigned char")) {
-                obj->set_signed(false);
-                state->append_path_condition(state->evaluate(llvm_value) >= state->z3ctx.int_val(0));
-                state->append_path_condition(state->evaluate(llvm_value) <= state->z3ctx.int_val(255));
-            } else if (diType->getName().contains("unsigned")) {
-                obj->set_signed(false);
-                state->append_path_condition(state->evaluate(llvm_value) >= state->z3ctx.int_val(0));
+        if (!llvm::isa<llvm::Constant>(llvm_value)) {
+            if (auto* diType = dbg_value->getVariable()->getType()) {
+                auto obj = state->memory.get_object(llvm_value);
+                if (diType->getName().contains("unsigned char")) {
+                    obj->set_signed(false);
+                    state->append_path_condition(state->evaluate(llvm_value) >= state->z3ctx.int_val(0));
+                    state->append_path_condition(state->evaluate(llvm_value) <= state->z3ctx.int_val(255));
+                } else if (diType->getName().contains("unsigned")) {
+                    obj->set_signed(false);
+                    state->append_path_condition(state->evaluate(llvm_value) >= state->z3ctx.int_val(0));
+                }
             }
         }
+    } else {
+        // Other debug instructions are ignored
+        llvm::errs() << "Ignoring debug instruction: " << *inst << "\n";
     }
     state->step_pc();
     return {state};

@@ -90,7 +90,28 @@ namespace ari_exe {
             std::optional<FunctionSummary> summary;
             void summarize();
 
+            // This is used for summarizing void function with pointer parameters
+            // return true on success
+            bool summarize_pointers();
+
+            // This is used for summarizing functions with scalar parameters
+            void summarize_scalar();
+
+            // Check if all branches of the function are either base cases or tail calls
+            bool is_tail_call(llvm::Function* f, const std::set<llvm::Function*>& SCC);
+
+            // Check if all functions in the SCC are (mutually) tail recursive
+            bool is_tail_recursive(const std::set<llvm::Function*>& SCC);
+
+            bool is_base_case_final_state(const rec_state_ptr& state, const std::set<llvm::Function*>& SCC);
+
+            std::pair<rec_state_list, rec_state_list> split_cases(const rec_state_list& final_states, const std::set<llvm::Function*>& SCC);
+
             rec_solver prepare_rec_solver();
+
+            std::vector<llvm::Instruction*> combine_trace(const trace_ty& trace);
+
+            llvm::Instruction* get_last_meaningful_inst(const trace_ty& trace);
 
             rec_solver prepare_rec_solver_unfold();
             std::optional<rec_solver> prepare_rec_solver_naive();

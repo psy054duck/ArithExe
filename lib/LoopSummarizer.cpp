@@ -553,25 +553,6 @@ namespace ari_exe {
         return {func_0, values};
     }
 
-    // std::vector<llvm::Value*>
-    // LoopExecution::get_scalar_modified_values() {
-    //     std::vector<llvm::Value*> modified_values;
-    //     auto header = loop->getHeader();
-    //     for (auto& phi : header->phis()) {
-    //         modified_values.push_back(&phi);
-    //     }
-    //     for (auto& block : loop->blocks()) {
-    //         for (auto& inst : *block) {
-    //             if (auto store_inst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
-    //                 auto ptr = store_inst->getPointerOperand();
-    //                 if (!isa<llvm::GetElementPtrInst>(ptr)) {
-    //                     modified_values.push_back(store_inst->getPointerOperand());
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     return modified_values;
-    // }
     std::vector<MemoryObjectPtr>
     LoopExecution::get_modified_objects(loop_state_ptr initial_state) {
         std::vector<MemoryObjectPtr> modified_objects;

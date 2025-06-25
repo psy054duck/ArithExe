@@ -23,6 +23,12 @@ TEST(BENCHMARK_NLA, true_3) {
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/nla/true_3.c";
 }
 
+TEST(BENCHMARK_NLA, true_4) {
+    auto engine = Engine("../../test/benchmark/nla/true_4.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/nla/true_4.c";
+}
+
 TEST(BENCHMARK_RECURSION, false_1) {
     auto engine = Engine("../../test/benchmark/recursion/false_1.c");
     auto veri_res = engine.verify();
@@ -39,6 +45,12 @@ TEST(BENCHMARK_RECURSION, false_3) {
     auto engine = Engine("../../test/benchmark/recursion/false_3.c");
     auto veri_res = engine.verify();
     EXPECT_EQ(veri_res, Engine::FAIL) << "Failed on: benchmark/recursion/false_3.c";
+}
+
+TEST(BENCHMARK_RECURSION, false_4) {
+    auto engine = Engine("../../test/benchmark/recursion/false_4.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::FAIL) << "Failed on: benchmark/recursion/false_4.c";
 }
 
 TEST(BENCHMARK_RECURSION, true_1) {
@@ -71,6 +83,12 @@ TEST(BENCHMARK_RECURSION, true_13) {
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/recursion/true_13.c";
 }
 
+TEST(BENCHMARK_RECURSION, true_14) {
+    auto engine = Engine("../../test/benchmark/recursion/true_14.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/recursion/true_14.c";
+}
+
 TEST(BENCHMARK_RECURSION, true_2) {
     auto engine = Engine("../../test/benchmark/recursion/true_2.c");
     auto veri_res = engine.verify();
@@ -87,6 +105,12 @@ TEST(BENCHMARK_RECURSION, true_7) {
     auto engine = Engine("../../test/benchmark/recursion/true_7.c");
     auto veri_res = engine.verify();
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/recursion/true_7.c";
+}
+
+TEST(BENCHMARK_RECURSION, true_8) {
+    auto engine = Engine("../../test/benchmark/recursion/true_8.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/recursion/true_8.c";
 }
 
 TEST(BENCHMARK_RECURSION, true_9) {
@@ -243,6 +267,12 @@ TEST(BENCHMARK_LOOPS, true_7) {
     auto engine = Engine("../../test/benchmark/loops/true_7.c");
     auto veri_res = engine.verify();
     EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_7.c";
+}
+
+TEST(BENCHMARK_LOOPS, true_8) {
+    auto engine = Engine("../../test/benchmark/loops/true_8.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, Engine::HOLD) << "Failed on: benchmark/loops/true_8.c";
 }
 
 TEST(BENCHMARK_LOOPS, true_9) {

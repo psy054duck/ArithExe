@@ -49,7 +49,7 @@ Engine::run(state_ptr state) {
         auto cur_state = states.top();
         states.pop();
         spdlog::debug("Current Instruction: {}", cur_state->pc->inst->getName().str());
-        // llvm::errs() << *cur_state->pc->inst << "\n";
+        llvm::errs() << *cur_state->pc->inst << "\n";
         // llvm::errs() << cur_state->memory.to_string() << "\n";
 
         if (cur_state->status == State::TERMINATED) {
@@ -68,7 +68,6 @@ Engine::run(state_ptr state) {
         } else if (cur_state->status == State::REACH_ERROR) {
             auto res = test(cur_state);
             if (res == FEASIBLE) {
-                llvm::errs() << cur_state->get_path_condition().as_expr().to_string() << "\n";
                 results.push_back(FAIL);
                 return;
             }

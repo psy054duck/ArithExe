@@ -104,22 +104,12 @@ namespace ari_exe {
 
             Expression get_path_condition() const { return path_condition; }
 
-            // Memory::ObjectPtr parse_pointer(llvm::Value* value) const {
-            //     return memory.parse_pointer(value);
-            // }
-
-            // MemoryObjectPtr get_memory_object(llvm::Value* value) const;
-
             /**
              * @brief get a model for current path condition
              */
             z3::model get_model();
 
             std::optional<z3::model> model;
-
-            // std::string top_stack_frame_to_string() const {
-            //     return stack.top_frame().to_string();
-            // }
     };
 
     class LoopState: public State {
