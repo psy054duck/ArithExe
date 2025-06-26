@@ -107,6 +107,7 @@ AInstructionBinary::execute(state_ptr state) {
     auto& z3ctx = op0_value.ctx();
     Expression result;
 
+    state_ptr new_state = std::make_shared<State>(*state);
     if (opcode == llvm::Instruction::Add) {
         result = op0_value + op1_value;
     } else if (opcode == llvm::Instruction::Sub) {
@@ -127,7 +128,6 @@ AInstructionBinary::execute(state_ptr state) {
         throw std::runtime_error("Unsupported binary operation");
     }
 
-    state_ptr new_state = std::make_shared<State>(*state);
     new_state->memory.put_temp(inst, result);
     new_state->step_pc();
 

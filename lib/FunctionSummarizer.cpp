@@ -56,9 +56,8 @@ rec_state_list
 RecExecution::step(state_ptr state, bool unfold) {
     auto pc = state->pc;
     state_list next_states;
-    auto call_inst = dynamic_cast<AInstructionCall*>(pc);
     auto call_llvm_inst = llvm::dyn_cast_or_null<llvm::CallInst>(pc->inst);
-    if (call_inst) {
+    if (auto call_inst = dynamic_cast<AInstructionCall*>(pc)) {
         auto called_func = call_llvm_inst->getCalledFunction();
         if (unfold && called_func && called_func->hasExactDefinition()) {
             next_states = call_inst->execute_if_not_target(state, F);
@@ -66,6 +65,23 @@ RecExecution::step(state_ptr state, bool unfold) {
             next_states = call_inst->execute_naively(state);
         } else {
             next_states = call_inst->execute(state);
+        }
+    } else if (auto bin_inst = llvm::dyn_cast_or_null<llvm::BinaryOperator>(pc->inst)) {
+        auto op = bin_inst->getOpcode();
+        if (op == llvm::Instruction::UDiv || op == llvm::Instruction::SDiv) {
+            auto op1 = state->evaluate(bin_inst->getOperand(0));
+            auto op2 = state->evaluate(bin_inst->getOperand(1));
+            auto& z3ctx = AnalysisManager::get_instance()->get_ctx();
+            z3::solver tmp_solver(z3ctx);
+            tmp_solver.add(state->get_path_condition().as_expr());
+            tmp_solver.add(op1.as_expr() % op2.as_expr() != 0);
+            auto res = tmp_solver.check();
+            if (res == z3::sat) {
+                throw std::runtime_error("this division may not behave the same as reals");
+            }
+        } else {
+            // for other binary operations, execute normally
+            next_states = pc->execute(state);
         }
     } else {
         next_states = pc->execute(state);
@@ -176,6 +192,10 @@ FunctionSummarizer::summarize_pointers() {
     auto& z3ctx = manager->get_z3ctx();
     auto CG = manager->get_CG();
     auto SCC = get_SCC_for(CG, F);
+    if (SCC.size() > 1) {
+        spdlog::warn("currently only support self-recursion");
+        return false;
+    }
     if (!is_tail_recursive(SCC)) {
         return false;
     }

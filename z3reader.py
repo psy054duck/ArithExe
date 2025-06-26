@@ -18,9 +18,12 @@ def add_lemma(solver):
     solver.add(z3.ForAll(dummies, 12*(body/12) == body))
     body = dummy1*(1 + dummy1)
     solver.add(z3.ForAll(dummies, 2*(body/2) == body))
+    print(solver.to_smt2())
 
-def main(filename, timeout):
-    f = z3.parse_smt2_file(filename)
+def main():
+    # f = z3.parse_smt2_file(filename)
+    solver = z3.Solver()
+    add_lemma(solver)
     # solver = z3.Then('ctx-solver-simplify', 'smt').solver()
     # basic_solver = z3.Solver()
     # lemma_solver = z3.Solver()
@@ -55,4 +58,5 @@ def main(filename, timeout):
 
 
 if __name__ == '__main__':
-    fire.Fire(main)
+    main()
+    # fire.Fire(main)
