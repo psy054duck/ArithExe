@@ -122,6 +122,10 @@ Engine::verify(state_ptr state) {
             result = HOLD;
             break;
         case z3::sat:
+            if (state->is_over_approx) {
+                result = VERIUNKNOWN;
+                break;
+            }
             llvm::errs() << solver.get_model().to_string() << "\n";
             result = FAIL;
             break;

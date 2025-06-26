@@ -199,5 +199,11 @@ namespace ari_exe {
             AInstructionDebug(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<state_ptr> execute(state_ptr state) override;
     };
+
+    class AInstructionTrunc: public AInstruction {
+        public:
+            AInstructionTrunc(llvm::Instruction* inst): AInstruction(inst) {};
+            std::vector<state_ptr> execute(state_ptr state) override;
+    };
 }
 #endif

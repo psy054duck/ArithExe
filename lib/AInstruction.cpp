@@ -35,6 +35,8 @@ AInstruction::create(llvm::Instruction* inst) {
         res = new AInstructionZExt(zext_inst);
     } else if (auto sext_inst = llvm::dyn_cast_or_null<llvm::SExtInst>(inst)) {
         res = new AInstructionSExt(sext_inst);
+    } else if (auto trunc_inst = llvm::dyn_cast_or_null<llvm::TruncInst>(inst)) {
+        res = new AInstructionTrunc(trunc_inst);
     } else if (auto phi = llvm::dyn_cast_or_null<llvm::PHINode>(inst)) {
         res = new AInstructionPhi(phi);
     } else if (auto select = llvm::dyn_cast_or_null<llvm::SelectInst>(inst)) {
@@ -274,6 +276,7 @@ AInstructionCall::execute_normal(state_ptr state) {
         }
         new_state->append_path_condition(summary->get_exit_condition().substitute(params, unknowns));
         new_state->step_pc();
+        new_state->is_over_approx = true;
         return new_state;
     }
 
@@ -399,7 +402,7 @@ AInstructionCall::execute_unknown(state_ptr state) {
     Expression result(z3ctx);
 
     // external function value is unknown, so symbolic
-    auto name = "ari_" + inst->getName().str() + "_" + std::to_string(value_counter[inst]++);
+    auto name = "ari_" + inst->getName().str() + "_unknown_" + std::to_string(value_counter[inst]++);
     auto ret_type = call_inst->getType();
 
     if (ret_type->isIntegerTy()) {
@@ -1021,4 +1024,20 @@ AInstructionDebug::execute(state_ptr state) {
     }
     state->step_pc();
     return {state};
+}
+
+std::vector<state_ptr>
+AInstructionTrunc::execute(state_ptr state) {
+    auto trunc_inst = dyn_cast<llvm::TruncInst>(inst);
+    auto op = trunc_inst->getOperand(0);
+    auto op_value = state->evaluate(op);
+    auto& z3ctx = op_value.ctx();
+    z3::expr result(z3ctx);
+
+    state_ptr new_state = std::make_shared<State>(*state);
+    // new_state->write(inst, op_value);
+    // new_state->memory.allocate(inst, op_value);
+    new_state->memory.put_temp(inst, op_value);
+    new_state->step_pc();
+    return {new_state};
 }

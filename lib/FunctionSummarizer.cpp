@@ -219,7 +219,12 @@ FunctionSummarizer::summarize_pointers() {
             auto obj = state->memory.get_object_pointed_by(&arg);
             auto name = get_z3_name(arg.getName().str());
             auto func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
-            auto value = obj->get_value().as_expr().substitute(src, dst);
+            auto obj_value = obj->get_value().as_expr();
+            auto value = obj_value.substitute(src, dst);
+            if (value.to_string().find("_unknown_") != std::string::npos) {
+                spdlog::warn("Unknown value found in function: {} for argument: {}", F->getName().str(), arg.getName().str());
+                return false; // cannot summarize if unknown values are present
+            }
             rec_eq.insert_or_assign(func(manager->get_ind_var() + 1), value);
         }
         rec_eqs.push_back(rec_eq);

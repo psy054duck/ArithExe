@@ -60,7 +60,7 @@ namespace ari_exe {
 
         public:
             State(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const trace_ty& trace, Status status = RUNNING): z3ctx(z3ctx), pc(pc), prev_pc(prev_pc), memory(memory), path_condition(path_condition), trace(trace), status(status) {};
-            State(const State& state): z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition) {};
+            State(const State& state): z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), is_over_approx(state.is_over_approx) {};
 
             // if the state is in the process of summarizing a loop
             virtual bool is_summarizing() const { return false; }
@@ -82,6 +82,8 @@ namespace ari_exe {
             AInstruction* pc;
 
             AInstruction* prev_pc;
+
+            bool is_over_approx = false;
 
             // memory model for symbolic execution
             Memory memory;
