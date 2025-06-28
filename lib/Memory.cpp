@@ -38,26 +38,47 @@ Memory::add_global(llvm::GlobalVariable& gv) {
     auto initial_value = gv.getInitializer();
     z3::expr_vector dims(z3ctx);
     z3::expr value(z3ctx);
+    z3::expr constraints = z3ctx.bool_val(true);
+    z3::expr_vector indicies(z3ctx);
+    // assuming it is 1-d array
+    indicies.push_back(AnalysisManager::get_ith_array_index(0));
     if (value_type->isArrayTy()) {
+        auto func = z3ctx.function(gv.getName().str().c_str(), z3ctx.int_sort(), z3ctx.int_sort());
+        value = func(indicies);
         // implement for 1-d array first
         // TODO: implement for multi-d array
         assert(value_type->getArrayElementType()->isIntegerTy());
         if (auto zero = dyn_cast_or_null<llvm::ConstantAggregateZero>(initial_value)) {
-            value = z3::const_array(z3ctx.int_sort(), z3ctx.int_val(0));
+            // value = z3::const_array(z3ctx.int_sort(), z3ctx.int_val(0));
+            for (int i = 0; i < value_type->getArrayNumElements(); i++) {
+                constraints = constraints && func(i) == z3ctx.int_val(0);
+            }
         } else if (auto array = dyn_cast_or_null<llvm::ConstantDataArray>(initial_value)) {
-            if (array->isCString()) {
-                value = z3ctx.string_val(array->getAsCString().str());
-            } else {
-                // only initialize the first initialized elemenets,
-                // not sure if need to zero fill the rest
-                auto arr_sort = z3ctx.array_sort(z3ctx.int_sort(), z3ctx.int_sort());
-                value = z3ctx.constant(gv.getName().str().c_str(), arr_sort);
-                for (int i = 0; i < array->getNumElements(); i++) {
-                    // TODO: support other types
-                    auto element = array->getElementAsInteger(i);
-                    value = z3::store(value, z3ctx.int_val(i), z3ctx.int_val(element));
+            if (!array->isCString()) {
+                for (int i = 0; i < value_type->getArrayNumElements(); i++) {
+                    constraints = constraints && func(i) == z3ctx.int_val(array->getElementAsInteger(i));
                 }
             }
+            // if (array->isCString()) {
+            //     // auto arr_sort = z3ctx.array_sort(z3ctx.int_sort(), z3ctx.int_sort());
+            //     // value = z3ctx.constant(gv.getName().str().c_str(), arr_sort);
+            //     // auto str = array->getAsString();
+            //     // value = z3ctx.string_val(array->getAsCString().str());
+            //     for (int i = 0; i < value_type->getArrayNumElements(); i++) {
+            //         constraints = constraints && func(i) == z3ctx.int_val(array->getElementAsInteger(i));
+            //     }
+
+            // } else {
+            //     // only initialize the first initialized elemenets,
+            //     // not sure if need to zero fill the rest
+            //     // auto arr_sort = z3ctx.array_sort(z3ctx.int_sort(), z3ctx.int_sort());
+            //     // value = z3ctx.constant(gv.getName().str().c_str(), arr_sort);
+            //     for (int i = 0; i < array->getNumElements(); i++) {
+            //         // TODO: support other types
+            //         auto element = array->getElementAsInteger(i);
+            //         value = z3::store(value, z3ctx.int_val(i), z3ctx.int_val(element));
+            //     }
+            // }
         } else {
             llvm::errs() << "Unsupported global variable initializer type\n";
         }
@@ -71,6 +92,7 @@ Memory::add_global(llvm::GlobalVariable& gv) {
     }
     auto obj_ptr = heap_alloca(&gv, dims);
     obj_ptr->write(Expression(value));
+    obj_ptr->set_constraints(constraints);
     return obj_ptr;
 }
 

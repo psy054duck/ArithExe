@@ -44,7 +44,7 @@ namespace ari_exe {
                          const z3::expr_vector& indices,
                          const std::vector<Expression>& sizes,
                          const std::string& name,
-                         bool _is_signed = true): llvm_value(llvm_value), addr(obj_addr), value(value), ptr_value(ptr_value), indices(indices), sizes(sizes), name(name + std::to_string(name_counter[name])), _is_signed(_is_signed) {}
+                         bool _is_signed = true): llvm_value(llvm_value), addr(obj_addr), value(value), ptr_value(ptr_value), indices(indices), sizes(sizes), name(name + std::to_string(name_counter[name])), _is_signed(_is_signed), constraints(indices.ctx()) {}
 
             // read the first value of the memory object
             Expression read() const;
@@ -90,6 +90,9 @@ namespace ari_exe {
 
             void set_signed(bool is_signed) { _is_signed = is_signed; }
 
+            z3::expr get_constraints() const { return constraints; }
+            void set_constraints(const z3::expr& constr) { constraints = constr; }
+
         private:
             // the instruction that creates this memory object
             llvm::Value* llvm_value;
@@ -115,6 +118,8 @@ namespace ari_exe {
             std::string name;
 
             static std::map<std::string, int> name_counter;
+            
+            z3::expr constraints;
     };
 }
 

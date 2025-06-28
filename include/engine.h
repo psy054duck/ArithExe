@@ -62,17 +62,7 @@ namespace ari_exe {
     class Engine {
         public:
             // result of verification
-            enum VeriResult {
-                HOLD,        // the verification condition is true
-                FAIL,        // the verification condition is false
-                VERIUNKNOWN, // the verification condition is unknown
-            };
 
-            enum TestResult {
-                FEASIBLE,    // the state is feasible
-                UNFEASIBLE,  // the state is unfeasible
-                TESTUNKNOWN, // the state is unknown
-            };
 
             Engine();
             

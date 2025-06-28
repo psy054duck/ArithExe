@@ -51,7 +51,7 @@ namespace ari_exe {
     
             // execute one instruction
             loop_state_list step(loop_state_ptr state);
-    
+
             // build the initial state
             // assuming the function do not access global variables
             loop_state_ptr build_initial_state();
@@ -81,6 +81,9 @@ namespace ari_exe {
              */
             llvm::Value* get_modified_value(state_ptr state, llvm::Instruction* inst);
 
+            std::vector<Expression> get_v_conditions() const {
+                return v_conditions;
+            }
 
         private:
             /**
@@ -142,7 +145,9 @@ namespace ari_exe {
 
             // loop invariants encountered in the loop
             // must verify them if summarization succeeds
-            z3::expr_vector v_conditions;
+            std::vector<Expression> v_conditions;
+
+            std::vector<llvm::StoreInst*> stores;
     };
 
     /**
@@ -166,6 +171,7 @@ namespace ari_exe {
             llvm::Loop* loop;
             rec_solver rec_s;
             std::optional<LoopSummary> summary;
+
 
             /**
              * @brief get the update for each header phi in the given final state
@@ -269,7 +275,9 @@ namespace ari_exe {
              * @brief get final and exit states
              * @return (final_states, exit_states)
              */
-            std::pair<loop_state_list, loop_state_list> get_final_and_exit_states();
+            std::tuple<loop_state_list, loop_state_list, std::vector<Expression>> get_final_and_exit_states();
+
+            VeriResult prove_invariants(const std::vector<Expression>& v_conditions);
 
             /**
              * @brief get initial values for the loop

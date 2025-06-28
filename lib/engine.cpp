@@ -16,7 +16,7 @@ Engine::Engine(const std::string& c_filename): mod(nullptr), solver(z3ctx) {
     mod = manager->get_module(c_filename, z3ctx);
 }
 
-Engine::VeriResult
+VeriResult
 Engine::verify() {
     run();
     auto res = VERIUNKNOWN;
@@ -79,7 +79,14 @@ Engine::run(state_ptr state) {
             }
             // TODO: what to do with unknown path?
             continue;
-        } 
+        } else if (cur_state->status == State::UNKNOWN) {
+            // if the state is unknown, we should not continue
+            results.push_back(VERIUNKNOWN);
+            return;
+        } else if (cur_state->status == State::FAIL) {
+            results.push_back(FAIL);
+            return;
+        }
         assert(cur_state->status == State::RUNNING);
         auto new_states = step(cur_state);
         for (auto& new_state : new_states) states.push(new_state);
@@ -108,7 +115,7 @@ Engine::run() {
     return run(initial_state);
 }
 
-Engine::VeriResult
+VeriResult
 Engine::verify(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->get_path_condition().as_expr());
@@ -116,7 +123,7 @@ Engine::verify(state_ptr state) {
     // llvm::errs() << state->get_path_condition().as_expr().to_string() << "\n";
     // llvm::errs() << assumptions.to_string() << "\n";
     auto res = solver.check(assumptions);
-    Engine::VeriResult result;
+    VeriResult result;
     switch (res) {
         case z3::unsat:
             result = HOLD;
@@ -136,12 +143,12 @@ Engine::verify(state_ptr state) {
     return result;
 }
 
-Engine::TestResult
+TestResult
 Engine::test(state_ptr state) {
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->get_path_condition().as_expr());
     auto res = solver.check(assumptions);
-    Engine::TestResult result;
+    TestResult result;
     switch (res) {
         case z3::unsat:
             result = UNFEASIBLE;
@@ -161,8 +168,10 @@ Engine::build_initial_state() {
     // build the initial state
     // this state should record global variables
     Memory memory;
+    Expression path_condition = z3ctx.bool_val(true);
     for (auto& gv : mod->globals()) {
-        memory.add_global(gv);
+        auto obj = memory.add_global(gv);
+        path_condition = path_condition && obj->get_constraints();
     }
 
     auto pc = entry->getEntryBlock().getFirstNonPHIOrDbg();
@@ -176,7 +185,7 @@ Engine::build_initial_state() {
         memory.put_temp(&arg, arg_value);
     }
     auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr,
-                               memory, z3ctx.bool_val(true), {}));
+                               memory, path_condition, {}));
     return initial_state;
 }
 

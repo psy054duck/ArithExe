@@ -3,13 +3,41 @@
 
 
 namespace ari_exe {
+    static MemoryAddress_ty
+    parse_ptr(const MemoryObjectPtr ptr, state_ptr state) {
+        assert(ptr->is_pointer() && "Pointer object expected");
+        auto pointed_addr = ptr->get_ptr_value();
+        auto pointed_obj = state->memory.get_object(pointed_addr);
+        if (!pointed_obj->is_pointer()) {
+            return pointed_addr;
+        }
+        auto addr = parse_ptr(pointed_obj, state);
+        for (auto& offset : pointed_addr.offset) {
+            addr.offset.push_back(offset);
+        }
+        return addr;
+    }
     LoopExecution::~LoopExecution() {
         assert(states.empty());
     }
 
-    LoopExecution::LoopExecution(llvm::Loop *loop, state_ptr parent_state): loop(loop), solver(AnalysisManager::get_instance()->get_z3ctx()), parent_state(parent_state), v_conditions(AnalysisManager::get_instance()->get_z3ctx()) {
+    LoopExecution::LoopExecution(llvm::Loop *loop, state_ptr parent_state): loop(loop), solver(AnalysisManager::get_instance()->get_z3ctx()), parent_state(parent_state), v_conditions() {
         auto initial_state = build_initial_state();
         states.push(initial_state);
+        stores = get_all_stores(loop);
+    }
+
+    std::vector<llvm::StoreInst*>
+    LoopExecution::get_all_stores(llvm::Loop* loop) {
+        std::vector<llvm::StoreInst*> stores;
+        for (auto& block : loop->getBlocks()) {
+            for (auto& inst : *block) {
+                if (auto store_inst = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
+                    stores.push_back(store_inst);
+                }
+            }
+        }
+        return stores;
     }
 
     LoopState
@@ -62,8 +90,51 @@ namespace ari_exe {
     loop_state_list
     LoopExecution::step(loop_state_ptr state) {
         auto pc = state->pc;
+        auto& z3ctx = state->z3ctx;
         loop_state_list new_states;
-        // auto modified_values = state->modified_values;
+        if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(pc->inst)) {
+            auto func = call_inst->getCalledFunction();
+            if (!func || !func->hasExactDefinition()) {
+                auto name = "ari_" + call_inst->getName().str() + "_unknown";
+                auto undef_func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
+                auto manager = AnalysisManager::get_instance();
+                auto result = undef_func(AnalysisManager::get_ith_array_index(0));
+                auto new_state = std::make_shared<LoopState>(*state);
+                new_state->memory.put_temp(call_inst, result);
+                new_state->step_pc();
+                return {new_state};
+            }
+        } else if (auto load_inst = llvm::dyn_cast_or_null<llvm::LoadInst>(pc->inst)) {
+            // if the instruction is a load, we need to get the value from memory
+            auto& DI = AnalysisManager::get_instance()->get_DI(load_inst->getFunction());
+            bool not_affected = true;
+            for (auto store_inst : stores) {
+                if (auto dep = DI.depends(store_inst, load_inst, true)) {
+                    if (dep->isFlow() && !dep->isLoopIndependent()) {
+                        // this write will be read by the load instruction in later iterations
+                        not_affected = false;
+                        break;
+                    }
+                    // if there is a flow dependence, we need to get the value from memory
+                }
+            }
+            if (not_affected) {
+                // if the load instruction is not affected by any store in the loop,
+                // we can load the value from parent state
+                auto ptr = load_inst->getPointerOperand();
+                auto new_state = std::make_shared<LoopState>(*state);
+
+                auto addr = parse_ptr(new_state->memory.get_object(ptr), new_state);
+                auto pointed_obj = parent_state->memory.get_object(addr);
+                assert(pointed_obj && "Pointed object must exist");
+
+                auto load_value = pointed_obj->read(addr.offset);
+                new_state->memory.put_temp(load_inst, load_value);
+                new_state->step_pc();
+                return {new_state};
+            }
+        }
+
         for (auto next_state : pc->execute(state)) {
             auto next_loop_state = std::make_shared<LoopState>(LoopState(*next_state));
             new_states.push_back(next_loop_state);
@@ -118,12 +189,13 @@ namespace ari_exe {
                 }
                 continue;
             } else if (cur_state->status == State::VERIFYING) {
-                cur_state->append_path_condition(cur_state->verification_condition);
-                auto res = test(cur_state);
+                v_conditions.push_back(cur_state->verification_condition);
+                // cur_state->append_path_condition(cur_state->verification_condition);
+                // auto res = test(cur_state);
                 states.push(cur_state);
-                if (res == L_UNFEASIBLE) {
-                    spdlog::error("The annotated loop invariant is not valid");
-                }
+                // if (res == L_UNFEASIBLE) {
+                //     spdlog::error("The annotated loop invariant is not valid");
+                // }
                 cur_state->status = State::RUNNING;
             }
             auto new_states = step(cur_state);
@@ -146,13 +218,17 @@ namespace ari_exe {
 
     void
     LoopSummarizer::summarize() {
-        auto [final_states, exit_states] = get_final_and_exit_states();
+        auto [final_states, exit_states, v_conditions] = get_final_and_exit_states();
         log_states(final_states, exit_states);
 
         summarize_scalar(final_states, exit_states);
 
         if (summary.has_value()) {//  && !summary.value().is_over_approximated()) {
             summarize_array(final_states, exit_states);
+        }
+        if (summary.has_value()) { 
+            auto correct = prove_invariants(v_conditions);
+            summary->add_invariant_result(correct);
         }
         spdlog::info("finish summarization");
     }
@@ -182,14 +258,42 @@ namespace ari_exe {
         }
     }
 
-    std::pair<loop_state_list, loop_state_list>
+    std::tuple<loop_state_list, loop_state_list, std::vector<Expression>>
     LoopSummarizer::get_final_and_exit_states() {
         LoopExecution executor(loop, parent_state);
         auto execution_res = executor.run();
         auto final_states = execution_res.first;
         auto exit_states = execution_res.second;
 
-        return {final_states, exit_states};
+        return {final_states, exit_states, executor.get_v_conditions()};
+    }
+
+    VeriResult
+    LoopSummarizer::prove_invariants(const std::vector<Expression>& v_conditions) {
+        spdlog::info("Proving invariants");
+        auto manager = AnalysisManager::get_instance();
+        auto& z3ctx = manager->get_z3ctx();
+        auto n = manager->get_ind_var();
+        auto N = manager->get_loop_N();
+        auto N_value = summary->get_N();
+        for (auto& v_condition : v_conditions) {
+            z3::solver solver(z3ctx);
+            z3::expr premise = 0 <= n;
+            if (N_value.has_value()) premise = premise && n < *N_value;
+            // looks like there are some bugs in z3 for doing negation of forall
+            // z3::expr query =  z3::forall(n, z3::implies(premise, summary->evaluate_expr(v_condition.as_expr())));
+            // solver.add(!query);
+            solver.add(premise);
+            z3::expr query = summary->evaluate_expr(v_condition.as_expr());
+            solver.add(!query);
+            auto res = solver.check();
+            if (res == z3::sat) {
+                return FAIL;
+            } else if (res == z3::unknown) {
+                return VERIUNKNOWN;
+            }
+        }
+        return HOLD;
     }
 
     void
@@ -344,6 +448,7 @@ namespace ari_exe {
 
         rec_ty base_eq;
         base_eq.insert_or_assign(rec_func(args), sig);
+        // base_eq.insert_or_assign(rec_func(args), array->get_value().as_expr());
 
         return {base_cond, base_eq};
     }
@@ -386,7 +491,7 @@ namespace ari_exe {
         for (auto app : apps_of_arr) {
             sub_src.push_back(app);
             auto args = app.args();
-            args.push_back(manager->get_ind_var() - 1);
+            args.push_back(manager->get_ind_var());
             sub_dst.push_back(rec_func(args));
         }
 
@@ -464,7 +569,17 @@ namespace ari_exe {
             for (auto& [func, expr] : closed) {
                 spdlog::info("Restricting array summaries to the domain");
                 auto closed_form = restrict_to_domain(expr.substitute(n_src, N_dst), domain).simplify();
-                summary->add_closed_form(array->get_signature(), closed_form);
+                auto all_apps = get_app_of(closed_form, array->get_signature().decl());
+                z3::expr_vector app_values(z3ctx);
+                auto initial_value = array->get_value().as_expr();
+                auto params = array->get_indices();
+                for (auto app : all_apps) {
+                    auto args = app.args();
+                    app_values.push_back(initial_value.substitute(params, args).simplify());
+                }
+                // substitute initial values
+                auto real_closed_form = closed_form.substitute(all_apps, app_values);
+                summary->add_closed_form(array->get_signature(), real_closed_form);
             }
         }
     }
@@ -621,19 +736,6 @@ namespace ari_exe {
             assert(written_obj);
             written_obj->write(written_obj->get_signature());
         }
-    }
-
-    std::vector<llvm::StoreInst*>
-    LoopExecution::get_all_stores(llvm::Loop* loop) {
-        std::vector<llvm::StoreInst*> res;
-        for (auto bb : loop->blocks()) {
-            for (auto& inst : *bb) {
-                if (auto store = llvm::dyn_cast_or_null<llvm::StoreInst>(&inst)) {
-                    res.push_back(store);
-                }
-            }
-        }
-        return res;
     }
 
     llvm::BasicBlock*

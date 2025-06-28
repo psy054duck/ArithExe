@@ -56,6 +56,8 @@ namespace ari_exe {
                 VERIFYING,      // a verification condition is being generated
                 TESTING,        // a new branch, should check the feasibility
                 REACH_ERROR,    // reach an error state (call reach_error())
+                UNKNOWN,
+                FAIL,
             };
 
         public:

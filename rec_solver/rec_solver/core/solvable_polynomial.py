@@ -130,11 +130,15 @@ def get_layers_for_solvable_map(rec: LoopRecurrence):
             all_apps = utils.get_app(poly_part)
             if all_apps.issubset(set(considered)):
                 cur_considered.append(func)
-        digraph = build_adjacency_matrix(rec, cur_considered)
-        cs = utils.sorted_strong_ly_connected_components(digraph)
-        for c in cs:
-            components.append([cur_considered[i] for i in c])
-            considered.extend(components[-1])
+        considered.extend(cur_considered)
+        components.append(cur_considered)
+        # digraph = build_adjacency_matrix(rec, cur_considered)
+        # cs = utils.sorted_strong_ly_connected_components(digraph)
+        # print(cs)
+        # print(cur_considered)
+        # for c in cs:
+        #     components.append([cur_considered[i] for i in c])
+        #     considered.extend(components[-1])
     return components
         # considered.extend(cur_considered)
 

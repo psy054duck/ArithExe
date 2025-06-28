@@ -49,8 +49,12 @@ namespace ari_exe {
     conditionally_eq(const z3::expr& cond, const z3::expr& e1, const z3::expr& e2) {
         auto& z3ctx = e1.ctx();
         z3::solver s(z3ctx);
+        z3::params p(z3ctx);
+        p.set("timeout", 3*1000u);
+        s.set(p);
         s.add(cond);
         s.add(e1 != e2);
+        s.check();
         return s.check() == z3::unsat;
     }
 

@@ -9,7 +9,7 @@ LoopSummary::LoopSummary(const z3::expr_vector& params, const z3::expr_vector& s
 LoopSummary::LoopSummary(const z3::expr_vector& params, const z3::expr_vector& exact_summary, const z3::expr_vector& closed_form, const closed_form_ty& over_approximated, const z3::expr& constraints, std::optional<z3::expr> N):
                          params(params), summary_exact(exact_summary), summary_closed_form(closed_form), summary_over_approx(over_approximated), is_over_approx(true), constraints(constraints), N(N) {}
 
-LoopSummary::LoopSummary(const LoopSummary& other): params(other.params), summary_exact(other.summary_exact), summary_closed_form(other.summary_closed_form), summary_over_approx(other.summary_over_approx), is_over_approx(other.is_over_approx), constraints(other.constraints), modified_values(other.modified_values), N(other.N) {}
+LoopSummary::LoopSummary(const LoopSummary& other): params(other.params), summary_exact(other.summary_exact), summary_closed_form(other.summary_closed_form), summary_over_approx(other.summary_over_approx), is_over_approx(other.is_over_approx), constraints(other.constraints), modified_values(other.modified_values), N(other.N), invariant_results(other.invariant_results) {}
 
 z3::expr_vector
 LoopSummary::evaluate(const z3::expr_vector& args) {

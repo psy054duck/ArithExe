@@ -34,13 +34,13 @@ int main(int argc, char* argv[]) {
     delete State::loop_summaries;
 
     switch (res) {
-        case Engine::HOLD:
+        case HOLD:
             spdlog::info("The program is safe.");
             break;
-        case Engine::FAIL:
+        case FAIL:
             spdlog::error("The program is unsafe.");
             break;
-        case Engine::VERIUNKNOWN:
+        case VERIUNKNOWN:
             spdlog::warn("The verification result is unknown.");
             break;
     }

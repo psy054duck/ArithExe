@@ -62,10 +62,12 @@ AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
             // llvm::MemorySSA& MSSA = fam.getResult<llvm::MemorySSAAnalysis>(*F).getMSSA();
             llvm::DominatorTree DT = llvm::DominatorTree(*F);
             llvm::PostDominatorTree PDT = llvm::PostDominatorTree(*F);
+            llvm::DependenceInfo& DI = fam.getResult<llvm::DependenceAnalysis>(*F);
             // LIs[&*F] = LI;
             LIs.emplace(&*F, LI);
             DTs.emplace(&*F, llvm::DominatorTree(*F));
             PDTs.emplace(&*F, llvm::PostDominatorTree(*F));
+            DIs.emplace(&*F, DI);
             // MSSAs.emplace(&*F, MSSA);
         }
     }
@@ -110,4 +112,11 @@ AnalysisManager::parseLLVMIR(const std::string& ir_content, llvm::LLVMContext& c
         throw std::runtime_error("Failed to parse LLVM IR");
     }
     return module;
+}
+
+z3::expr
+AnalysisManager::get_ith_array_index(int i) {
+    auto& z3ctx = AnalysisManager::get_ctx();
+    auto z3_array = z3ctx.int_const(("array_i" + std::to_string(i)).c_str());
+    return z3_array;
 }

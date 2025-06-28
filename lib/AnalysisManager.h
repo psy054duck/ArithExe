@@ -43,6 +43,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/MemorySSA.h"
+#include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -78,7 +79,7 @@ namespace ari_exe {
              */
             static std::unique_ptr<llvm::Module> parseLLVMIR(const std::string& ir_content, llvm::LLVMContext& context);
 
-
+            static z3::expr get_ith_array_index(int i);
 
             /**
              * @brief compile the given C file into LLVM IR and analyze it
@@ -101,6 +102,7 @@ namespace ari_exe {
             llvm::DominatorTree& get_DT(llvm::Function* F) { return DTs.at(F); }
             llvm::PostDominatorTree& get_PDT(llvm::Function* F) { return PDTs.at(F); }
             llvm::CallGraph* get_CG() { return CG; }
+            llvm::DependenceInfo& get_DI(llvm::Function* F) { return DIs.at(F); }
 
             z3::expr get_ind_var() { return ind_var; }
             z3::expr get_loop_N() { return loop_N; }
@@ -129,6 +131,7 @@ namespace ari_exe {
             std::map<llvm::Function*, llvm::LoopInfo&> LIs;
             std::map<llvm::Function*, llvm::DominatorTree> DTs;
             std::map<llvm::Function*, llvm::PostDominatorTree> PDTs;
+            std::map<llvm::Function*, llvm::DependenceInfo&> DIs;
 
             llvm::CallGraph* CG = nullptr;
 

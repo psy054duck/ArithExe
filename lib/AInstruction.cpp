@@ -176,7 +176,12 @@ AInstructionAlloca::execute(state_ptr state) {
     assert(!alloca_inst->isArrayAllocation() && "Array allocation is not supported yet");
     // Allocate memory for the alloca instruction
     // auto size = alloca_inst->getAllocatedType()->getPrimitiveSizeInBits() / 8;
-    auto size = z3ctx.int_val(1);
+    auto size = 1;
+    auto ty = alloca_inst->getAllocatedType();
+    if (ty->isArrayTy()) {
+        auto size_value = alloca_inst->getArraySize();
+        size = ty->getArrayNumElements();
+    }
     
     state_ptr new_state = std::make_shared<State>(*state);
     z3::expr_vector sizes(z3ctx);
@@ -208,6 +213,16 @@ AInstructionCall::execute(state_ptr state) {
         return {execute_malloc(state)};
     } else if (called_func && called_func->hasExactDefinition()) {
         return {execute_normal(state)};
+    } else if (called_func && called_func->getName().find("llvm.stacksave.p0") != std::string::npos) {
+        // handle llvm.stacksave.p0
+        auto dummy_ptr = z3ctx.int_val(0); // or create a symbolic pointer
+        state->memory.put_temp(call_inst, dummy_ptr);
+        state->step_pc();
+        return {state};
+    } else if (called_func && called_func->getName().find("llvm.stackrestore.p0") != std::string::npos) {
+        // handle llvm.stackrestore.p0
+        state->step_pc();
+        return {state};
     } else {
         return {execute_unknown(state)};
     }
@@ -713,6 +728,18 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         return {};
     }
 
+    state_ptr new_state = std::make_shared<State>(*state);
+    if (summary.has_value()) {
+        auto invariant_result = summary->get_invariant_results();
+        if (std::find(invariant_result.begin(), invariant_result.end(), FAIL) != invariant_result.end()) {
+            new_state->status = State::FAIL;
+            return {new_state};
+        } else if (std::find(invariant_result.begin(), invariant_result.end(), VERIUNKNOWN) != invariant_result.end()) {
+            new_state->status = State::UNKNOWN;
+            return {new_state};
+        }
+    }
+
     // assert(!summary->is_over_approximated() && "Over-approximation is not supported yet");
 
 
@@ -720,7 +747,6 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     // only consider those loops with only one exit block
     assert(exit_block);
 
-    state_ptr new_state = std::make_shared<State>(*state);
     auto entering_block = get_loop_entering_block(loop);
     if (summary->is_over_approximated()) {
         for (auto& inst : *header) {
@@ -750,6 +776,7 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
             new_state->append_path_condition(p.first == p.second);
         }
         new_state->append_path_condition(summary->get_constraints());
+        new_state->is_over_approx = true;
     } else {
         auto& z3ctx = manager->get_z3ctx();
         z3::expr_vector args(z3ctx);
@@ -976,6 +1003,10 @@ AInstructionGEP::execute(state_ptr state) {
     assert(gep);
     auto new_state = std::make_shared<State>(*state);
     auto addr = parse_gep(gep, new_state);
+    auto target_obj = new_state->memory.get_object(addr);
+    if (target_obj->get_sizes().size() < addr.offset.size()) {
+        addr.offset = std::vector<Expression>(addr.offset.begin() + 1, addr.offset.end());
+    }
     new_state->memory.put_temp(inst, addr);
     // new_state->store_gep(gep);
     new_state->step_pc();

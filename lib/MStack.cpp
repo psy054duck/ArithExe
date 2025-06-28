@@ -88,17 +88,21 @@ MStack::allocate(llvm::Value* value, z3::expr_vector dims) {
     MemoryAddress_ty mem_obj_addr{STACK, Expression(z3ctx.int_val(id)), {}};
     auto indices  = z3::expr_vector(z3ctx);
     for (int i = 0; i < dims.size(); ++i) {
-        indices.push_back(z3ctx.int_const(("i" + std::to_string(i)).c_str()));
+        indices.push_back(AnalysisManager::get_ith_array_index(i));
+        // indices.push_back(z3ctx.int_const(("array_i" + std::to_string(i)).c_str()));
     }
     std::vector<Expression> sizes;
+    z3::sort_vector indices_sorts(z3ctx);
+    std::string name = value->getName().str() + std::to_string(value_counter[value]++) + "_undef";
     for (const auto& dim : dims) {
         if (dim.is_numeral()) {
             sizes.emplace_back(dim);
         }
+        indices_sorts.push_back(z3ctx.int_sort());
     }
-
-    std::string name = value->getName().str() + std::to_string(value_counter[value]++) + "_undef";
-    Expression undef(z3ctx.int_const(name.c_str()));
+    auto undef_func= z3ctx.function(name.c_str(), indices_sorts, z3ctx.int_sort());
+    // Expression undef(z3ctx.int_const(name.c_str()), indices_sorts, z3ctx.int_sort());
+    Expression undef(undef_func(indices));
     objects.emplace_back(value, mem_obj_addr, undef, std::nullopt, indices, sizes, value->getName().str());
     
     put_temp(value, mem_obj_addr);

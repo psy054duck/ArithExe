@@ -299,22 +299,6 @@ void rec_solver::_rec2file(std::ofstream& out) {
     // z3::expr_vector src(z3ctx);
     // z3::expr_vector dst(z3ctx);
     int name_idx = 0;
-    // z3::expr_vector initial_src(z3ctx);
-    // z3::expr_vector initial_dst(z3ctx);
-    // for (auto rec : rec_eqs) {
-    //     z3::func_decl f = rec.first.decl();
-    //     std::string new_name = "a" + std::to_string(name_idx);
-    //     name_idx++;
-    //     z3::expr dst_f = z3ctx.int_const(new_name.data());
-    //     src.push_back(f(0));
-    //     dst.push_back(dst_f);
-    //     src.push_back(f(ind_var));
-    //     dst.push_back(dst_f);
-    //     src.push_back(f(1 + ind_var));
-    //     dst.push_back(dst_f);
-    //     src.push_back(f(ind_var + 1));
-    //     dst.push_back(dst_f);
-    // }
     for (int i = 0; i < initial_values_k.size(); i++) {
         z3::expr lhs = initial_values_k[i];
         z3::expr rhs = initial_values_v[i];

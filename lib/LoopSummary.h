@@ -49,6 +49,13 @@ namespace ari_exe {
              */
             z3::expr evaluate_expr(z3::expr expr) const;
 
+            std::vector<VeriResult>
+            get_invariant_results() const { return invariant_results; }
+
+            void add_invariant_result(VeriResult result) {
+                invariant_results.push_back(result);
+            }
+
             /**
              * @brief get modified values by the loop
              */
@@ -116,6 +123,7 @@ namespace ari_exe {
              */
             std::vector<llvm::Value*> modified_values;
 
+        
             /**
              * @brief The exact summary of the loop, which is exit value
              * @details if is_over_approx is false, which means
@@ -128,7 +136,6 @@ namespace ari_exe {
              * @brief the closed-form solutions of the loop
              */
             z3::expr_vector summary_closed_form;
-
 
             /**
              * constraints of this loop, which may contains constraints on the number of iterations
@@ -145,7 +152,8 @@ namespace ari_exe {
              * @brief indicates whether the loop is over-approximated or not.
              */
             bool is_over_approx;
-
+            
+            std::vector<VeriResult> invariant_results;
     };
 }
 #endif
