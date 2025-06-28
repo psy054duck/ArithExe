@@ -306,7 +306,7 @@ def solve_nearly_tail(rec: MultiRecurrence, is_array=False):
     D = z3.Int('_D')
     rets = z3.Ints(' '.join(['_ret%d' % i for i in range(rec.number_ret())]))
     loop_rec = nearly_tail2loop(rec, d, rets)
-    loop_rec.pprint()
+    # loop_rec.pprint()
     loop_guard = get_loop_cond(rec, d)
     precondition = z3.BoolVal(True)
     if is_array:
@@ -324,7 +324,8 @@ def solve_nearly_tail(rec: MultiRecurrence, is_array=False):
             ops = ops[0][0]
         vars_bases_case = reduce(set.union, [utils.get_vars(op) for op in ops])
         # args = utils.get_vars(cond) | reduce(set.union, [utils.get_vars(op) for op in ops])
-        args = utils.get_vars(cond) | vars_bases_case
+        # args = utils.get_vars(cond) | vars_bases_case
+        args = set(rec.func_sig.children())
         symbol2func_mapping = {arg: symbol2func(arg)(d) for arg in args}
         op_funcs = (z3.substitute(op, *list(symbol2func_mapping.items())) for op in ops)
         cond_func = z3.substitute(cond, *list(symbol2func_mapping.items()))
@@ -442,7 +443,7 @@ def symbol2func(sym):
     return z3.Function(sym.decl().name(), z3.IntSort(), z3.IntSort())
 
 def solve_multivariate_rec(rec: MultiRecurrence):
-    rec.pprint()
+    # rec.pprint()
     if rec.is_nearly_tail():
         closed_forms = solve_nearly_tail(rec)
     else:
