@@ -11,7 +11,7 @@ def solve_str(s):
             res = solve_ultimately_periodic_symbolic(rec)
             return res
         except:
-            res = poly_expr_solving(rec, 3)
+            res = poly_expr_solving(rec, 2)
             if not res.is_trivial():
                 return res
             return poly_expr_solving(rec, 3)

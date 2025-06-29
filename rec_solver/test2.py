@@ -1,6 +1,7 @@
+from z3 import *
+import z3
+from typing import Optional
 '''This module contains the logic simplification functions.'''
-from typing import List, Tuple, Set, Optional
-from itertools import product
 
 import z3
 from itertools import product
@@ -136,56 +137,7 @@ def literal2canonical(literal):
     elif z3.is_eq(atom):
         return [atom2canonical(atom.arg(0) > atom.arg(1)), atom2canonical(atom.arg(0) < atom.arg(1))]
 
-class DNFConverter:
-    def __init__(self):
-        pass
-
-    def to_dnf(self, fml):
-        return to_dnf(fml)
-
-def merge_conjunctions(conjunction, assumption=z3.BoolVal(True)):
-    '''simplify conjunction by checking if some conjunct is implied by the rest.
-       do it recursively until fix point.'''
-    for i, conjunct in enumerate(conjunction):
-        rest_conjunctions = [c for j, c in enumerate(conjunction) if j != i]
-        rest = z3.And(rest_conjunctions)
-        if implies(rest, conjunct, case=assumption):
-            return merge_conjunctions(rest_conjunctions)
-    return conjunction
-
-def my_simplify(expr: z3.ExprRef, assumption=z3.BoolVal(True)) -> z3.ExprRef:
-    """
-    Simplify a Z3 expression by converting to CNF and removing entailed clauses.
-    
-    Args:
-        expr: The Z3 expression to simplify
-        assumption: Optional assumption to add to the solver
-    
-    Returns:
-        Simplified Z3 expression
-    """
-    new_expr = z3.simplify(expr)
-    clauses = to_cnf(new_expr)
-    solver = z3.Solver()
-    
-    solver.add(assumption)
-    
-    remains = []
-    
-    for clause in clauses:
-        solver.push()
-        solver.add(z3.Not(clause))
-        if solver.check() == z3.sat:
-            # This clause is not entailed, so keep it
-            neg = [z3.Not(c) for c in clause.children()]
-            simplified_neg = merge_conjunctions(neg, assumption=assumption)
-            simplified_clause = z3.Or([z3.Not(lit) for lit in simplified_neg])
-            remains.append(z3.simplify(simplified_clause))
-        solver.pop()
-    
-    return z3.simplify(z3.And(list(to_cnf(z3.simplify(z3.And(remains))))))
-
-def merge_cases(conditions, expressions, precondition=z3.BoolVal(True)):
+def merge_cases(conditions, expressions):
     """
     Merge cases with equivalent expressions under their respective conditions.
     
@@ -203,7 +155,6 @@ def merge_cases(conditions, expressions, precondition=z3.BoolVal(True)):
         solver = z3.Solver()
         solver.set("timeout", 3000)  # 3 seconds timeout
         solver.add(cond)
-        solver.add(precondition)
         solver.add(e1 != e2)
         return solver.check() == z3.unsat
     
@@ -237,9 +188,9 @@ def merge_cases(conditions, expressions, precondition=z3.BoolVal(True)):
             
             if i == pivot:
                 new_pivot_location = len(new_conditions)
-                new_conditions.append(my_simplify(pivot_cond, precondition))
+                new_conditions.append(pivot_cond)
             else:
-                new_conditions.append(my_simplify(res_conditions[i], precondition))
+                new_conditions.append(res_conditions[i])
             
             new_expressions.append(res_expressions[i])
         
@@ -253,6 +204,201 @@ def merge_cases(conditions, expressions, precondition=z3.BoolVal(True)):
     
     return res_conditions, res_expressions
 
+class DNFConverter:
+    def __init__(self):
+        pass
+
+    def to_dnf(self, fml):
+        return to_dnf(fml)
+
+    # def to_dnf(self, f):
+    #     nnf = z3.Or([z3.And(*c) for c in z3.Tactic('nnf').apply(f)])
+    #     vars = get_vars(nnf)
+    #     if any('!' in str(var) for var in vars):
+    #         solver = z3.Solver()
+    #         fresh_vars = [var for var in vars if str(var).startswith('z3name')]
+    #         observers = {var: z3.Int('observer%d' % i) for i, var in enumerate(fresh_vars)}
+    #         solver.add([observers[var] == var for var in fresh_vars])
+    #         if solver.check(nnf) == z3.sat:
+    #             m = solver.model()
+    #             for var in fresh_vars:
+    #                 m_var = m.eval(observers[var])
+    #                 if solver.check(nnf, var != m_var) == z3.unsat:
+    #                     nnf = z3.substitute(nnf, (var, m_var))
+    #     temp_vars = [var for var in vars if '!' in str(var)]
+    #     cons = {z3.IntSort(): z3.Int, z3.BoolSort(): z3.Bool, z3.RealSort(): z3.Real}
+    #     name_mapping = [(var, cons[var.sort()](str(var).replace('!', '_'))) for var in temp_vars]
+    #     nnf = z3.substitute(nnf, name_mapping)
+    #     raw_dnf = self._to_dnf(nnf)
+    #     return raw_dnf
+
+    # def or2list(self, f):
+    #     assert(z3.is_or(f) or z3.is_false(f) or z3.is_true(f))
+    #     if z3.is_true(f) or z3.is_false(f):
+    #         return [[f]]
+    #     return [[c] for c in f.children()]
+
+    # def _to_dnf(self, f):
+    #     '''Convert f into dnf with early simplification'''
+    #     if is_literal(f):
+    #         return [[f]]
+    #     args = [self._to_dnf(arg) for arg in f.children()]
+    #     if z3.is_and(f):
+    #         args_as_and = [self.disjunction2z3(arg) for arg in args if len(arg) != 0]
+    #         simplified_list = [c for c in self.simplify_and(args_as_and)]
+    #         simplified_args = [self.or2list(c) for c in simplified_list]
+    #         new_disjunction = []
+    #         for conjunctions in product(*simplified_args):
+    #             new_disjunction.append(self.simplify_and(sum(conjunctions, [])))
+    #         return new_disjunction
+    #     return self.simplify_or(sum(args, []))
+
+    # def disjunction2z3(self, disjunction):
+    #     return z3.Or([z3.And(d) for d in disjunction])
+
+    # def conjunction2z3(self, conjunction):
+    #     return z3.And(conjunction)
+    #         
+    # def simplify_and(self, conjunction):
+    #     removed = []
+    #     if is_contradiction(self.conjunction2z3(conjunction)):
+    #         return [z3.BoolVal(False)]
+
+    #     for i, conjunct in enumerate(conjunction):
+    #         rest_conjunctions = [c for j, c in enumerate(conjunction) if j != i and j not in removed]
+    #         rest = self.conjunction2z3(rest_conjunctions)
+    #         if implies(rest, conjunct):
+    #             removed.append(i)
+    #     res = [conjunct for i, conjunct in enumerate(conjunction) if i not in removed]
+    #     assert(equals(self.conjunction2z3(res), self.conjunction2z3(conjunction)))
+    #     return res
+    
+    # def simplify_or(self, disjunction):
+    #     removed = []
+    #     if is_tautology(self.disjunction2z3(disjunction)):
+    #         return [[z3.BoolVal(True)]]
+
+    #     for i, disjunct in enumerate(disjunction):
+    #         rest_disjunction = [d for j, d in enumerate(disjunction) if j != i and j not in removed]
+    #         rest = self.disjunction2z3(rest_disjunction)
+    #         if implies(self.conjunction2z3(disjunct), rest):
+    #             removed.append(i)
+    #     res = [self.simplify_and(disjunct) for i, disjunct in enumerate(disjunction) if i not in removed]
+    #     assert(equals(self.disjunction2z3(res), self.disjunction2z3(disjunction)))
+    #     return res
+
+def merge_conjunctions(conjunction):
+    '''simplify conjunction by checking if some conjunct is implied by the rest.
+       do it recursively until fix point.'''
+    for i, conjunct in enumerate(conjunction):
+        rest_conjunctions = [c for j, c in enumerate(conjunction) if j != i]
+        rest = z3.And(rest_conjunctions)
+        if implies(rest, conjunct):
+            return merge_conjunctions(rest_conjunctions)
+    return conjunction
+
+def my_simplify(expr: z3.ExprRef, assumption: Optional[z3.ExprRef] = None) -> z3.ExprRef:
+    """
+    Simplify a Z3 expression by converting to CNF and removing entailed clauses.
+    
+    Args:
+        expr: The Z3 expression to simplify
+        assumption: Optional assumption to add to the solver
+    
+    Returns:
+        Simplified Z3 expression
+    """
+    new_expr = simplify(expr)
+    clauses = to_cnf(new_expr)
+    solver = z3.Solver()
+    
+    if assumption is not None:
+        solver.add(assumption)
+    
+    remains = []
+    
+    for clause in clauses:
+        solver.push()
+        solver.add(z3.Not(clause))
+        if solver.check() == z3.sat:
+            # This clause is not entailed, so keep it
+            neg = [z3.Not(c) for c in clause.children()]
+            simplified_neg = merge_conjunctions(neg)
+            simplified_clause = z3.Or([z3.Not(lit) for lit in simplified_neg])
+            remains.append(simplify(simplified_clause))
+        solver.pop()
+    
+    return simplify(z3.And(remains))
+
+def merge_cases(conditions, expressions):
+    """
+    Merge cases with equivalent expressions under their respective conditions.
+    
+    Args:
+        conditions: List of Z3 boolean expressions (conditions)
+        expressions: List of Z3 expressions (corresponding expressions)
+    
+    Returns:
+        Tuple of (merged_conditions, merged_expressions)
+    """
+    import z3
+    
+    def conditionally_eq(cond, e1, e2):
+        """Check if e1 and e2 are equivalent under the condition cond"""
+        solver = z3.Solver()
+        solver.set("timeout", 3000)  # 3 seconds timeout
+        solver.add(cond)
+        solver.add(e1 != e2)
+        return solver.check() == z3.unsat
+    
+    pivot = 0
+    res_conditions = conditions.copy()
+    res_expressions = expressions.copy()
+    
+    while pivot < len(res_expressions):
+        merged = set()
+        pivot_expr = res_expressions[pivot]
+        pivot_cond = res_conditions[pivot]
+        
+        # Iterate through to check if some case is equivalent to pivot expression
+        for i in range(len(res_expressions)):
+            if i == pivot:  # skip pivot
+                continue
+            if i in merged:  # skip already merged
+                continue
+            
+            if conditionally_eq(res_conditions[i], pivot_expr, res_expressions[i]):
+                pivot_cond = z3.Or(pivot_cond, res_conditions[i])
+                merged.add(i)
+        
+        new_conditions = []
+        new_expressions = []
+        new_pivot_location = 0
+        
+        for i in range(len(res_conditions)):
+            if i in merged:  # skip merged
+                continue
+            
+            if i == pivot:
+                new_pivot_location = len(new_conditions)
+                new_conditions.append(my_simplify(pivot_cond))
+            else:
+                new_conditions.append(my_simplify(res_conditions[i]))
+            
+            new_expressions.append(res_expressions[i])
+        
+        if merged:  # if we merged something
+            pivot = new_pivot_location + 1
+        else:
+            pivot += 1
+        
+        res_conditions = new_conditions
+        res_expressions = new_expressions
+    
+    return res_conditions, res_expressions
+
+import z3
+from typing import List, Tuple, Set
 from itertools import product
 
 def cartesian_product(num_cases: List[int]) -> List[List[int]]:
@@ -379,7 +525,7 @@ def eliminate_ite(expr: z3.ExprRef) -> z3.ExprRef:
     
     # Apply quantifier elimination tactic
     elim_temp_tactic = z3.Tactic("qe")
-    aux_vars = list(collect_aux_vars(eliminated_expr))
+    aux_vars = collect_aux_vars(eliminated_expr)
     
     if len(aux_vars) > 0:
         # If there are auxiliary variables, we need to eliminate them
@@ -389,7 +535,7 @@ def eliminate_ite(expr: z3.ExprRef) -> z3.ExprRef:
         qe_res = elim_temp_tactic(qe_goal)
         
         qe_conditions = []
-        for j in range(len(qe_res)):
+        for j in range(qe_res.size()):
             qe_conditions.append(qe_res[j].as_expr())
         
         if len(qe_conditions) == 0:
@@ -399,12 +545,12 @@ def eliminate_ite(expr: z3.ExprRef) -> z3.ExprRef:
         else:
             eliminated_expr = z3.Or(qe_conditions)
         
-        eliminated_expr = z3.simplify(eliminated_expr)
+        eliminated_expr = eliminated_expr.simplify()
         
         # Verify equivalence (assertion)
         assert is_equivalent(eliminated_expr, expr), "Elimination changed semantics"
     
-    return z3.simplify(eliminated_expr)
+    return simplify(eliminated_expr)
 
 def is_equivalent(expr1: z3.ExprRef, expr2: z3.ExprRef) -> bool:
     """
@@ -464,109 +610,20 @@ def piecewise2ite(conditions: List[z3.BoolRef], expressions: List[z3.ExprRef]) -
     
     return ite_expr
 
-if __name__ == '__main__':
-    from z3 import *
-    c, z = Ints('c z')
-    q0, q1, q2 = Ints('q0 q1 q2')
-    conjunction = [c >= 1, c >= 0, z >= 3, z <= 4, z + c >= 4]
-    disjunction = [[c >= 1, c >= 0], [c <= 2]]
-    converter = DNFConverter()
-    testing = z3.And(c + z >= 1, c + z <= 1, z3.Or(c >= 0, z <= 0), c >= -20)
-    # print(converter.simplify_and(conjunction))
-    # print(converter.simplify_or(disjunction))
-    simplified = z3.simplify(converter.disjunction2z3(converter.to_dnf(testing)))
-    print(simplified)
-    print(equals(testing, simplified))
-    # print(converter.to_dnf(z3.Or([z3.And(d) for d in disjunction])))
-    cond = And(q0 >= 1,
-        q1 >= 1,
-        q2 >= 1,
-        0 >= -1*q2 + -1*q1 + -1*q0 + z,
-        Not(And(-1*z + c <= -1,
-                Or(Not(q0 >= 1),
-                   Not(q1 >= 1),
-                   Not(q2 >= 1),
-                   -1*q0 + z + -1*c <= 0,
-                   And(q1 + q0 + -1*z + c <= -1,
-                       -1*q2 + -1*q1 + -1*q0 + z + -1*c <= 0),
-                   And(q0 + -1*z + c <= -1,
-                       -1*q1 + -1*q0 + z + -1*c <= 0,
-                       c <= -1),
-                   And(q2 + q1 + q0 + -1*z + c <= -1,
-                       Not(0 >= -1*q2 + -1*q1 + -1*q0 + z))))),
-        Not(And(-1*z + c <= -2,
-                Or(Not(q0 >= 1),
-                   Not(q1 >= 1),
-                   Not(q2 >= 1),
-                   And(-1*q0 + z + -1*c <= 1, c <= -2),
-                   And(q0 + -1*z + c <= -2,
-                       -1*q1 + -1*q0 + z + -1*c <= 1),
-                   And(q1 + q0 + -1*z + c <= -2,
-                       -1*q2 + -1*q1 + -1*q0 + z + -1*c <= 1,
-                       c <= -2),
-                   And(q2 + q1 + q0 + -1*z + c <= -2,
-                       Not(0 >= -1*q2 + -1*q1 + -1*q0 + z))))),
-        Not(And(-1*q2 + -1*q1 + -1*q0 <= -1,
-                Or(Not(q0 >= 1),
-                   Not(q1 >= 1),
-                   Not(q2 >= 1),
-                   And(-1*q2 + -1*q1 <= -1,
-                       q2 <= 0,
-                       Or(-1*z + c + q2 + q1 + q0 <= -2,
-                          z + -1*c + -1*q2 + -1*q1 + -1*q0 <= -1,
-                          z + -1*q2 + -1*q1 + -1*q0 <= -1)),
-                   And(q2 + q1 <= 0,
-                       Or(z + -1*q2 + -1*q1 + -1*q0 <= -1,
-                          And(-1*z + c + q2 + q1 + q0 <= -1,
-                              -1*c + z + -1*q2 + -1*q1 + -1*q0 <=
-                              0))),
-                   And(q2 >= 1,
-                       Or(z + -1*q2 + -1*q1 + -1*q0 <= -1,
-                          And(-1*z + c + q2 + q1 + q0 <= -1,
-                              -1*c + z + -1*q2 + -1*q1 + -1*q0 <=
-                              0)))))),
-        Not(And(q0 >= 1,
-                Or(Not(q0 >= 1),
-                   Not(q1 >= 1),
-                   z + -1*q0 <= -1,
-                   Not(q2 >= 1),
-                   And(q1 <= -1,
-                       -1*q2 + -1*q1 <= -1,
-                       Or(z + -1*q0 <= -1,
-                          And(-1*z + c + q0 <= -1,
-                              -1*c + z + -1*q0 <= 0))),
-                   And(q2 + q1 <= -1,
-                       Not(0 >= -1*q2 + -1*q1 + -1*q0 + z)),
-                   And(-1*z + c + q0 <= -1,
-                       -1*c + z + -1*q0 <= 0)))),
-        Not(And(-1*q1 + -1*q0 <= -1,
-                Or(Not(q0 >= 1),
-                   Not(q1 >= 1),
-                   Not(q2 >= 1),
-                   And(q2 <= -1,
-                       Not(0 >= -1*q2 + -1*q1 + -1*q0 + z)),
-                   And(q1 >= 1,
-                       Or(z + -1*q1 + -1*q0 <= -1,
-                          z + -1*c + -1*q1 + -1*q0 <= -1,
-                          -1*z + c + q1 + q0 <= -2)),
-                   And(q1 <= -1,
-                       Or(z + -1*q1 + -1*q0 <= -1,
-                          And(-1*z + c + q1 + q0 <= -1,
-                              -1*c + z + -1*q1 + -1*q0 <= 0)))))))
-    # cond = And(q0 >= 1,
-    # Not(And(Not(0 >= -1*q0 + z), Not(c == -1 + -1*q0 + z))),
-    # Not(And(q0 >= 1,
-    #         Or(Not(q0 >= 1),
-    #            z + -1*q0 <= -1,
-    #            And(-1*z + c + q0 <= -1,
-    #                -1*c + z + -1*q0 <= 0)))),
-    # Not(And(-1*z + c <= -1,
-    #         Or(Not(q0 >= 1),
-    #            And(Not(0 >= -1*q0 + z),
-    #                q0 + -1*z + c <= -1,
-    #                Not(c == -1 + -1*q0 + z)),
-    #            -1*q0 + z + -1*c <= 0))))
-    nnf_cond = z3.Or([z3.And(*c) for c in z3.Tactic('nnf').apply(cond)])
-    simplified = z3.simplify(converter.disjunction2z3(converter.to_dnf(nnf_cond))) 
-    print(simplified)
-    print(equals(cond, simplified))
+x = Int('x')
+# conditions = [x > 0, x < 10, x == 5, x == -1]
+# expressions = [x + 1, x + 2, 6, 2]
+e = If(x > 0, x + 1, If(x < -10, x + 2, If(x > -5, x+1, 200)))
+conds, exprs = expr2piecewise(e)
+e2 = piecewise2ite(conds, exprs)
+solver = z3.Solver()
+solver.add(e2 != e)
+print(solver.check())
+print("Conditions:", conds)
+print("Expressions:", exprs)
+print(e2)
+
+# merged_conditions, merged_expressions = merge_cases(conditions, expressions)
+# print("Merged Conditions:", merged_conditions)
+# print("Merged Expressions:", merged_expressions)
+

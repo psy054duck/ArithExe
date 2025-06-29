@@ -29,7 +29,7 @@ namespace ari_exe {
     }
 
     Expression Expression::operator/(const Expression& other) const {
-        return bin_operator(*this, other, [](const z3::expr& lhs, const z3::expr& rhs) { return lhs / rhs; });
+        return bin_operator(*this, other, [](const z3::expr& lhs, const z3::expr& rhs) { return (lhs / rhs).simplify(); });
     }
 
     Expression Expression::operator%(const Expression& other) const {

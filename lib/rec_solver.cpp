@@ -283,8 +283,7 @@ std::string rec_solver::z3_infix(z3::expr e) {
         std::string s = f + "(" + args_str + ")";
         return s;
     } else {
-        std::cout << e.to_string() << "\n";
-        std::cout << kind << "\n";
+        assert(false && "Unsupported Z3 operation kind");
         abort();
         // return e.to_string();
         // std::cout << e.to_string() << "\n";

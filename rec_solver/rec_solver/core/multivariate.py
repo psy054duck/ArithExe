@@ -6,6 +6,7 @@ from .ultimately_periodic import solve_ultimately_periodic_symbolic
 from . import utils
 from functools import reduce
 from .closed_form import MultiFuncClosedForm
+from .logic_simplification import my_simplify, merge_cases, piecewise2ite, expr2piecewise
 
 logger = logging.getLogger(__name__)
 
@@ -309,9 +310,14 @@ def solve_nearly_tail(rec: MultiRecurrence, is_array=False):
     # loop_rec.pprint()
     loop_guard = get_loop_cond(rec, d)
     precondition = z3.BoolVal(True)
+    # tmp_n = z3.Int('ari_loop_n')
     if is_array:
-        f = symbol2func(rec.func_sig.args[-1])
-        loop_guard = z3.Or(loop_guard, z3.Eq(f(d), 0))
+        assert(rec.func_sig.arity() == 2)
+        tmp_i = rec.func_sig.children()[0]
+        tmp_n = rec.func_sig.children()[1]
+        precondition = z3.And(tmp_n >= 0, tmp_i >= 0)
+        # f = symbol2func(rec.func_sig.args[-1])
+        # loop_guard = z3.Or(loop_guard, z3.Eq(f(d), 0))
     loop_closed_form = solve_ultimately_periodic_symbolic(loop_rec, precondition=precondition)
     piecewise_D = compute_piecewise_D(d, D, loop_guard, loop_closed_form, precondition)
     scalar_closed_form = loop_closed_form.subs({d: piecewise_D})
@@ -331,16 +337,30 @@ def solve_nearly_tail(rec: MultiRecurrence, is_array=False):
         cond_func = z3.substitute(cond, *list(symbol2func_mapping.items()))
         ops_D = (z3.substitute(op_func, *list(scalar_closed_form.as_dict().items())) for op_func in op_funcs)
         cond_D = z3.substitute(cond_func, *list(scalar_closed_form.as_dict().items()))
+        ############################################################################
+        # cond_D contains lots of ite, case analysis
+        ############################################################################
+        conditions_D, expressions_D = expr2piecewise(cond_D)
+
         for branches, op_D in zip(branches_rets, ops_D):
-            branches.append((op_D, cond_D))
+            for (cond_D, expr_D) in zip(conditions_D, expressions_D):
+                branches.append((op_D, my_simplify(z3.And(cond_D, expr_D), precondition)))
+
+    res_branches = []
     for branches in branches_rets:
-        branches[-1] = (branches[-1][0], True)
+        expressions = [branch[0] for branch in branches]
+        conditions = [branch[1] for branch in branches]
+        simplified_conditions, simplified_expressions = merge_cases(conditions, expressions, precondition=precondition)
+        res_branch = [(expr, cond) for expr, cond in zip(simplified_expressions, simplified_conditions)]
+        res_branch[-1] = (res_branch[-1][0], True)
+        res_branches.append(res_branch)
+        # branches[-1] = (branches[-1][0], True)
     # print("D = %s" % piecewise_D)
     # print(z3.simplify(z3.substitute(piecewise_D, (z3.Int('x'), z3.IntVal(4)))))
     # print(z3.simplify(z3.substitute(piecewise_D, (z3.Int('x'), z3.IntVal(5)))))
     # print(z3.simplify(z3.substitute(piecewise_D, (z3.Int('x'), z3.IntVal(6)))))
     # print(z3.simplify(z3.substitute(piecewise_D, (z3.Int('x'), z3.IntVal(7)))))
-    rets0 = [utils.to_ite(branches) for branches in branches_rets]
+    rets0 = [utils.to_ite(branches) for branches in res_branches]
     closed_form_dict = scalar_closed_form.as_dict()
     # tmp_closed = loop_closed_form.as_dict()
     # tmp_ret = z3.Function('_ret0', z3.IntSort(), z3.IntSort())
@@ -407,19 +427,29 @@ def compute_piecewise_D(d, D, loop_cond, loop_closed_form, precondition):
     '''Assume D is piecewise linear'''
     d_z3 = d
     D_z3 = D
-    branches = []
+    # branches = []
     hints = []
+    conditions = []
+    expressions = []
     for i, (cur_case, closed) in enumerate(zip(loop_closed_form._constraints, loop_closed_form._closed_forms)):
         logger.debug('Handling case %d/%d' % (i + 1, len(loop_closed_form._constraints)))
-        terminate_cond = z3.simplify(z3.substitute(loop_cond, *list(closed.as_dict().items())), elim_ite=True)
-        cur_D = compute_D_by_case(d_z3, D_z3, z3.Not(terminate_cond), cur_case, hints)
+        terminate_cond = my_simplify(z3.simplify(z3.substitute(loop_cond, *list(closed.as_dict().items())), elim_ite=True), precondition)
+        cur_D = compute_D_by_case(d_z3, D_z3, z3.Not(terminate_cond), cur_case, hints, preconditions=precondition)
         if cur_D is not None:
             hints.append(cur_D)
-            branches.append((cur_D, cur_case))
-    branches[-1] = (branches[-1][0], True)
-    return z3.simplify(utils.to_ite(branches))
+            # branches.append((cur_D, cur_case))
+            conditions.extend(cur_D.conditions)
+            expressions.extend([expr[D_z3] for expr in cur_D.expressions])
+            # conditions.append(cur_case)
+            # expressions.append(cur_D)
 
-def compute_D_by_case(d, D, loop_cond, case, hints):
+    simplified_conditions, simplified_expressions = merge_cases(conditions, expressions)
+    branches = [(expr, cond) for expr, cond in zip(simplified_expressions, simplified_conditions)]
+    branches[-1] = (branches[-1][0], True)
+    res = z3.simplify(utils.to_ite(branches))
+    return res
+
+def compute_D_by_case(d, D, loop_cond, case, hints, preconditions=z3.BoolVal(True)):
     '''Assume D is linear under the case'''
     cond = loop_cond
     case_z3 = case
@@ -433,22 +463,23 @@ def compute_D_by_case(d, D, loop_cond, case, hints):
     qe = z3.Then(z3.Tactic('qe'), z3.Tactic('ctx-solver-simplify'), z3.Tactic('simplify'))
     # constraints = z3.simplify(z3.Or(*[z3.And(*c) for c in qe(z3.And(*axioms))]))
     constraints = qe(z3.And(*axioms)).as_expr()
-    sol = utils.solve_piecewise_sol(constraints, [D], z3.Int)
-    try:
-        return sol.to_z3()[D]
-    except:
-        return z3.IntVal(0)
+    sol = utils.solve_piecewise_sol(constraints, [D], z3.Int, precondition=preconditions)
+    return sol
+    # try:
+    #     return sol.to_z3()[D]
+    # except:
+    #     return z3.IntVal(0)
 
 def symbol2func(sym):
     return z3.Function(sym.decl().name(), z3.IntSort(), z3.IntSort())
 
-def solve_multivariate_rec(rec: MultiRecurrence):
+def solve_multivariate_rec(rec: MultiRecurrence, is_array=False):
     # rec.pprint()
     if rec.is_nearly_tail():
-        closed_forms = solve_nearly_tail(rec)
+        closed_forms = solve_nearly_tail(rec, is_array=is_array)
     else:
         new_rec = rec2nearly_tail(rec)
         # new_rec.pprint()
-        closed_forms = solve_nearly_tail(new_rec)
+        closed_forms = solve_nearly_tail(new_rec, is_array=is_array)
         # raise Exception('not a nearly tail recursion')
     return MultiFuncClosedForm(rec.func_sig, closed_forms[0])

@@ -26,7 +26,21 @@ namespace ari_exe {
             solver.add(!clause);
             if (solver.check() == z3::sat) {
                 // this clause is not entailed, so keep it
-                remains.push_back(clause);
+                z3::expr_vector literals(expr.ctx());
+                if (clause.is_or()) {
+                    for (const auto& lit : clause.args()) {
+                        literals.push_back(!lit);
+                    }
+                } else {
+                    literals.push_back(!clause);
+                }
+                auto minimized_conjunction = minimize_conjunction(literals, assumption.value_or(AnalysisManager::get_ctx().bool_val(true)));
+                z3::expr_vector minimized_literals(expr.ctx());
+                for (const auto& lit : minimized_conjunction) {
+                    minimized_literals.push_back(!lit);
+                }
+                auto new_clause = z3::mk_or(minimized_literals);
+                remains.push_back(new_clause);
             }
             solver.pop();
         }
@@ -446,11 +460,12 @@ namespace ari_exe {
     }
 
     z3::expr_vector
-    minimize_conjunction(const z3::expr_vector& conjunction, int pivot) {
+    minimize_conjunction(const z3::expr_vector& conjunction, int pivot, z3::expr assumption) {
         if (pivot >= conjunction.size()) {
             return conjunction; // nothing to minimize
         }
         auto solver = z3::solver(conjunction.ctx());
+        solver.add(assumption);
         z3::expr pivot_expr = conjunction[pivot];
         auto remaining_exprs = get_expr_vec_except(conjunction, pivot);
         solver.add(remaining_exprs);

@@ -83,7 +83,7 @@ namespace ari_exe {
      * @param conjuncts vector of literal conjuncts
      * @return a minimized conjunction of the literals
      */
-    z3::expr_vector minimize_conjunction(const z3::expr_vector& conjuncts, int pivot = 0);
+    z3::expr_vector minimize_conjunction(const z3::expr_vector& conjuncts, int pivot = 0, z3::expr assumption=AnalysisManager::get_ctx().bool_val(true));
 
     /**
      * @brief merge cases for piecewise expressions

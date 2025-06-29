@@ -1036,7 +1036,18 @@ AInstructionDebug::execute(state_ptr state) {
         }
     } else if (auto dbg_value = llvm::dyn_cast_or_null<llvm::DbgValueInst>(inst)) {
         auto* llvm_value = dbg_value->getValue();
-        if (!llvm::isa<llvm::Constant>(llvm_value)) {
+        if (llvm_value->getType()->isPointerTy()) {
+            auto obj = state->memory.get_object_pointed_by(llvm_value);
+            auto var = dbg_value->getVariable();
+            auto base_size = var->getType()->getSizeInBits();
+            if (base_size == 64) {
+                auto ori_size = obj->get_sizes();
+                for (auto& size : ori_size) {
+                    size = size / size.ctx().int_val(2);
+                }
+                obj->set_sizes(ori_size);
+            }
+        } else if (!llvm::isa<llvm::Constant>(llvm_value)) {
             if (auto* diType = dbg_value->getVariable()->getType()) {
                 auto obj = state->memory.get_object(llvm_value);
                 if (diType->getName().contains("unsigned char")) {

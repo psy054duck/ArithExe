@@ -6,7 +6,7 @@ from sympy.core.function import UndefinedFunction
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, convert_equals_signs
 import z3
 from itertools import product
-from .logic_simplification import DNFConverter, equals, to_dnf, literal2canonical
+from .logic_simplification import DNFConverter, equals, to_dnf, literal2canonical, merge_cases, my_simplify
 
 z3.set_option(max_depth=99999999)
 # z3.set_option(timeout=5)
@@ -206,7 +206,16 @@ def sorted_strong_ly_connected_components(matrix):
     return components
 
 def compress_seq(seq):
-    return _compress_seq(seq, [], None)
+    compressed = _compress_seq(seq, [], None)
+    # Check if the periodic part also cover the last but one component
+    if len(compressed) > 1:
+        last, _ = compressed[-1]
+        last_but_one, cnt = compressed[-2]
+        if cnt == 1 and len(last_but_one) <= len(last) and last_but_one == last[len(last) - len(last_but_one):]:
+            # left rotate the last component by len(last_but_one) elements
+            compressed = compressed[:-2]
+            compressed.append((last[len(last) - len(last_but_one):] + last[:len(last_but_one)], 1))
+    return compressed
 
 def _compress_seq(seq, cur_compressed, best_compressed):
     covered_seq = sum([pattern*cnt for pattern, cnt in cur_compressed], [])
@@ -479,7 +488,8 @@ def is_same_transition(trans1, trans2):
 def flatten_seq(seq):
     return sum([l*c for l, c in seq], [])
 
-def solve_piecewise_sol(constraint, x, sort=z3.Real):
+def solve_piecewise_sol(constraint, x, sort=z3.Real, precondition= z3.BoolVal(True)):
+    x = list(x)
     elim_ite = z3.Tactic('elim-term-ite')
     constraint = elim_ite(constraint).as_expr()
     all_vars = get_vars(constraint)
@@ -497,9 +507,13 @@ def solve_piecewise_sol(constraint, x, sort=z3.Real):
         if linear_expr is not None:
             projected_expr = {v: linear_expr[v] for v in x}
             linear_exprs.append(projected_expr)
-            premises.append(z3.simplify(z3.substitute(formula, list(linear_expr.items()))))
+            premises.append(my_simplify(z3.substitute(formula, list(linear_expr.items())), assumption=precondition))
         else:
             return None
+    if len(x) == 1:
+        flat_expression = [expr[x[0]] for expr in linear_exprs]
+        simplified_premises, simplified_linear_exprs = merge_cases(premises, flat_expression, precondition=precondition)
+        return ConditionalExpr(simplified_premises, [{x[0]: expr} for expr in simplified_linear_exprs])
     return ConditionalExpr(premises, linear_exprs)
 
 def to_eq(atom):

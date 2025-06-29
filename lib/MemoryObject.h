@@ -61,6 +61,10 @@ namespace ari_exe {
             // get sizes of the memory object
             std::vector<Expression> get_sizes() const { return sizes; }
 
+            void set_sizes(const std::vector<Expression>& new_sizes) {
+                sizes = new_sizes;
+            }
+
             // is the memory object a scalar value?
             bool is_scalar() const { return !is_pointer() && indices.size() == 0; };
 

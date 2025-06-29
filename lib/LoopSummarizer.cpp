@@ -504,11 +504,15 @@ namespace ari_exe {
         auto array_expressions = array->get_value().get_expressions();
         for (int i = 0; i < array_conditions.size() - 1; i++) {
             auto condition = scalars.evaluate_expr(path_condition.as_expr() && array_conditions[i]).simplify();
-            conditions.push_back(condition.substitute(go_back_src, go_back_dst));
-            rec_ty eq;
             auto trans = summary.value().evaluate_expr(array_expressions[i]).substitute(sub_src, sub_dst).substitute(go_back_src, go_back_dst);
-            eq.insert_or_assign(rec_func(lhs_args), trans);
-            eqs.push_back(eq);
+            auto [ite_conditions, ite_expressions] = expr2piecewise(trans);
+            for (int j = 0; j < ite_conditions.size(); j++) {
+                rec_ty eq;
+                eq.insert_or_assign(rec_func(lhs_args), ite_expressions[j]);
+                eqs.push_back(eq);
+                // auto cur_cond = condition && ite_conditions[j];
+                conditions.push_back(condition.substitute(go_back_src, go_back_dst) && ite_conditions[j]);
+            }
         }
         return {conditions, eqs};
     }
@@ -552,6 +556,9 @@ namespace ari_exe {
 
             // solve recurrence
             assert(conditions.size() == eqs.size());
+            for (int j = 0; j < conditions.size(); j++) {
+
+            }
             auto closed = solve_recurrence(conditions, eqs);
             spdlog::info("Array summaries are computed successfully");
 
@@ -566,9 +573,12 @@ namespace ari_exe {
             for (int i = 0 ; i < dims.size(); i++) {
                 domain = domain && 0 <= indices[i] && indices[i] < dims[i].as_expr() && 0 <= N;
             }
+            llvm::errs() << domain.to_string() << "\n";
+            llvm::errs() << "-------------------\n";
             for (auto& [func, expr] : closed) {
                 spdlog::info("Restricting array summaries to the domain");
                 auto closed_form = restrict_to_domain(expr.substitute(n_src, N_dst), domain).simplify();
+                llvm::errs() << closed_form.to_string() << "\n";
                 auto all_apps = get_app_of(closed_form, array->get_signature().decl());
                 z3::expr_vector app_values(z3ctx);
                 auto initial_value = array->get_value().as_expr();
