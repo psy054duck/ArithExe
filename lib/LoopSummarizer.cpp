@@ -481,19 +481,21 @@ namespace ari_exe {
         go_back_src.push_back(manager->get_ind_var());
         go_back_dst.push_back(manager->get_ind_var() - 1);
 
-        z3::expr_vector sub_src(z3ctx);
-        z3::expr_vector sub_dst(z3ctx);
+        // z3::expr_vector sub_src(z3ctx);
+        // z3::expr_vector sub_dst(z3ctx);
         // retrieve closed-form solutions to scalar variables
         // and substitute them into the array update
+        // auto update = scalars.evaluate_expr(array->get_value().as_expr()).simplify();
+        // llvm::errs() << update.to_string() << "\n";
+        // auto apps_of_arr = get_app_of(update, sig.decl());
+        // for (auto app : apps_of_arr) {
+        //     sub_src.push_back(app);
+        //     auto args = app.args();
+        //     args.push_back(manager->get_ind_var());
+        //     sub_dst.push_back(rec_func(args));
+        //     llvm::errs() << app.to_string() << " -> " << rec_func(args).to_string() << "\n";
+        // }
         auto scalars = summary.value();
-        auto update = scalars.evaluate_expr(array->get_value().as_expr()).simplify();
-        auto apps_of_arr = get_app_of(update, sig.decl());
-        for (auto app : apps_of_arr) {
-            sub_src.push_back(app);
-            auto args = app.args();
-            args.push_back(manager->get_ind_var());
-            sub_dst.push_back(rec_func(args));
-        }
 
         z3::expr_vector lhs_args(sig.args());
         lhs_args.push_back(manager->get_ind_var()); // add loop counter
@@ -503,8 +505,21 @@ namespace ari_exe {
         auto array_conditions = array->get_value().get_conditions();
         auto array_expressions = array->get_value().get_expressions();
         for (int i = 0; i < array_conditions.size() - 1; i++) {
+            auto eval_expr = summary.value().evaluate_expr(array_expressions[i]);
+            auto apps_of_arr = get_app_of(eval_expr, sig.decl());
+            z3::expr_vector sub_src(z3ctx);
+            z3::expr_vector sub_dst(z3ctx);
+            for (auto app : apps_of_arr) {
+                sub_src.push_back(app);
+                auto args = app.args();
+                args.push_back(manager->get_ind_var());
+                sub_dst.push_back(rec_func(args));
+            }
             auto condition = scalars.evaluate_expr(path_condition.as_expr() && array_conditions[i]).simplify();
-            auto trans = summary.value().evaluate_expr(array_expressions[i]).substitute(sub_src, sub_dst).substitute(go_back_src, go_back_dst);
+            // llvm::errs() << summary.value().evaluate_expr(array_expressions[i]).to_string() << "\n";
+            // llvm::errs() << summary.value().evaluate_expr(array_expressions[i]).substitute(sub_src, sub_dst).to_string() << "\n";
+            // auto trans = summary.value().evaluate_expr(array_expressions[i]).substitute(sub_src, sub_dst).substitute(go_back_src, go_back_dst);
+            auto trans = eval_expr.substitute(sub_src, sub_dst).substitute(go_back_src, go_back_dst);
             auto [ite_conditions, ite_expressions] = expr2piecewise(trans);
             for (int j = 0; j < ite_conditions.size(); j++) {
                 rec_ty eq;
