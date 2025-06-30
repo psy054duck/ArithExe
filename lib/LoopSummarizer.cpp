@@ -588,13 +588,12 @@ namespace ari_exe {
             for (int i = 0 ; i < dims.size(); i++) {
                 domain = domain && 0 <= indices[i] && indices[i] < dims[i].as_expr() && 0 <= N;
             }
-            llvm::errs() << domain.to_string() << "\n";
-            llvm::errs() << "-------------------\n";
+            if (closed.size() == 0) {
+                summary->set_over_approximated(true);
+            }
             for (auto& [func, expr] : closed) {
                 spdlog::info("Restricting array summaries to the domain");
-                auto closed_form = restrict_to_domain(expr.substitute(n_src, N_dst), domain).simplify();
-                llvm::errs() << closed_form.to_string() << "\n";
-                auto all_apps = get_app_of(closed_form, array->get_signature().decl());
+                auto all_apps = get_app_of(expr, array->get_signature().decl());
                 z3::expr_vector app_values(z3ctx);
                 auto initial_value = array->get_value().as_expr();
                 auto params = array->get_indices();
@@ -603,8 +602,13 @@ namespace ari_exe {
                     app_values.push_back(initial_value.substitute(params, args).simplify());
                 }
                 // substitute initial values
-                auto real_closed_form = closed_form.substitute(all_apps, app_values);
-                summary->add_closed_form(array->get_signature(), real_closed_form);
+                auto real_closed_form = expr.substitute(all_apps, app_values).substitute(n_src, N_dst);
+                // auto real_closed_form = closed_form.substitute(all_apps, app_values);
+                auto closed_form = restrict_to_domain(real_closed_form, domain).simplify();
+                spdlog::info("Array closed form: {}", closed_form.to_string());
+                summary->add_closed_form(array->get_signature(), closed_form);
+                spdlog::info("Finish Restricting");
+
             }
         }
     }

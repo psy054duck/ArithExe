@@ -332,6 +332,10 @@ namespace ari_exe {
         auto& z3ctx = constraints.ctx();
         auto [processed_cons, tmp_vars] = preprocess_constraints(constraints);
 
+        z3::solver tmp_s(z3ctx);
+        tmp_s.add(processed_cons);
+        z3::solver tmp_s2(z3ctx);
+        tmp_s2.add(constraints);
         auto dnf = to_dnf(processed_cons);
         spdlog::debug("DNF size: {}", dnf.size());
 
@@ -347,6 +351,7 @@ namespace ari_exe {
         // solve case by case
         for (auto conjunct : dnf) {
             auto partial_value_with_tmp = solve_vars_linear(conjunct, vars_and_tmp_vars);
+            std::cout << conjunct.to_string() << "\n";
             // remove tmp_vars from the solution
             z3::expr_vector partial_value(z3ctx);
             for (int i = 0; i < vars.size(); ++i) {

@@ -22,6 +22,7 @@ rec_solver::operator=(const rec_solver& other) {
     ind_var = other.ind_var;
     initial_values_k = other.initial_values_k;
     initial_values_v = other.initial_values_v;
+    return *this;
 }
 
 z3::expr_vector
@@ -99,7 +100,7 @@ void rec_solver::set_eqs(rec_ty& eqs) {
 
 bool rec_solver::solve() {
     rec2file();
-    std::string cmd = "python solver.py tmp/recurrence.txt " + ind_var.to_string() + " 2>/dev/null";
+    std::string cmd = "python solver.py tmp/recurrence.txt " + ind_var.to_string(); //  + " 2>/dev/null";
     int err = system(cmd.c_str());
     // int err = system("python rec_solver.py tmp/test.txt");
     if (err) {

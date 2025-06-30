@@ -7,7 +7,7 @@
 
 extern void abort(void);
 extern void __assert_fail(const char *, const char *, unsigned int, const char *) __attribute__ ((__nothrow__ , __leaf__)) __attribute__ ((__noreturn__));
-void reach_error() { __assert_fail("0", "ifeqn1.c", 10, "reach_error"); }
+void reach_error() { __assert_fail("0", "eqn1.c", 10, "reach_error"); }
 extern void abort(void);
 void assume_abort_if_not(int cond) {
   if(!cond) {abort();}
@@ -28,22 +28,16 @@ int main()
 	long long *a = malloc(sizeof(long long)*N);
 	long long *b = malloc(sizeof(long long)*N);
 
-	for(i=0; i<N; i++)
+	a[0] = 2;
+	b[0] = 1;
+	for(i=1; i<N; i++)
 	{
-		if(i==0) {
-			a[0] = 2;
-		} else {
-			a[i] = a[i-1] + 2;
-		}
+		a[i] = a[i-1] + 2;
 	}
 
-	for(i=0; i<N; i++)
+	for(i=1; i<N; i++)
 	{
-		if(i==0) {
-			b[0] = 1;
-		} else {
-			b[i] = b[i-1] + a[i-1];
-		}
+		b[i] = b[i-1] + a[i-1];
 	}
 
 	for(i=0; i<N; i++)

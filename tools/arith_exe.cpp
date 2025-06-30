@@ -44,5 +44,8 @@ int main(int argc, char* argv[]) {
             spdlog::warn("The verification result is unknown.");
             break;
     }
+    for (auto& pair : AInstruction::cached_instructions) {
+        delete pair.second;
+    }
     return 0;
 }

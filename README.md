@@ -1,5 +1,12 @@
 # ArithExec
 
+## Note
+
+When compile in Release mode, this project behave weird.
+This may be caused by bugs in z3.
+For now, please compile with debug mode by
+` cmake -DCMAKE_BUILD_TYPE=Debug ..`
+
 ## Introduction
 ArithExe is a integer program verifier based on symbolic execution (SE).
 It well known that SE suffers path explosion due to loops and recursion.

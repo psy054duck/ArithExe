@@ -732,7 +732,11 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     if (summary.has_value()) {
         auto invariant_result = summary->get_invariant_results();
         if (std::find(invariant_result.begin(), invariant_result.end(), FAIL) != invariant_result.end()) {
-            new_state->status = State::FAIL;
+            if (summary->is_over_approximated() || new_state->is_over_approx) {
+                new_state->status = State::UNKNOWN;
+            } else {
+                new_state->status = State::FAIL;
+            }
             return {new_state};
         } else if (std::find(invariant_result.begin(), invariant_result.end(), VERIUNKNOWN) != invariant_result.end()) {
             new_state->status = State::UNKNOWN;
