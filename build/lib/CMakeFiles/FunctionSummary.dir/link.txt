@@ -1,0 +1,2 @@
+/usr/bin/ar qc libFunctionSummary.a CMakeFiles/FunctionSummary.dir/FunctionSummary.cpp.o
+/usr/bin/ranlib libFunctionSummary.a

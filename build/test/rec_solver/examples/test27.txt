@@ -1,0 +1,11 @@
+if (n <= 0) {
+    isOddp(n) = n;
+} else if (n == 1) {
+    isOddp(n) = 1;
+} else if (n == 1 ) {
+    isOddp(n) = 1;
+} else if (n - 1 == 1) {
+    isOddp(n) = 0;
+} else {
+    isOddp(n) = isOddp(n - 2);
+}

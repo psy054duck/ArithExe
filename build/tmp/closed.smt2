@@ -1,0 +1,17 @@
+; benchmark generated from python API
+(set-info :status unknown)
+(declare-fun ari_arg () Int)
+(declare-fun ari_f () Int)
+(assert
+ (let (($x228 (<= ari_arg (+ 1 (ite (>= ari_arg 2) (+ (- 1) ari_arg) 0)))))
+(let (($x7 (<= 2 ari_arg)))
+(let (($x58 (>= ari_arg 2)))
+(let (($x244 (and $x58 (or $x7 $x228))))
+(let ((?x225 (ite $x244 1 ari_arg)))
+(let ((?x124 (* 13 ?x225)))
+(let ((?x212 (+ 13 ?x124)))
+(let ((?x229 (* 2 (* ari_arg ari_arg ari_arg))))
+(let ((?x150 (+ ?x124 (* (- 2) ari_arg) ?x229 (* ari_arg ?x212) (* (- 13) (* ari_arg ?x225)))))
+(let ((?x133 (ite $x244 ?x150 ?x212)))
+(= ari_f ?x133))))))))))))
+(check-sat)

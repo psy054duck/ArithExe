@@ -47,7 +47,7 @@ RecExecution::build_initial_state() {
             memory.put_temp(&arg, arg_value);
         }
     }
-    auto pc = F->getEntryBlock().getFirstNonPHIOrDbg();
+    auto pc = &*F->getEntryBlock().getFirstNonPHIOrDbg();
     auto initial_state = std::make_shared<RecState>(State(z3ctx, AInstruction::create(pc), nullptr, memory, z3ctx.bool_val(true), {}));
     return initial_state;
 }

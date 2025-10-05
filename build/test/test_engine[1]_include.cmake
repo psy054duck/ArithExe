@@ -1,0 +1,5 @@
+if(EXISTS "/Users/psyduck/code/ArithExe/build/test/test_engine[1]_tests.cmake")
+  include("/Users/psyduck/code/ArithExe/build/test/test_engine[1]_tests.cmake")
+else()
+  add_test(test_engine_NOT_BUILT test_engine_NOT_BUILT)
+endif()

@@ -97,6 +97,7 @@ namespace ari_exe {
             state_ptr execute_assume(state_ptr state);
             state_ptr execute_normal(state_ptr state);
             state_ptr execute_malloc(state_ptr state);
+            state_ptr execute_memcpy(state_ptr state);
 
             // if this function call is cached, execute the cache
             state_ptr execute_cache(state_ptr state);

@@ -1,0 +1,5 @@
+if (n <= 0) {
+    sum(n, m) = m + n;
+} else {
+    sum(n, m) = sum(n - 1, m + 1);
+}

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libLoopSummarizer.a CMakeFiles/LoopSummarizer.dir/LoopSummarizer.cpp.o
+/usr/bin/ranlib libLoopSummarizer.a

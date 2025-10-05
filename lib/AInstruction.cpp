@@ -223,6 +223,8 @@ AInstructionCall::execute(state_ptr state) {
         // handle llvm.stackrestore.p0
         state->step_pc();
         return {state};
+    } else if (called_func && called_func->getName().find("llvm.memcpy") != std::string::npos) {
+        return {execute_memcpy(state)};
     } else {
         return {execute_unknown(state)};
     }
@@ -438,6 +440,29 @@ AInstructionCall::execute_unknown(state_ptr state) {
         new_state->append_path_condition(result >= z3ctx.int_val(0));
         new_state->append_path_condition(result <= z3ctx.int_val(255));
     }
+    new_state->step_pc();
+    return new_state;
+}
+
+state_ptr
+AInstructionCall::execute_memcpy(state_ptr state) {
+    auto call_inst = dyn_cast<llvm::CallInst>(inst);
+    auto dst = call_inst->getArgOperand(0);
+    auto src = call_inst->getArgOperand(1);
+    auto len = call_inst->getArgOperand(2);
+
+    auto len_value = state->evaluate(len).as_expr();
+    auto const_len_value = len_value.as_int64() / 4; // ensure it is concrete
+
+    state_ptr new_state = std::make_shared<State>(*state);
+    auto dst_obj = new_state->memory.get_object_pointed_by(dst);
+    auto src_obj = new_state->memory.get_object_pointed_by(src);
+    for (int i = 0; i < const_len_value; i++) {
+        Expression idx(new_state->z3ctx.int_val(i));
+        auto v = src_obj->read({idx}).as_expr();
+        dst_obj->write({idx}, v);
+    }
+
     new_state->step_pc();
     return new_state;
 }
@@ -830,7 +855,7 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     // so we need to execute the instructions in the header until the terminator
     // to get closed-form solutions to other values in header, which may also be
     // used outside the loop
-    auto cur_inst = header->getFirstNonPHIOrDbg();
+    auto cur_inst = &*header->getFirstNonPHIOrDbg();
     auto cur_state = new_state;
     cur_state->step_pc(AInstruction::create(cur_inst));
     std::queue<state_ptr> states;

@@ -1,0 +1,188 @@
+[
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-build",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=c++20 -arch arm64 -o CMakeFiles/spdlog.dir/src/spdlog.cpp.o -c /Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/spdlog.cpp",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/spdlog.cpp",
+  "output": "_deps/spdlog-build/CMakeFiles/spdlog.dir/src/spdlog.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-build",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=c++20 -arch arm64 -o CMakeFiles/spdlog.dir/src/stdout_sinks.cpp.o -c /Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/stdout_sinks.cpp",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/stdout_sinks.cpp",
+  "output": "_deps/spdlog-build/CMakeFiles/spdlog.dir/src/stdout_sinks.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-build",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=c++20 -arch arm64 -o CMakeFiles/spdlog.dir/src/color_sinks.cpp.o -c /Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/color_sinks.cpp",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/color_sinks.cpp",
+  "output": "_deps/spdlog-build/CMakeFiles/spdlog.dir/src/color_sinks.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-build",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=c++20 -arch arm64 -o CMakeFiles/spdlog.dir/src/file_sinks.cpp.o -c /Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/file_sinks.cpp",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/file_sinks.cpp",
+  "output": "_deps/spdlog-build/CMakeFiles/spdlog.dir/src/file_sinks.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-build",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=c++20 -arch arm64 -o CMakeFiles/spdlog.dir/src/async.cpp.o -c /Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/async.cpp",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/async.cpp",
+  "output": "_deps/spdlog-build/CMakeFiles/spdlog.dir/src/async.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-build",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=c++20 -arch arm64 -o CMakeFiles/spdlog.dir/src/cfg.cpp.o -c /Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/cfg.cpp",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/cfg.cpp",
+  "output": "_deps/spdlog-build/CMakeFiles/spdlog.dir/src/cfg.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-build",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=c++20 -arch arm64 -o CMakeFiles/spdlog.dir/src/bundled_fmtlib_format.cpp.o -c /Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/bundled_fmtlib_format.cpp",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/src/bundled_fmtlib_format.cpp",
+  "output": "_deps/spdlog-build/CMakeFiles/spdlog.dir/src/bundled_fmtlib_format.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/rec_solver.dir/rec_solver.cpp.o -c /Users/psyduck/code/ArithExe/lib/rec_solver.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/rec_solver.cpp",
+  "output": "lib/CMakeFiles/rec_solver.dir/rec_solver.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/FunctionSummary.dir/FunctionSummary.cpp.o -c /Users/psyduck/code/ArithExe/lib/FunctionSummary.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/FunctionSummary.cpp",
+  "output": "lib/CMakeFiles/FunctionSummary.dir/FunctionSummary.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/FunctionSummarizer.dir/FunctionSummarizer.cpp.o -c /Users/psyduck/code/ArithExe/lib/FunctionSummarizer.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/FunctionSummarizer.cpp",
+  "output": "lib/CMakeFiles/FunctionSummarizer.dir/FunctionSummarizer.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/LoopSummary.dir/LoopSummary.cpp.o -c /Users/psyduck/code/ArithExe/lib/LoopSummary.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/LoopSummary.cpp",
+  "output": "lib/CMakeFiles/LoopSummary.dir/LoopSummary.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/LoopSummarizer.dir/LoopSummarizer.cpp.o -c /Users/psyduck/code/ArithExe/lib/LoopSummarizer.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/LoopSummarizer.cpp",
+  "output": "lib/CMakeFiles/LoopSummarizer.dir/LoopSummarizer.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/AnalysisManager.dir/AnalysisManager.cpp.o -c /Users/psyduck/code/ArithExe/lib/AnalysisManager.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/AnalysisManager.cpp",
+  "output": "lib/CMakeFiles/AnalysisManager.dir/AnalysisManager.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -isystem /opt/homebrew/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/logics.dir/logics.cpp.o -c /Users/psyduck/code/ArithExe/lib/logics.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/logics.cpp",
+  "output": "lib/CMakeFiles/logics.dir/logics.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/MemoryObject.dir/MemoryObject.cpp.o -c /Users/psyduck/code/ArithExe/lib/MemoryObject.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/MemoryObject.cpp",
+  "output": "lib/CMakeFiles/MemoryObject.dir/MemoryObject.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/common.dir/common.cpp.o -c /Users/psyduck/code/ArithExe/lib/common.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/common.cpp",
+  "output": "lib/CMakeFiles/common.dir/common.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/cache.dir/cache.cpp.o -c /Users/psyduck/code/ArithExe/lib/cache.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/cache.cpp",
+  "output": "lib/CMakeFiles/cache.dir/cache.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/Expression.dir/Expr.cpp.o -c /Users/psyduck/code/ArithExe/lib/Expr.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/Expr.cpp",
+  "output": "lib/CMakeFiles/Expression.dir/Expr.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/AInstruction.dir/AInstruction.cpp.o -c /Users/psyduck/code/ArithExe/lib/AInstruction.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/AInstruction.cpp",
+  "output": "lib/CMakeFiles/AInstruction.dir/AInstruction.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/MStack.dir/MStack.cpp.o -c /Users/psyduck/code/ArithExe/lib/MStack.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/MStack.cpp",
+  "output": "lib/CMakeFiles/MStack.dir/MStack.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/engine.dir/engine.cpp.o -c /Users/psyduck/code/ArithExe/lib/engine.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/engine.cpp",
+  "output": "lib/CMakeFiles/engine.dir/engine.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/state.dir/state.cpp.o -c /Users/psyduck/code/ArithExe/lib/state.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/state.cpp",
+  "output": "lib/CMakeFiles/state.dir/state.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/lib",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/Memory.dir/Memory.cpp.o -c /Users/psyduck/code/ArithExe/lib/Memory.cpp",
+  "file": "/Users/psyduck/code/ArithExe/lib/Memory.cpp",
+  "output": "lib/CMakeFiles/Memory.dir/Memory.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/tools",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/spdlog-src/include -isystem /opt/homebrew/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/arith_exe.dir/arith_exe.cpp.o -c /Users/psyduck/code/ArithExe/tools/arith_exe.cpp",
+  "file": "/Users/psyduck/code/ArithExe/tools/arith_exe.cpp",
+  "output": "tools/CMakeFiles/arith_exe.dir/arith_exe.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/test",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/test/loops -isystem /opt/homebrew/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/test_engine.dir/test_engine.cpp.o -c /Users/psyduck/code/ArithExe/test/test_engine.cpp",
+  "file": "/Users/psyduck/code/ArithExe/test/test_engine.cpp",
+  "output": "test/CMakeFiles/test_engine.dir/test_engine.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/test",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/test/loops -isystem /opt/homebrew/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/test_logic.dir/test_logic.cpp.o -c /Users/psyduck/code/ArithExe/test/test_logic.cpp",
+  "file": "/Users/psyduck/code/ArithExe/test/test_logic.cpp",
+  "output": "test/CMakeFiles/test_logic.dir/test_logic.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/test",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/test/loops -isystem /opt/homebrew/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=gnu++20 -arch arm64 -o CMakeFiles/test_algebra.dir/test_algebra.cpp.o -c /Users/psyduck/code/ArithExe/test/test_algebra.cpp",
+  "file": "/Users/psyduck/code/ArithExe/test/test_algebra.cpp",
+  "output": "test/CMakeFiles/test_algebra.dir/test_algebra.cpp.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/googletest-build/googlemock",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/googletest-src/googlemock/include -I/Users/psyduck/code/ArithExe/build/_deps/googletest-src/googlemock -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64  -DGTEST_HAS_PTHREAD=1   -o CMakeFiles/gmock.dir/src/gmock-all.cc.o -c /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googlemock/src/gmock-all.cc",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/googletest-src/googlemock/src/gmock-all.cc",
+  "output": "_deps/googletest-build/googlemock/CMakeFiles/gmock.dir/src/gmock-all.cc.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/googletest-build/googlemock",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googlemock/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googlemock -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64  -DGTEST_HAS_PTHREAD=1   -o CMakeFiles/gmock_main.dir/src/gmock_main.cc.o -c /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googlemock/src/gmock_main.cc",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/googletest-src/googlemock/src/gmock_main.cc",
+  "output": "_deps/googletest-build/googlemock/CMakeFiles/gmock_main.dir/src/gmock_main.cc.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/googletest-build/googletest",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -I/Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/include -I/Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64  -DGTEST_HAS_PTHREAD=1   -o CMakeFiles/gtest.dir/src/gtest-all.cc.o -c /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/src/gtest-all.cc",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/src/gtest-all.cc",
+  "output": "_deps/googletest-build/googletest/CMakeFiles/gtest.dir/src/gtest-all.cc.o"
+},
+{
+  "directory": "/Users/psyduck/code/ArithExe/build/_deps/googletest-build/googletest",
+  "command": "/usr/bin/c++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/opt/homebrew/include -I/opt/homebrew/opt/llvm/include -I/Users/psyduck/code/ArithExe/include -I/Users/psyduck/code/ArithExe/lib -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/include -isystem /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest -O3 -DNDEBUG -std=c++20 -arch arm64  -DGTEST_HAS_PTHREAD=1   -o CMakeFiles/gtest_main.dir/src/gtest_main.cc.o -c /Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+  "file": "/Users/psyduck/code/ArithExe/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+  "output": "_deps/googletest-build/googletest/CMakeFiles/gtest_main.dir/src/gtest_main.cc.o"
+}
+]

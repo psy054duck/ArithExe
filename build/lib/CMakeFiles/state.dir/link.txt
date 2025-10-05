@@ -1,0 +1,2 @@
+/usr/bin/ar qc libstate.a CMakeFiles/state.dir/state.cpp.o
+/usr/bin/ranlib libstate.a

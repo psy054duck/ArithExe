@@ -351,7 +351,6 @@ namespace ari_exe {
         // solve case by case
         for (auto conjunct : dnf) {
             auto partial_value_with_tmp = solve_vars_linear(conjunct, vars_and_tmp_vars);
-            std::cout << conjunct.to_string() << "\n";
             // remove tmp_vars from the solution
             z3::expr_vector partial_value(z3ctx);
             for (int i = 0; i < vars.size(); ++i) {
@@ -364,7 +363,7 @@ namespace ari_exe {
             conds.push_back(cond.simplify());
         }
 
-        // combine results uisng if-then-else
+        // combine results using if-then-else
         std::vector<z3::expr> res_vec;
         for (int i = 0; i < complete_values[0].size(); ++i) {
             res_vec.push_back(complete_values[0][i]);
@@ -688,6 +687,7 @@ namespace ari_exe {
             assert(equation.is_app() && equation.decl().decl_kind() == Z3_OP_EQ);
             auto linear_expr = equation.arg(0) - equation.arg(1);
             b(i, 0) = linear_expr;
+            std::cout << b(i, 0).to_string() << std::endl;
             for (int j = 0; j < vars.size(); ++j) {
                 auto coeff = get_coeff(linear_expr, vars[j]);
                 // coeff = ctx.real_val(coeff.as_int64());

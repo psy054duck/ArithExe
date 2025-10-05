@@ -19,25 +19,30 @@ void __VERIFIER_assert(int cond) {
     return;
 }
 
-
-
-int fibonacci(int n) {
-    if (n < 1) {
-        return 0;
-    } else if (n == 1) {
-        return 1;
+int g(int n) {
+    if (n < 2) {
+        return n;
     } else {
-        return fibonacci(n-1) + fibonacci(n-2);
+        int x1 = 2*g(n - 1);
+        int x2 = g(n - 2);
+        return x1 - x2;
     }
 }
 
+int f(int n) {
+    if (n < 2) {
+        return g(n);
+        // return n + 1;
+    } else {
+        int x1 = 2*f(n - 1);
+        int x2 = f(n - 2);
+        return x1 - x2;
+    }
+}
 
 int main() {
-    int x = 6; // __VERIFIER_nondet_int();
-    // if (x > 46 || x == -2147483648) {
-    //     return 0;
-    // }
-    int result = fibonacci(x);
-	__VERIFIER_assert(result == 8);
+    int x = __VERIFIER_nondet_int();
+    int result = f(x);
+    __VERIFIER_assert(result == x);
 }
     

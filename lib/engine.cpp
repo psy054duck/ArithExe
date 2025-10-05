@@ -174,7 +174,7 @@ Engine::build_initial_state() {
         path_condition = path_condition && obj->get_constraints();
     }
 
-    auto pc = entry->getEntryBlock().getFirstNonPHIOrDbg();
+    auto pc = &*entry->getEntryBlock().getFirstNonPHIOrDbg();
     memory.push_frame(mod->getFunction(ari_exe::default_entry_function_name));
     for (auto& arg : entry->args()) {
         auto name = "ari_" + arg.getName().str();

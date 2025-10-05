@@ -1,0 +1,7 @@
+if (And((true), (!((2) <= (ari_arg))))) {
+	ari_f((ari_arg)) = ari_arg;
+} else if (And((And((true), (!(!((2) <= (ari_arg)))))), (!(!((20) <= (ari_arg)))))) {
+	ari_f((ari_arg)) = ari_f((((- 1)) + (ari_arg)));
+} else if (And((And((true), (!(!((2) <= (ari_arg)))))), (!((20) <= (ari_arg))))) {
+	ari_f((ari_arg)) = ((2) * (ari_f((((- 1)) + (ari_arg))))) + (((- 1)) * (ari_f((((- 2)) + (ari_arg)))));
+} 

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/psyduck/code/ArithExe/build/_deps/spdlog-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
