@@ -1,2 +1,0 @@
-/usr/bin/ar qc libMStack.a CMakeFiles/MStack.dir/MStack.cpp.o
-/usr/bin/ranlib libMStack.a

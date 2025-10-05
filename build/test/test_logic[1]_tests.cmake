@@ -1,5 +1,0 @@
-add_test([=[EQ_FINDING.test_1]=]  /Users/psyduck/code/ArithExe/build/test_logic [==[--gtest_filter=EQ_FINDING.test_1]==] --gtest_also_run_disabled_tests)
-set_tests_properties([=[EQ_FINDING.test_1]=]  PROPERTIES WORKING_DIRECTORY /Users/psyduck/code/ArithExe/build/test SKIP_REGULAR_EXPRESSION [==[\[  SKIPPED \]]==])
-add_test([=[ITE2PIECEWISE.test_1]=]  /Users/psyduck/code/ArithExe/build/test_logic [==[--gtest_filter=ITE2PIECEWISE.test_1]==] --gtest_also_run_disabled_tests)
-set_tests_properties([=[ITE2PIECEWISE.test_1]=]  PROPERTIES WORKING_DIRECTORY /Users/psyduck/code/ArithExe/build/test SKIP_REGULAR_EXPRESSION [==[\[  SKIPPED \]]==])
-set(  test_logic_TESTS EQ_FINDING.test_1 ITE2PIECEWISE.test_1)

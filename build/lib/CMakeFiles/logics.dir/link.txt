@@ -1,2 +1,0 @@
-/usr/bin/ar qc liblogics.a CMakeFiles/logics.dir/logics.cpp.o
-/usr/bin/ranlib liblogics.a

@@ -1,5 +1,0 @@
-if(EXISTS "/Users/psyduck/code/ArithExe/build/test/test_algebra[1]_tests.cmake")
-  include("/Users/psyduck/code/ArithExe/build/test/test_algebra[1]_tests.cmake")
-else()
-  add_test(test_algebra_NOT_BUILT test_algebra_NOT_BUILT)
-endif()

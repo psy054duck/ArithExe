@@ -1,2 +1,0 @@
-/usr/bin/ar qc librec_solver.a CMakeFiles/rec_solver.dir/rec_solver.cpp.o
-/usr/bin/ranlib librec_solver.a

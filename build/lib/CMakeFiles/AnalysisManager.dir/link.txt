@@ -1,2 +1,0 @@
-/usr/bin/ar qc libAnalysisManager.a CMakeFiles/AnalysisManager.dir/AnalysisManager.cpp.o
-/usr/bin/ranlib libAnalysisManager.a

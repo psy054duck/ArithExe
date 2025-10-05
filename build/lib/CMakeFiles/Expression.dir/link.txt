@@ -1,2 +1,0 @@
-/usr/bin/ar qc libExpression.a CMakeFiles/Expression.dir/Expr.cpp.o
-/usr/bin/ranlib libExpression.a

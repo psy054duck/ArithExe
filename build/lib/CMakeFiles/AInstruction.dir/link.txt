@@ -1,2 +1,0 @@
-/usr/bin/ar qc libAInstruction.a CMakeFiles/AInstruction.dir/AInstruction.cpp.o
-/usr/bin/ranlib libAInstruction.a

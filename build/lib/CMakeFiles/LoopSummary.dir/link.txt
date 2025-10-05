@@ -1,2 +1,0 @@
-/usr/bin/ar qc libLoopSummary.a CMakeFiles/LoopSummary.dir/LoopSummary.cpp.o
-/usr/bin/ranlib libLoopSummary.a

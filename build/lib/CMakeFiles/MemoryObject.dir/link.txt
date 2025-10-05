@@ -1,2 +1,0 @@
-/usr/bin/ar qc libMemoryObject.a CMakeFiles/MemoryObject.dir/MemoryObject.cpp.o
-/usr/bin/ranlib libMemoryObject.a

@@ -1,2 +1,0 @@
-/usr/bin/ar qc libFunctionSummarizer.a CMakeFiles/FunctionSummarizer.dir/FunctionSummarizer.cpp.o
-/usr/bin/ranlib libFunctionSummarizer.a

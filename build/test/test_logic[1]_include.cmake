@@ -1,5 +1,0 @@
-if(EXISTS "/Users/psyduck/code/ArithExe/build/test/test_logic[1]_tests.cmake")
-  include("/Users/psyduck/code/ArithExe/build/test/test_logic[1]_tests.cmake")
-else()
-  add_test(test_logic_NOT_BUILT test_logic_NOT_BUILT)
-endif()
