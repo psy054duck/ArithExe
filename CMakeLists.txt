@@ -30,7 +30,7 @@ include(FetchContent)
 FetchContent_Declare(
   spdlog
   GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG        v1.13.0 # or latest stable tag
+  GIT_TAG        v1.16.0 # or latest stable tag
 )
 FetchContent_MakeAvailable(spdlog)
 

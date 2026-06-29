@@ -9,6 +9,7 @@ from . import utils
 from .recurrence import Recurrence, LoopRecurrence
 from .closed_form import PeriodicClosedForm, PiecewiseClosedForm, SymbolicClosedForm
 from .solvable_polynomial import solve_solvable_map, is_solvable_map
+from .bounded_cfinite import can_attempt_bounded_cfinite_map, solve_bounded_cfinite_map, BoundedCFiniteError
 from .logic_simplification import DNFConverter, my_simplify
 
 logger = logging.getLogger(__name__)
@@ -209,20 +210,29 @@ def _solve_as_nonconditional(rec: Recurrence, seq):
     new_rec = LoopRecurrence.build_nonconditional_from_rec_by_seq(rec, seq, {})
     # new_rec.pprint()
     period = len(seq)
-    if is_solvable_map(new_rec):
-        closed_form = []
+    try:
+        solvable = is_solvable_map(new_rec)
+    except Exception:
+        solvable = False
+    if solvable:
         raw_closed_form = solve_solvable_map(new_rec)
-        # modulo part
-        for i in range(period):
-            # shift_closed = {v: c.subs({rec.ind_var: (rec.ind_var - i)/period}, simultaneous=True) for v, c in raw_closed_form.items()}
-            mapping = [(period*rec.ind_var, rec.ind_var - i), (rec.ind_var*period, rec.ind_var - i), (rec.ind_var, (rec.ind_var - i)/period)]
-            shift_closed = {v: z3.substitute(c, mapping) for v, c in raw_closed_form.items()}
-            for j in seq[:i]:
-                shift_closed = rec.run_one_iteration_for_ith_transition(shift_closed, j)
-            closed_form.append(shift_closed)
-        res = PeriodicClosedForm(closed_form, rec.ind_var)
     else:
-        raise UnsolvableError("Recurrence of this kind is not solvable.")
+        try:
+            if not can_attempt_bounded_cfinite_map(new_rec, require_nonlinear=True):
+                raise BoundedCFiniteError("Bounded C-finite fallback is reserved for nonlinear maps.")
+            raw_closed_form = solve_bounded_cfinite_map(new_rec).as_dict()
+        except BoundedCFiniteError:
+            raise UnsolvableError("Recurrence of this kind is not solvable.")
+    closed_form = []
+    # modulo part
+    for i in range(period):
+        # shift_closed = {v: c.subs({rec.ind_var: (rec.ind_var - i)/period}, simultaneous=True) for v, c in raw_closed_form.items()}
+        mapping = [(period*rec.ind_var, rec.ind_var - i), (rec.ind_var*period, rec.ind_var - i), (rec.ind_var, (rec.ind_var - i)/period)]
+        shift_closed = {v: z3.substitute(c, mapping) for v, c in raw_closed_form.items()}
+        for j in seq[:i]:
+            shift_closed = rec.run_one_iteration_for_ith_transition(shift_closed, j)
+        closed_form.append(shift_closed)
+    res = PeriodicClosedForm(closed_form, rec.ind_var)
     return res
 
 def _set_up_constraints(rec: LoopRecurrence, closed_form: PiecewiseClosedForm, index_seq):

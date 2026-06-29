@@ -71,6 +71,18 @@ TEST(BENCHMARK_NLA, true_4) {
     EXPECT_EQ(veri_res, HOLD) << "Failed on: benchmark/nla/true_4.c";
 }
 
+TEST(BENCHMARK_NLA, true_bounded_cfinite_map_fixed) {
+    auto engine = Engine("../../test/benchmark/nla/true_bounded_cfinite_map_fixed.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, HOLD) << "Failed on: benchmark/nla/true_bounded_cfinite_map_fixed.c";
+}
+
+TEST(BENCHMARK_NLA, true_bounded_cfinite_map_symbolic) {
+    auto engine = Engine("../../test/benchmark/nla/true_bounded_cfinite_map_symbolic.c");
+    auto veri_res = engine.verify();
+    EXPECT_EQ(veri_res, HOLD) << "Failed on: benchmark/nla/true_bounded_cfinite_map_symbolic.c";
+}
+
 TEST(BENCHMARK_LOOP_FREE, false_1) {
     auto engine = Engine("../../test/benchmark/loop_free/false_1.c");
     auto veri_res = engine.verify();

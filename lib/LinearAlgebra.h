@@ -342,8 +342,9 @@ namespace ari_exe {
                         auto abs_val = [](const data_t& v) {
                             if constexpr (std::is_arithmetic_v<data_t>)
                                 return std::abs(v);
+                            // if data_t is z3::expr, we can use ite to define abs
                             else
-                                return v; // For symbolic types, you may want to implement your own comparison
+                                return z3::ite(v >= 0, v, -v).simplify();
                         };
                         if ((abs_val(augmented(k, i)) > abs_val(augmented(max_row, i))).simplify().is_true()) {
                             max_row = k;
@@ -372,11 +373,13 @@ namespace ari_exe {
                         }
                     }
                 }
+                std::cout << "Augmented matrix after Gaussian elimination:\n" << augmented.to_string() << std::endl;
                 for (int i = 0; i < A.rows; i++) {
                     for (int j = 0; j < b.cols; j++) {
                         result(i, j) = augmented(i, A.cols + j).simplify();
                     }
                 }
+                std::cout << result.to_string() << std::endl;
                 return result;
             }
 

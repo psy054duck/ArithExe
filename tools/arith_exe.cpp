@@ -17,6 +17,8 @@
 #include "engine.h"
 #include "AnalysisManager.h"
 
+#include "logics.h"
+#include <assert.h>
 #include <iostream>
 
 using namespace ari_exe;

@@ -16,17 +16,18 @@ namespace ari_exe {
         auto logic = Logic();
         auto new_expr = expr.simplify();
         auto clauses= logic.to_cnf(new_expr);
-        auto solver = z3::solver(expr.ctx());
+        auto& z3ctx = expr.ctx();
+        auto solver = z3::solver(z3ctx);
         if (assumption.has_value()) {
             solver.add(assumption.value());
         }
-        z3::expr_vector remains(expr.ctx());
+        z3::expr_vector remains(z3ctx);
         for (const auto& clause : clauses) {
             solver.push();
             solver.add(!clause);
             if (solver.check() == z3::sat) {
                 // this clause is not entailed, so keep it
-                z3::expr_vector literals(expr.ctx());
+                z3::expr_vector literals(z3ctx);
                 if (clause.is_or()) {
                     for (const auto& lit : clause.args()) {
                         literals.push_back(!lit);
@@ -34,8 +35,8 @@ namespace ari_exe {
                 } else {
                     literals.push_back(!clause);
                 }
-                auto minimized_conjunction = minimize_conjunction(literals, assumption.value_or(AnalysisManager::get_ctx().bool_val(true)));
-                z3::expr_vector minimized_literals(expr.ctx());
+                auto minimized_conjunction = minimize_conjunction(literals, assumption.value_or(z3ctx.bool_val(true)));
+                z3::expr_vector minimized_literals(z3ctx);
                 for (const auto& lit : minimized_conjunction) {
                     minimized_literals.push_back(!lit);
                 }
@@ -338,6 +339,9 @@ namespace ari_exe {
         tmp_s2.add(constraints);
         auto dnf = to_dnf(processed_cons);
         spdlog::debug("DNF size: {}", dnf.size());
+        if (tmp_s.check() == z3::unsat || dnf.size() == 0) {
+            return z3::expr_vector(z3ctx);
+        }
 
         z3::expr_vector conds(constraints.ctx());
         std::vector<z3::expr_vector> complete_values;
@@ -351,6 +355,9 @@ namespace ari_exe {
         // solve case by case
         for (auto conjunct : dnf) {
             auto partial_value_with_tmp = solve_vars_linear(conjunct, vars_and_tmp_vars);
+            if (partial_value_with_tmp.size() < vars.size()) {
+                continue;
+            }
             // remove tmp_vars from the solution
             z3::expr_vector partial_value(z3ctx);
             for (int i = 0; i < vars.size(); ++i) {
@@ -361,6 +368,9 @@ namespace ari_exe {
             for (auto v : partial_value_with_tmp) dst.push_back(v);
             z3::expr cond = conjunct.substitute(vars_and_tmp_vars, dst);
             conds.push_back(cond.simplify());
+        }
+        if (complete_values.empty()) {
+            return z3::expr_vector(z3ctx);
         }
 
         // combine results using if-then-else
@@ -464,21 +474,26 @@ namespace ari_exe {
     }
 
     z3::expr_vector
-    minimize_conjunction(const z3::expr_vector& conjunction, int pivot, z3::expr assumption) {
+    minimize_conjunction(const z3::expr_vector& conjunction, int pivot, std::optional<z3::expr> assumption) {
+        if (!assumption.has_value()) {
+            assumption = conjunction.ctx().bool_val(true);
+        }
         if (pivot >= conjunction.size()) {
             return conjunction; // nothing to minimize
         }
         auto solver = z3::solver(conjunction.ctx());
-        solver.add(assumption);
+        auto& ctx = conjunction.ctx();
+        solver.add(solver.ctx().bool_val(true)); // add a trivial constraint to avoid empty solver
+        solver.add(assumption.value());
         z3::expr pivot_expr = conjunction[pivot];
         auto remaining_exprs = get_expr_vec_except(conjunction, pivot);
         solver.add(remaining_exprs);
         solver.add(!pivot_expr);
         if (solver.check() == z3::unsat) {
             // the pivot is entailed, so we can remove it
-            return minimize_conjunction(remaining_exprs, pivot);
+            return minimize_conjunction(remaining_exprs, pivot, assumption);
         } else {
-            return minimize_conjunction(conjunction, ++pivot);
+            return minimize_conjunction(conjunction, ++pivot, assumption);
         }
     }
 
@@ -617,6 +632,9 @@ namespace ari_exe {
             }
             s.pop();
         }
+        if (eqs.size() < vars.size()) {
+            return z3::expr_vector(constraints.ctx());
+        }
         return solve_linear_equations(eqs, vars);
     }
 
@@ -687,7 +705,7 @@ namespace ari_exe {
             assert(equation.is_app() && equation.decl().decl_kind() == Z3_OP_EQ);
             auto linear_expr = equation.arg(0) - equation.arg(1);
             b(i, 0) = linear_expr;
-            std::cout << b(i, 0).to_string() << std::endl;
+            // std::cout << b(i, 0).to_string() << std::endl;
             for (int j = 0; j < vars.size(); ++j) {
                 auto coeff = get_coeff(linear_expr, vars[j]);
                 // coeff = ctx.real_val(coeff.as_int64());
