@@ -13,6 +13,7 @@
 #include <optional>
 #include <queue>
 #include <algorithm>
+#include <map>
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
@@ -99,6 +100,8 @@ namespace ari_exe {
              */
             std::vector<llvm::StoreInst*> get_all_stores(llvm::Loop* loop);
 
+            std::vector<llvm::CallInst*> get_unknown_calls(llvm::Loop* loop);
+
             /**
              * @brief Check if the given state is an exit state
              * @param state The current state
@@ -148,6 +151,8 @@ namespace ari_exe {
             std::vector<Expression> v_conditions;
 
             std::vector<llvm::StoreInst*> stores;
+
+            std::vector<llvm::CallInst*> unknown_calls;
     };
 
     /**
@@ -171,6 +176,7 @@ namespace ari_exe {
             llvm::Loop* loop;
             rec_solver rec_s;
             std::optional<LoopSummary> summary;
+            std::vector<llvm::CallInst*> unknown_calls;
 
 
             /**
@@ -229,6 +235,8 @@ namespace ari_exe {
              * @brief get all header phis in order
              */
             std::vector<llvm::PHINode*> get_header_phis();
+
+            std::vector<llvm::CallInst*> get_unknown_calls();
 
             /**
              * @brief get constraints on the number of iterations of the loop

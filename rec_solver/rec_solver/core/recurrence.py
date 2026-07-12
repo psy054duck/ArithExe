@@ -351,7 +351,12 @@ class LoopRecurrence:
         self._initial = initial
         app = self.get_app()
         # print(app)
-        last_args = {a.children()[-1] for a in app if a.decl().kind() == z3.Z3_OP_UNINTERPRETED}
+        rec_apps = [
+            a for a in app
+            if a.decl().kind() == z3.Z3_OP_UNINTERPRETED
+            and not a.decl().name().endswith("_unknown")
+        ]
+        last_args = {a.children()[-1] for a in rec_apps}
         if len(last_args) > 1:
             raise Exception("More than one induction variable")
         self._ind_var = last_args.pop()
@@ -684,4 +689,3 @@ class LoopRecurrence:
         for f in rec_sym:
             sp.pprint(sp.Eq(utils.to_sympy(f), rec_sym[f]))
             print()
-

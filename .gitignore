@@ -1,0 +1,8 @@
+build
+build-local
+build-codex
+.DS_Store
+__pycache__/
+*.py[cod]
+.vscode/
+tmp/

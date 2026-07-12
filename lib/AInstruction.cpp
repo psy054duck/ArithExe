@@ -63,6 +63,8 @@ AInstruction::execute(loop_state_ptr state) {
     for (auto& new_state : new_states) {
         auto new_loop_state = std::make_shared<LoopState>(LoopState(*new_state));
         new_loop_state->path_condition_in_loop = state->path_condition_in_loop;
+        new_loop_state->summarizing_loop = state->summarizing_loop;
+        new_loop_state->unknown_call_counters = state->unknown_call_counters;
         new_base_states.push_back(new_loop_state);
     }
     return new_base_states;
@@ -718,7 +720,6 @@ AInstructionPhi::execute(state_ptr state) {
         }
     }
 
-    auto& z3ctx = state->z3ctx;
     auto prev_block = state->trace.back();
     llvm::Value* selected_value = phi_inst->getIncomingValueForBlock(prev_block);
     auto selected_value_expr = state->evaluate(selected_value);
@@ -726,6 +727,49 @@ AInstructionPhi::execute(state_ptr state) {
     state_ptr new_state = std::make_shared<State>(*state);
     // new_state->write(inst, selected_value_expr);
     // new_state->memory.allocate(inst, selected_value_expr);
+    new_state->memory.put_temp(inst, selected_value_expr);
+    new_state->step_pc();
+
+    return {new_state};
+}
+
+loop_state_list
+AInstructionPhi::execute(loop_state_ptr state) {
+    auto phi_inst = dyn_cast<llvm::PHINode>(inst);
+    auto manager = AnalysisManager::get_instance();
+    auto& LI = manager->get_LI(phi_inst->getFunction());
+    auto loop = LI.getLoopFor(phi_inst->getParent());
+
+    if (loop && failed_loops.find(loop) == failed_loops.end()) {
+        auto outer_loop = state->summarizing_loop;
+        auto header = loop->getHeader();
+        bool is_first_phi = phi_inst == &*header->phis().begin();
+        bool is_strict_inner_loop = outer_loop && loop != outer_loop && outer_loop->contains(loop);
+        if (is_first_phi && is_strict_inner_loop) {
+            spdlog::info("Summarizing nested loop {}", loop->getHeader()->getName().str());
+            auto accelerated_states = execute_if_summarizable(std::static_pointer_cast<State>(state));
+            if (accelerated_states.empty()) {
+                failed_loops.insert(loop);
+                return {};
+            }
+
+            loop_state_list nested_states;
+            for (auto& accelerated_state : accelerated_states) {
+                auto nested_state = std::make_shared<LoopState>(*accelerated_state);
+                nested_state->path_condition_in_loop = state->path_condition_in_loop;
+                nested_state->summarizing_loop = outer_loop;
+                nested_states.push_back(nested_state);
+            }
+            return nested_states;
+        }
+    }
+
+    auto& z3ctx = state->z3ctx;
+    auto prev_block = state->trace.back();
+    llvm::Value* selected_value = phi_inst->getIncomingValueForBlock(prev_block);
+    auto selected_value_expr = state->evaluate(selected_value);
+
+    loop_state_ptr new_state = std::make_shared<LoopState>(*state);
     new_state->memory.put_temp(inst, selected_value_expr);
     new_state->step_pc();
 
@@ -774,7 +818,10 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
 
     auto exit_block = loop->getExitBlock();
     // only consider those loops with only one exit block
-    assert(exit_block);
+    if (!exit_block) {
+        new_state->status = State::TERMINATED;
+        return {new_state};
+    }
 
     auto entering_block = get_loop_entering_block(loop);
     if (summary->is_over_approximated()) {

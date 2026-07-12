@@ -13,6 +13,10 @@
 #include "Memory.h"
 #include "Expr.h"
 
+namespace llvm {
+    class Loop;
+}
+
 namespace ari_exe {
     class AInstruction;
     class AStack;
@@ -119,8 +123,8 @@ namespace ari_exe {
     class LoopState: public State {
         public:
             LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
-            LoopState(const State& state): State(state), path_condition_in_loop(state.z3ctx.bool_val(true)) {};
-            LoopState(const LoopState& state): State(state), path_condition_in_loop(state.path_condition_in_loop) {};
+            LoopState(const State& state): State(state), path_condition_in_loop(state.z3ctx.bool_val(true)), summarizing_loop(nullptr) {};
+            LoopState(const LoopState& state): State(state), path_condition_in_loop(state.path_condition_in_loop), summarizing_loop(state.summarizing_loop) {};
 
             // if the state is in the process of summarizing a loop
             bool is_summarizing() const override { return true; }
@@ -133,6 +137,10 @@ namespace ari_exe {
             // path condition in loop body, loop guard is discarded
             // should only be used when summarize a loop
             Expression path_condition_in_loop;
+
+            llvm::Loop* summarizing_loop = nullptr;
+
+            std::map<llvm::Instruction*, z3::expr> unknown_call_counters;
 
             /**
              * @brief store modified values by the loop

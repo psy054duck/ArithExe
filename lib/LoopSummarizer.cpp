@@ -40,6 +40,22 @@ namespace ari_exe {
         return stores;
     }
 
+    std::vector<llvm::CallInst*>
+    LoopExecution::get_unknown_calls(llvm::Loop* loop) {
+        std::vector<llvm::CallInst*> calls;
+        for (auto& block : loop->blocks()) {
+            for (auto& inst : *block) {
+                if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(&inst)) {
+                    auto func = call_inst->getCalledFunction();
+                    if (!func || !func->hasExactDefinition()) {
+                        calls.push_back(call_inst);
+                    }
+                }
+            }
+        }
+        return calls;
+    }
+
     LoopState
     LoopExecution::run_header(loop_state_ptr state) {
         auto header = loop->getHeader();
@@ -81,9 +97,14 @@ namespace ari_exe {
         auto memory = Memory(parent_state->memory);
         auto initial_pc = AInstruction::create(&*loop->getHeader()->getFirstNonPHIOrDbg());
         auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, memory, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
+        initial_state->summarizing_loop = loop;
 
         put_header_phis_in_initial_state(initial_state);
         symbolize_stores(initial_state);
+        for (auto call_inst : get_unknown_calls(loop)) {
+            auto name = get_z3_name(call_inst->getName().str()) + "_call_count";
+            initial_state->unknown_call_counters.insert_or_assign(call_inst, z3ctx.int_const(name.c_str()));
+        }
         return initial_state;
     }
 
@@ -97,9 +118,15 @@ namespace ari_exe {
             if (!func || !func->hasExactDefinition()) {
                 auto name = "ari_" + call_inst->getName().str() + "_unknown";
                 auto undef_func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
-                auto manager = AnalysisManager::get_instance();
-                auto result = undef_func(AnalysisManager::get_ith_array_index(0));
                 auto new_state = std::make_shared<LoopState>(*state);
+                auto counter_it = new_state->unknown_call_counters.find(call_inst);
+                if (counter_it == new_state->unknown_call_counters.end()) {
+                    auto counter_name = get_z3_name(call_inst->getName().str()) + "_call_count";
+                    auto inserted = new_state->unknown_call_counters.insert_or_assign(call_inst, z3ctx.int_const(counter_name.c_str()));
+                    counter_it = inserted.first;
+                }
+                auto result = undef_func(counter_it->second);
+                counter_it->second = counter_it->second + 1;
                 new_state->memory.put_temp(call_inst, result);
                 new_state->step_pc();
                 return {new_state};
@@ -682,6 +709,12 @@ namespace ari_exe {
             auto phi_value = phi.getIncomingValueForBlock(prev_block);
             values.push_back(parent_state->evaluate(phi_value).as_expr().simplify());
         }
+        for (auto call_inst : get_unknown_calls()) {
+            auto name = get_z3_name(call_inst->getName().str()) + "_call_count";
+            auto counter_func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
+            func.push_back(counter_func(z3ctx.int_val(0)));
+            values.push_back(z3ctx.int_val(0));
+        }
         auto accessible_objects = parent_state->memory.get_accessible_objects();
         for (auto obj : accessible_objects) {
             if (obj->is_scalar()) {
@@ -803,12 +836,35 @@ namespace ari_exe {
         std::vector<rec_ty> rec_eqs;
         auto header = loop->getHeader();
         auto phis = get_header_phis();
+        auto unknown_calls = get_unknown_calls();
+        for (auto state : final_states) {
+            for (auto& [call_inst, _] : state->unknown_call_counters) {
+                auto unknown_call = llvm::dyn_cast<llvm::CallInst>(call_inst);
+                if (unknown_call && std::find(unknown_calls.begin(), unknown_calls.end(), unknown_call) == unknown_calls.end()) {
+                    unknown_calls.push_back(unknown_call);
+                }
+            }
+        }
+        this->unknown_calls = unknown_calls;
         auto header_phis_scalar_and_func = get_header_phis_scalar_and_func();
         auto src = header_phis_scalar_and_func.first;
         auto dst = header_phis_scalar_and_func.second;
         for (auto state : final_states) {
             auto path_cond = state->path_condition_in_loop.as_expr().substitute(src, dst);
             auto updates = get_update(state);
+            for (auto call_inst : unknown_calls) {
+                auto counter_it = state->unknown_call_counters.find(call_inst);
+                if (counter_it == state->unknown_call_counters.end()) {
+                    auto counter_name = get_z3_name(call_inst->getName().str()) + "_call_count";
+                    auto counter = rec_s.z3ctx.int_const(counter_name.c_str());
+                    auto unknown_name = "ari_" + call_inst->getName().str() + "_unknown";
+                    auto unknown_func = rec_s.z3ctx.function(unknown_name.c_str(), rec_s.z3ctx.int_sort(), rec_s.z3ctx.int_sort());
+                    auto unknown_apps = get_app_of(path_cond, unknown_func);
+                    updates.push_back(unknown_apps.size() > 0 ? counter + 1 : counter);
+                } else {
+                    updates.push_back(counter_it->second);
+                }
+            }
 
             // collect all conditions and expressions by unfolding ite
             std::vector<z3::expr_vector> ite_conditions;
@@ -826,8 +882,13 @@ namespace ari_exe {
                 path_conds.push_back(path_cond && z3::mk_and(tmp_conditions).substitute(src, dst));
                 rec_ty eq;
                 for (int i = 0; i < tmp_expressions.size(); i++) {
-                    auto phi = phis[i];
-                    auto name = get_z3_name(phi->getName().str());
+                    std::string name;
+                    if (i < phis.size()) {
+                        name = get_z3_name(phis[i]->getName().str());
+                    } else {
+                        auto call_inst = unknown_calls[i - phis.size()];
+                        name = get_z3_name(call_inst->getName().str()) + "_call_count";
+                    }
                     auto phi_func = rec_s.z3ctx.function(name.c_str(), rec_s.z3ctx.int_sort(), rec_s.z3ctx.int_sort());
                     eq.insert_or_assign(phi_func(manager->get_ind_var() + 1), tmp_expressions[i].substitute(src, dst));
                 }
@@ -940,7 +1001,35 @@ namespace ari_exe {
             src.push_back(phi_src);
             dst.push_back(phi_dst(manager->get_ind_var()));
         }
+        for (auto call_inst : get_unknown_calls()) {
+            auto name = get_z3_name(call_inst->getName().str()) + "_call_count";
+            auto counter_src = z3ctx.int_const(name.c_str());
+            auto counter_dst = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
+            src.push_back(counter_src);
+            dst.push_back(counter_dst(manager->get_ind_var()));
+        }
         return {src, dst};
+    }
+
+    std::vector<llvm::CallInst*>
+    LoopSummarizer::get_unknown_calls() {
+        std::vector<llvm::CallInst*> calls;
+        for (auto& block : loop->blocks()) {
+            for (auto& inst : *block) {
+                if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(&inst)) {
+                    auto func = call_inst->getCalledFunction();
+                    if (!func || !func->hasExactDefinition()) {
+                        calls.push_back(call_inst);
+                    }
+                }
+            }
+        }
+        for (auto call_inst : unknown_calls) {
+            if (std::find(calls.begin(), calls.end(), call_inst) == calls.end()) {
+                calls.push_back(call_inst);
+            }
+        }
+        return calls;
     }
 
     std::pair<z3::expr_vector, z3::expr_vector>

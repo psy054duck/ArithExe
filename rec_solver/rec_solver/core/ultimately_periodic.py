@@ -17,7 +17,12 @@ logger = logging.getLogger(__name__)
 class UnsolvableError(Exception):
     pass
 
-def solve_ultimately_periodic_symbolic(rec: LoopRecurrence, bnd=100, precondition=z3.BoolVal(True)):
+def solve_ultimately_periodic_symbolic(
+    rec: LoopRecurrence,
+    bnd=100,
+    precondition=z3.BoolVal(True),
+    enable_bounded_cfinite=True,
+):
     z3_solver = z3.Solver()
     z3_solver.add(precondition)
     acc_condition = z3.BoolVal(True)
@@ -27,7 +32,11 @@ def solve_ultimately_periodic_symbolic(rec: LoopRecurrence, bnd=100, preconditio
     constraints = []
     closed_forms = []
     if rec.is_all_initialized():
-        return solve_ultimately_periodic_initial(rec, bnd)
+        return solve_ultimately_periodic_initial(
+            rec,
+            bnd,
+            enable_bounded_cfinite=enable_bounded_cfinite,
+        )
     while z3_solver.check(acc_condition) != z3.unsat:
         # print(acc_condition)
         i += 1
@@ -42,7 +51,11 @@ def solve_ultimately_periodic_symbolic(rec: LoopRecurrence, bnd=100, preconditio
         qs = [z3.Int('q%d' % i) for i in range(len(index_seq) - 1)]
         # qs = sp.symbols('q:%d' % (len(index_seq) - 1), integer=True)
         index_seq_temp = [(s[0], q) for s, q in zip(index_seq, qs)] + [index_seq[-1]]
-        can_sol = _compute_solution_by_index_seq(rec, index_seq_temp)
+        can_sol = _compute_solution_by_index_seq(
+            rec,
+            index_seq_temp,
+            enable_bounded_cfinite=enable_bounded_cfinite,
+        )
         quantified_constraint, ks = _set_up_constraints(rec, can_sol, index_seq_temp)
         quantified_constraint = z3.simplify(z3.And(quantified_constraint, *[q >= 1 for q in qs]))
         # qe = z3.Then('qe', 'ctx-solver-simplify')
@@ -82,11 +95,15 @@ def solve_ultimately_periodic_symbolic(rec: LoopRecurrence, bnd=100, preconditio
 #     for index in product(*indices):
 #         yield z3.And(*[condition[i] for i, condition in zip(index, conditions)]), [expression[i] for i, expression in zip(index, expressions)]
 
-def solve_ultimately_periodic_initial(rec: LoopRecurrence, bnd=100):
-    closed_form, _ = _solve_ultimately_periodic_initial(rec, bnd)
+def solve_ultimately_periodic_initial(rec: LoopRecurrence, bnd=100, enable_bounded_cfinite=True):
+    closed_form, _ = _solve_ultimately_periodic_initial(
+        rec,
+        bnd,
+        enable_bounded_cfinite=enable_bounded_cfinite,
+    )
     return closed_form
 
-def _solve_ultimately_periodic_initial(rec: LoopRecurrence, bnd=100):
+def _solve_ultimately_periodic_initial(rec: LoopRecurrence, bnd=100, enable_bounded_cfinite=True):
     assert(rec.is_all_initialized())
     n = 10
     start = 0
@@ -96,7 +113,14 @@ def _solve_ultimately_periodic_initial(rec: LoopRecurrence, bnd=100):
     start_value = rec.initial
     while n < bnd:
         n *= 2
-        candidate, guessed_index_seq = _compute_candidate_solution(rec, start, n, ith, start_value=start_value)
+        candidate, guessed_index_seq = _compute_candidate_solution(
+            rec,
+            start,
+            n,
+            ith,
+            start_value=start_value,
+            enable_bounded_cfinite=enable_bounded_cfinite,
+        )
         acc_index_seq.extend(guessed_index_seq)
         smallest = verify(rec, candidate, guessed_index_seq)
         shift_candidate = candidate.subs({candidate.ind_var: candidate.ind_var - start})
@@ -161,12 +185,19 @@ def _smallest_violation(n_range, cond_range, k):
     m = solver.model()
     return m.eval(minimal)
 
-def _compute_solution_by_index_seq(rec: LoopRecurrence, index_seq):
+def _compute_solution_by_index_seq(rec: LoopRecurrence, index_seq, enable_bounded_cfinite=True):
     patterns = [seq for seq, _ in index_seq]
     acc_thresholds = [sum(len(seq)*cnt for seq, cnt in index_seq[:i]) for i in range(1, len(index_seq))]
     # nums = [cnt for _, cnt in index_seq]
     thresholds = [0] + acc_thresholds + [sp.oo]
-    nonconditional = [_solve_as_nonconditional(rec, pattern) for pattern in patterns]
+    nonconditional = [
+        _solve_as_nonconditional(
+            rec,
+            pattern,
+            enable_bounded_cfinite=enable_bounded_cfinite,
+        )
+        for pattern in patterns
+    ]
     shift_closed = [closed.subs({closed.ind_var: closed.ind_var - shift}) for closed, shift in zip(nonconditional, thresholds)]
     closed_forms = []
     initial = rec.initial
@@ -189,7 +220,7 @@ def _compute_solution_by_index_seq(rec: LoopRecurrence, index_seq):
             conditions.append(z3.And(thresholds[i] <= rec.ind_var, rec.ind_var < thresholds[i + 1]))
     return PiecewiseClosedForm(rec.ind_var, conditions, closed_forms)
 
-def _compute_candidate_solution(rec: Recurrence, start, n, ith, start_value):
+def _compute_candidate_solution(rec: Recurrence, start, n, ith, start_value, enable_bounded_cfinite=True):
     values, index_seq = rec.get_n_values_starts_with(start, n, start_value)
     compressed_seq = utils.compress_seq(index_seq)
     guessed_patterns = [seq for seq, _ in compressed_seq]
@@ -201,12 +232,16 @@ def _compute_candidate_solution(rec: Recurrence, start, n, ith, start_value):
     first_value = values[0]
     initial = {func.decl()(0): first_value[func] for func in first_value}
     new_rec = rec.copy_rec_with_diff_initial(initial)
-    sol = _compute_solution_by_index_seq(new_rec, compressed_seq)
+    sol = _compute_solution_by_index_seq(
+        new_rec,
+        compressed_seq,
+        enable_bounded_cfinite=enable_bounded_cfinite,
+    )
     # shift_sol = sol.subs({sol.ind_var: sol.ind_var - start})
     logger.debug(padding + "the guessed closed-form solution is %s" % sol)
     return sol, compressed_seq
 
-def _solve_as_nonconditional(rec: Recurrence, seq):
+def _solve_as_nonconditional(rec: Recurrence, seq, enable_bounded_cfinite=True):
     new_rec = LoopRecurrence.build_nonconditional_from_rec_by_seq(rec, seq, {})
     # new_rec.pprint()
     period = len(seq)
@@ -216,13 +251,15 @@ def _solve_as_nonconditional(rec: Recurrence, seq):
         solvable = False
     if solvable:
         raw_closed_form = solve_solvable_map(new_rec)
-    else:
+    elif enable_bounded_cfinite:
         try:
             if not can_attempt_bounded_cfinite_map(new_rec, require_nonlinear=True):
                 raise BoundedCFiniteError("Bounded C-finite fallback is reserved for nonlinear maps.")
             raw_closed_form = solve_bounded_cfinite_map(new_rec).as_dict()
         except BoundedCFiniteError:
             raise UnsolvableError("Recurrence of this kind is not solvable.")
+    else:
+        raise UnsolvableError("Recurrence of this kind is not solvable.")
     closed_form = []
     # modulo part
     for i in range(period):

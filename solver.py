@@ -1,6 +1,7 @@
 import time
 import z3
 import fire
+import os
 import sys
 from functools import reduce
 from sympy.core.function import AppliedUndef
@@ -9,13 +10,44 @@ from rec_solver import solve_file
 from rec_solver.core.closed_form import MultiFuncClosedForm, ExprClosedForm, SymbolicClosedForm, PiecewiseClosedForm
 from rec_solver.core.utils import to_z3, get_applied_functions
 
+def env_flag(name, default=True):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+def env_int(name, default):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        return int(raw_value)
+    except ValueError:
+        return default
+
+def env_optional_int(name):
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        return None
+
 def main(filename, inv_var):
     out_filename = "tmp/closed.smt2"
-    closed = solve_file(filename)
+    os.makedirs(os.path.dirname(out_filename), exist_ok=True)
+    closed = solve_file(
+        filename,
+        enable_bounded_cfinite=env_flag("ARITHEXE_ENABLE_BOUNDED_CFINITE"),
+        poly_expr_strategy=os.environ.get("ARITHEXE_POLY_EXPR_STRATEGY", "auto"),
+        poly_expr_order=env_int("ARITHEXE_POLY_EXPR_ORDER", 1),
+        poly_expr_degree=env_optional_int("ARITHEXE_POLY_EXPR_DEGREE"),
+    )
     solver = z3.Solver()
     closed_dict = closed.as_dict()
     # apps = reduce(set.union, [k.atoms(AppliedUndef) | v.atoms(AppliedUndef) for k, v in closed_dict.items()])
-    apps = reduce(set.union, [get_applied_functions(k) for k in closed_dict])
+    apps = reduce(set.union, [get_applied_functions(k) for k in closed_dict], set())
     # apps = reduce(set.union, [get_applied_functions(k) | get_applied_functions(v) for k, v in closed_dict.items()])
 
     # remove the last argument from the function applications

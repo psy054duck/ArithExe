@@ -143,6 +143,7 @@ namespace ari_exe {
         public:
             AInstructionPhi(llvm::Instruction* inst): AInstruction(inst) {};
             std::vector<state_ptr> execute(state_ptr state) override;
+            loop_state_list execute(loop_state_ptr state) override;
 
             /**
              * @brief if reach a loop and the loop is summarizable, use the summary and skip the execution

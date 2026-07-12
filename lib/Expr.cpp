@@ -75,7 +75,11 @@ namespace ari_exe {
     Expression Expression::operator!() const {
         z3::expr_vector new_expressions(ctx());
         for (const auto& expr : expressions) {
-            new_expressions.push_back(!expr);
+            if (expr.is_bool()) {
+                new_expressions.push_back(!expr);
+            } else {
+                new_expressions.push_back(expr == 0);
+            }
         }
         return Expression(conditions, new_expressions);
     }
@@ -156,4 +160,3 @@ namespace ari_exe {
         // }
     }
 }
-

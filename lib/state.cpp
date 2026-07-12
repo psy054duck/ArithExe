@@ -90,7 +90,8 @@ State::is_concrete(const Expression& e, const Expression& concrete_value) {
 
 LoopState::LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status):
     State(z3ctx, pc, prev_pc, memory, path_condition, trace, status),
-    path_condition_in_loop(path_condition_in_loop) {}
+    path_condition_in_loop(path_condition_in_loop),
+    summarizing_loop(nullptr) {}
 
 RecState::RecState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status):
     State(z3ctx, pc, prev_pc, memory, path_condition, trace, status) {}
@@ -98,6 +99,10 @@ RecState::RecState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, 
 void
 LoopState::append_path_condition(const Expression& _path_condition) {
     State::append_path_condition(_path_condition);
+    auto normalize_bool = [](z3::expr expr) {
+        if (expr.is_int()) return expr != 0;
+        return expr;
+    };
 
     auto manager = AnalysisManager::get_instance();
     auto inst = pc->inst;
@@ -110,11 +115,11 @@ LoopState::append_path_condition(const Expression& _path_condition) {
             auto true_block = branch->getSuccessor(0);
             auto false_block = branch->getSuccessor(1);
             if (loop->contains(true_block) && loop->contains(false_block)) {
-                path_condition_in_loop = path_condition_in_loop && _path_condition.as_expr();
+                path_condition_in_loop = path_condition_in_loop && normalize_bool(_path_condition.as_expr());
             }
         }
     } else if (auto select = dyn_cast_or_null<llvm::SelectInst>(inst)) {
-        path_condition_in_loop = path_condition_in_loop && _path_condition.as_expr();
+        path_condition_in_loop = path_condition_in_loop && normalize_bool(_path_condition.as_expr());
     } else {
         assert(false && "Unsupported instruction type");
     }
