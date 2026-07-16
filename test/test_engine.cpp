@@ -22,10 +22,10 @@ void reset_test_caches() {
 
 void run_bounded_cfinite_benchmark(const std::string& filename) {
     reset_test_caches();
-    auto engine = Engine("../../benchmarks/bounded-cfinite/" + filename);
+    auto engine = Engine("../../test/benchmark/bounded-cfinite/" + filename);
     auto veri_res = engine.verify();
     reset_test_caches();
-    EXPECT_EQ(veri_res, HOLD) << "Failed on: benchmarks/bounded-cfinite/" << filename;
+    EXPECT_EQ(veri_res, HOLD) << "Failed on: test/bounded-cfinite/" << filename;
 }
 }
 

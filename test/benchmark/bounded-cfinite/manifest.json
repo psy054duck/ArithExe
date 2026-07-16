@@ -1,0 +1,65 @@
+{
+  "description": "Synthetic bounded C-finite polynomial map benchmarks generated as p = phi^{-1} o h o phi from unit-eigenvalue polynomially solvable maps.",
+  "property": "unreach-call.prp",
+  "expected_verdict": true,
+  "bound_variants": ["20", "1000", "2147483647"],
+  "bound_variant_bases": [
+    "bcf_01_square_invariant.c",
+    "bcf_06_cubic_invariant.c",
+    "bcf_07_mixed_quadratic_invariant.c",
+    "bcf_09_weighted_linear_phi.c",
+    "bcf_10_quartic_invariant.c"
+  ],
+  "benchmarks": [
+    {
+      "file": "bcf_01_square_invariant.c",
+      "h": "(u, v + u^2)",
+      "phi": "(x + y, x)"
+    },
+    {
+      "file": "bcf_02_shift_shear_conjugate.c",
+      "h": "(u + 1, v + u)",
+      "phi": "(x + y^2, y)"
+    },
+    {
+      "file": "bcf_03_unipotent_chain3.c",
+      "h": "(u + 1, v + u, w + v)",
+      "phi": "(x + y^2, y + z^2, z)"
+    },
+    {
+      "file": "bcf_04_quadratic_accumulator.c",
+      "h": "(u, v + u, w + v^2)",
+      "phi": "(x + y^2, y + z, z)"
+    },
+    {
+      "file": "bcf_05_square_sum_shift.c",
+      "h": "(u + 1, v + u^2)",
+      "phi": "(x + y^2, y)"
+    },
+    {
+      "file": "bcf_06_cubic_invariant.c",
+      "h": "(u, v + u^3)",
+      "phi": "(x + y, x)"
+    },
+    {
+      "file": "bcf_07_mixed_quadratic_invariant.c",
+      "h": "(u, v + u^2 + u)",
+      "phi": "(x + y, x)"
+    },
+    {
+      "file": "bcf_08_three_variable_invariant.c",
+      "h": "(u, v + u^2, w + u^3)",
+      "phi": "(x + y + z, x, y)"
+    },
+    {
+      "file": "bcf_09_weighted_linear_phi.c",
+      "h": "(u, v + u^2)",
+      "phi": "(x + 2y, y)"
+    },
+    {
+      "file": "bcf_10_quartic_invariant.c",
+      "h": "(u, v + u^4)",
+      "phi": "(x + y, x)"
+    }
+  ]
+}
