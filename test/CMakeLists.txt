@@ -1,6 +1,7 @@
 # copy rec_solver to the build/test directory
 file(COPY ${CMAKE_SOURCE_DIR}/rec_solver DESTINATION ${CMAKE_BINARY_DIR}/test)
 file(COPY ${CMAKE_SOURCE_DIR}/solver.py DESTINATION ${CMAKE_BINARY_DIR}/test)
+file(COPY ${CMAKE_SOURCE_DIR}/solver_worker.py DESTINATION ${CMAKE_BINARY_DIR}/test)
 
 ### Gtest
 include(FetchContent)

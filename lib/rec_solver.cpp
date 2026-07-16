@@ -1,9 +1,240 @@
 #include "rec_solver.h"
+#include <cerrno>
+#include <csignal>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <mutex>
 #include <numeric>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "boost/algorithm/string/join.hpp"
 
 using namespace ari_exe;
+
+namespace {
+    class SolverRequestError : public std::runtime_error {
+        public:
+            using std::runtime_error::runtime_error;
+    };
+
+    class SolverWorker {
+        public:
+            ~SolverWorker() {
+                stop();
+            }
+
+            std::string solve(const std::string& recurrence, const std::string& ind_var) {
+                std::lock_guard<std::mutex> guard(mu);
+                std::string last_error;
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        ensure_started();
+                        return send_solve_request(recurrence, ind_var);
+                    } catch (const SolverRequestError&) {
+                        throw;
+                    } catch (const std::exception& e) {
+                        last_error = e.what();
+                        stop();
+                    }
+                }
+                throw std::runtime_error("recurrence solver worker failed: " + last_error);
+            }
+
+        private:
+            pid_t pid = -1;
+            int child_stdin = -1;
+            int child_stdout = -1;
+            uint64_t next_request_id = 1;
+            std::mutex mu;
+
+            static void close_fd(int& fd) {
+                if (fd != -1) {
+                    close(fd);
+                    fd = -1;
+                }
+            }
+
+            static std::string errno_message(const std::string& prefix) {
+                return prefix + ": " + std::strerror(errno);
+            }
+
+            void ensure_started() {
+                if (pid > 0) return;
+                start();
+            }
+
+            void start() {
+                static std::once_flag sigpipe_once;
+                std::call_once(sigpipe_once, []() {
+                    std::signal(SIGPIPE, SIG_IGN);
+                });
+
+                int to_child[2] = {-1, -1};
+                int from_child[2] = {-1, -1};
+                if (pipe(to_child) == -1) {
+                    throw std::runtime_error(errno_message("pipe(to_child) failed"));
+                }
+                if (pipe(from_child) == -1) {
+                    close(to_child[0]);
+                    close(to_child[1]);
+                    throw std::runtime_error(errno_message("pipe(from_child) failed"));
+                }
+
+                pid_t child = fork();
+                if (child == -1) {
+                    close(to_child[0]);
+                    close(to_child[1]);
+                    close(from_child[0]);
+                    close(from_child[1]);
+                    throw std::runtime_error(errno_message("fork failed"));
+                }
+
+                if (child == 0) {
+                    dup2(to_child[0], STDIN_FILENO);
+                    dup2(from_child[1], STDOUT_FILENO);
+                    close(to_child[0]);
+                    close(to_child[1]);
+                    close(from_child[0]);
+                    close(from_child[1]);
+
+                    const char* python = std::getenv("ARITHEXE_SOLVER_PYTHON");
+                    if (python == nullptr || python[0] == '\0') {
+                        python = "python";
+                    }
+                    const char* worker = std::getenv("ARITHEXE_SOLVER_WORKER");
+                    if (worker == nullptr || worker[0] == '\0') {
+                        worker = "solver_worker.py";
+                    }
+
+                    execlp(python, python, "-u", worker, static_cast<char*>(nullptr));
+                    std::cerr << "failed to exec recurrence solver worker: "
+                              << std::strerror(errno) << "\n";
+                    _exit(127);
+                }
+
+                close(to_child[0]);
+                close(from_child[1]);
+                child_stdin = to_child[1];
+                child_stdout = from_child[0];
+                pid = child;
+            }
+
+            void stop() {
+                if (child_stdin != -1) {
+                    const char quit[] = "QUIT\n";
+                    write(child_stdin, quit, sizeof(quit) - 1);
+                }
+                close_fd(child_stdin);
+                close_fd(child_stdout);
+                if (pid > 0) {
+                    int status = 0;
+                    pid_t exited = waitpid(pid, &status, WNOHANG);
+                    if (exited == 0) {
+                        kill(pid, SIGTERM);
+                        waitpid(pid, &status, 0);
+                    }
+                    pid = -1;
+                }
+            }
+
+            static void write_all(int fd, const std::string& data) {
+                const char* cursor = data.data();
+                size_t remaining = data.size();
+                while (remaining > 0) {
+                    ssize_t written = write(fd, cursor, remaining);
+                    if (written == -1) {
+                        if (errno == EINTR) continue;
+                        throw std::runtime_error(errno_message("write to solver worker failed"));
+                    }
+                    if (written == 0) {
+                        throw std::runtime_error("write to solver worker wrote zero bytes");
+                    }
+                    cursor += written;
+                    remaining -= static_cast<size_t>(written);
+                }
+            }
+
+            static std::string read_line(int fd) {
+                std::string line;
+                char c = '\0';
+                while (true) {
+                    ssize_t count = read(fd, &c, 1);
+                    if (count == -1) {
+                        if (errno == EINTR) continue;
+                        throw std::runtime_error(errno_message("read from solver worker failed"));
+                    }
+                    if (count == 0) {
+                        throw std::runtime_error("solver worker closed its stdout");
+                    }
+                    if (c == '\n') {
+                        return line;
+                    }
+                    line.push_back(c);
+                    if (line.size() > 4096) {
+                        throw std::runtime_error("solver worker response header is too long");
+                    }
+                }
+            }
+
+            static std::string read_exact(int fd, size_t size) {
+                std::string data(size, '\0');
+                size_t offset = 0;
+                while (offset < size) {
+                    ssize_t count = read(fd, data.data() + offset, size - offset);
+                    if (count == -1) {
+                        if (errno == EINTR) continue;
+                        throw std::runtime_error(errno_message("read from solver worker failed"));
+                    }
+                    if (count == 0) {
+                        throw std::runtime_error("solver worker closed stdout mid-response");
+                    }
+                    offset += static_cast<size_t>(count);
+                }
+                return data;
+            }
+
+            std::string send_solve_request(const std::string& recurrence, const std::string& ind_var) {
+                std::string request_id = std::to_string(next_request_id++);
+                std::string header = "SOLVE " + request_id + " " +
+                                     std::to_string(ind_var.size()) + " " +
+                                     std::to_string(recurrence.size()) + "\n";
+                write_all(child_stdin, header);
+                write_all(child_stdin, ind_var);
+                write_all(child_stdin, recurrence);
+
+                std::string response_header = read_line(child_stdout);
+                std::istringstream header_in(response_header);
+                std::string status;
+                std::string response_id;
+                size_t payload_size = 0;
+                if (!(header_in >> status >> response_id >> payload_size)) {
+                    throw std::runtime_error("invalid solver worker response header: " + response_header);
+                }
+                std::string payload = read_exact(child_stdout, payload_size);
+                if (response_id != request_id) {
+                    throw std::runtime_error("solver worker response id mismatch");
+                }
+                if (status == "OK") {
+                    return payload;
+                }
+                if (status == "ERR") {
+                    throw SolverRequestError(payload);
+                }
+                throw std::runtime_error("unknown solver worker response status: " + status);
+            }
+    };
+
+    SolverWorker& solver_worker() {
+        static SolverWorker worker;
+        return worker;
+    }
+}
 
 static void
 combine_vec(z3::expr_vector& vec1, const z3::expr_vector& vec2) {
@@ -99,15 +330,14 @@ void rec_solver::set_eqs(rec_ty& eqs) {
 }
 
 bool rec_solver::solve() {
-    rec2file();
-    std::string cmd = "python solver.py tmp/recurrence.txt " + ind_var.to_string(); //  + " 2>/dev/null";
-    int err = system(cmd.c_str());
-    // int err = system("python rec_solver.py tmp/test.txt");
-    if (err) {
+    try {
+        std::string smt2 = solver_worker().solve(rec2string(), ind_var.to_string());
+        smt2_to_z3(smt2);
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Error solving recurrence: " << e.what() << "\n";
         return false;
     }
-    file2z3();
-    return true;
 }
 
 static std::set<z3::expr>
@@ -216,6 +446,12 @@ void rec_solver::rec2file() {
     out.close();
 }
 
+std::string rec_solver::rec2string() {
+    std::ostringstream out;
+    _rec2file(out);
+    return out.str();
+}
+
 std::string rec_solver::z3_infix(z3::expr e) {
     if (e.is_const() || e.is_numeral()) {
         if (e.to_string().starts_with("nondet")) {
@@ -292,7 +528,7 @@ std::string rec_solver::z3_infix(z3::expr e) {
     }
 }
 
-void rec_solver::_rec2file(std::ofstream& out) {
+void rec_solver::_rec2file(std::ostream& out) {
     if (!is_formatted()) {
         _format();
     }
@@ -449,6 +685,22 @@ void rec_solver::file2z3() {
 
 void rec_solver::_file2z3(const std::string& filename) {
     z3::expr_vector c = z3ctx.parse_file(filename.data());
+    for (auto e : c) {
+        auto kind = e.decl().decl_kind();
+        auto args = e.args();
+        assert(kind == Z3_OP_EQ);
+        z3::expr k = args[0].simplify();
+        z3::expr v = args[1].simplify();
+        if (k.is_numeral()) {
+            k = args[1];
+            v = args[0];
+        }
+        res.insert_or_assign(k, v.simplify());
+    }
+}
+
+void rec_solver::smt2_to_z3(const std::string& smt2) {
+    z3::expr_vector c = z3ctx.parse_string(smt2.c_str());
     for (auto e : c) {
         auto kind = e.decl().decl_kind();
         auto args = e.args();

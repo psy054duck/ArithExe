@@ -6,7 +6,7 @@ import sys
 from functools import reduce
 from sympy.core.function import AppliedUndef
 sys.path.append('./rec_solver')
-from rec_solver import solve_file
+from rec_solver import solve_file, solve_str
 from rec_solver.core.closed_form import MultiFuncClosedForm, ExprClosedForm, SymbolicClosedForm, PiecewiseClosedForm
 from rec_solver.core.utils import to_z3, get_applied_functions
 
@@ -34,16 +34,15 @@ def env_optional_int(name):
     except ValueError:
         return None
 
-def main(filename, inv_var):
-    out_filename = "tmp/closed.smt2"
-    os.makedirs(os.path.dirname(out_filename), exist_ok=True)
-    closed = solve_file(
-        filename,
+def solver_options():
+    return dict(
         enable_bounded_cfinite=env_flag("ARITHEXE_ENABLE_BOUNDED_CFINITE"),
         poly_expr_strategy=os.environ.get("ARITHEXE_POLY_EXPR_STRATEGY", "auto"),
         poly_expr_order=env_int("ARITHEXE_POLY_EXPR_ORDER", 1),
         poly_expr_degree=env_optional_int("ARITHEXE_POLY_EXPR_DEGREE"),
     )
+
+def closed_form_to_smt2(closed):
     solver = z3.Solver()
     closed_dict = closed.as_dict()
     # apps = reduce(set.union, [k.atoms(AppliedUndef) | v.atoms(AppliedUndef) for k, v in closed_dict.items()])
@@ -66,8 +65,19 @@ def main(filename, inv_var):
     new_closed_dict = {z3.substitute(k, remove_func_mapping): z3.substitute(v, remove_func_mapping) for k, v in closed_dict.items()}
     for k, e in new_closed_dict.items():
         solver.add(k == e)
+    return solver.to_smt2()
+
+def solve_file_to_smt2(filename):
+    return closed_form_to_smt2(solve_file(filename, **solver_options()))
+
+def solve_str_to_smt2(recurrence):
+    return closed_form_to_smt2(solve_str(recurrence, **solver_options()))
+
+def main(filename, inv_var):
+    out_filename = "tmp/closed.smt2"
+    os.makedirs(os.path.dirname(out_filename), exist_ok=True)
     with open(out_filename, 'w') as fp:
-        fp.write(solver.to_smt2())
+        fp.write(solve_file_to_smt2(filename))
     # print(closed.to_z3())
 
 if __name__ == '__main__':

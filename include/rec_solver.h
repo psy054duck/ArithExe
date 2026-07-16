@@ -14,6 +14,8 @@
 #include <map>
 #include <set>
 #include <fstream>
+#include <ostream>
+#include <string>
 
 #include "common.h"
 
@@ -56,7 +58,8 @@ namespace ari_exe {
             void add_assumption(z3::expr e);
             void _format();
             void rec2file();
-            void _rec2file(std::ofstream& out);
+            std::string rec2string();
+            void _rec2file(std::ostream& out);
             std::vector<z3::expr> parse_expr(z3::expr e);
             std::vector<z3::expr> parse_cond(z3::expr);
             bool is_ite_free(z3::expr e);
@@ -64,6 +67,7 @@ namespace ari_exe {
             std::string z3_infix(z3::expr e);
             void file2z3();
             void _file2z3(const std::string& filename);
+            void smt2_to_z3(const std::string& smt2);
             void print_res();
             bool solve();
             // std::pair<std::vector<z3::expr>, std::vector<z3::expr>> rec_solver::parse_expr_(z3::expr e);
