@@ -19,6 +19,8 @@ Engine::Engine(const std::string& c_filename): mod(nullptr), solver(z3ctx) {
 VeriResult
 Engine::verify() {
     results.clear();
+    issue_recorded = false;
+    issue_message.clear();
     violation_instruction = nullptr;
     counterexample_inputs.clear();
     loop_certificates.clear();
@@ -82,6 +84,11 @@ Engine::run(state_ptr state) {
             if (res == FEASIBLE) {
                 if (cur_state->is_over_approx ||
                     !cur_state->counterexample_complete) {
+                    record_issue(
+                        cur_state->is_over_approx
+                            ? VerifierIssueKind::OverApproximation
+                            : VerifierIssueKind::IncompleteCounterexample,
+                        "feasible error path depends on an imprecise summary");
                     results.push_back(VERIUNKNOWN);
                     return;
                 }
@@ -90,6 +97,8 @@ Engine::run(state_ptr state) {
                 capture_counterexample(cur_state, solver.get_model());
                 return;
             } else if (res == TESTUNKNOWN) {
+                record_issue(VerifierIssueKind::Z3Unknown,
+                             "Z3 returned unknown while checking reach_error feasibility");
                 results.push_back(VERIUNKNOWN);
                 return;
             }
@@ -103,10 +112,14 @@ Engine::run(state_ptr state) {
             continue;
         } else if (cur_state->status == State::UNKNOWN) {
             // if the state is unknown, we should not continue
+            record_issue(VerifierIssueKind::UnknownState,
+                         "symbolic execution reached an unknown state");
             results.push_back(VERIUNKNOWN);
             return;
         } else if (cur_state->status == State::FAIL) {
             if (!cur_state->counterexample_complete) {
+                record_issue(VerifierIssueKind::IncompleteCounterexample,
+                             "counterexample path is incomplete");
                 results.push_back(VERIUNKNOWN);
                 return;
             }
@@ -118,6 +131,14 @@ Engine::run(state_ptr state) {
         auto new_states = step(cur_state);
         for (auto& new_state : new_states) states.push(new_state);
     }
+}
+
+void
+Engine::record_issue(VerifierIssueKind kind, const std::string& message) {
+    if (issue_recorded) return;
+    issue_recorded = true;
+    issue_kind = kind;
+    issue_message = message;
 }
 
 bool
@@ -157,6 +178,11 @@ Engine::verify(state_ptr state) {
             break;
         case z3::sat:
             if (state->is_over_approx || !state->counterexample_complete) {
+                record_issue(
+                    state->is_over_approx
+                        ? VerifierIssueKind::OverApproximation
+                        : VerifierIssueKind::IncompleteCounterexample,
+                    "verification condition may fail, but the path is imprecise");
                 result = VERIUNKNOWN;
                 break;
             }
@@ -165,6 +191,8 @@ Engine::verify(state_ptr state) {
             result = FAIL;
             break;
         case z3::unknown:
+            record_issue(VerifierIssueKind::Z3Unknown,
+                         "Z3 returned unknown while proving a verification condition");
             result = VERIUNKNOWN;
             break;
     }
@@ -245,6 +273,8 @@ Engine::test(state_ptr state) {
             result = FEASIBLE;
             break;
         case z3::unknown:
+            record_issue(VerifierIssueKind::Z3Unknown,
+                         "Z3 returned unknown while checking path feasibility");
             result = TESTUNKNOWN;
             break;
     }

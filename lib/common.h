@@ -8,6 +8,7 @@
 
 #include <string>
 #include <algorithm>
+#include <stdexcept>
 #include <set>
 #include <utility>
 #include <vector>
@@ -69,6 +70,50 @@ namespace ari_exe {
         FEASIBLE,    // the state is feasible
         UNFEASIBLE,  // the state is unfeasible
         TESTUNKNOWN, // the state is unknown
+    };
+
+    enum class VerifierIssueKind {
+        FrontendCommand,
+        FrontendIRParse,
+        UnsupportedSemantics,
+        RecurrenceSolver,
+        Z3Unknown,
+        OverApproximation,
+        IncompleteCounterexample,
+        UnknownState,
+    };
+
+    inline const char* to_string(VerifierIssueKind kind) {
+        switch (kind) {
+            case VerifierIssueKind::FrontendCommand:
+                return "frontend-command";
+            case VerifierIssueKind::FrontendIRParse:
+                return "frontend-ir-parse";
+            case VerifierIssueKind::UnsupportedSemantics:
+                return "unsupported-semantics";
+            case VerifierIssueKind::RecurrenceSolver:
+                return "recurrence-solver";
+            case VerifierIssueKind::Z3Unknown:
+                return "z3-unknown";
+            case VerifierIssueKind::OverApproximation:
+                return "over-approximation";
+            case VerifierIssueKind::IncompleteCounterexample:
+                return "incomplete-counterexample";
+            case VerifierIssueKind::UnknownState:
+                return "unknown-state";
+        }
+        return "unknown";
+    }
+
+    class VerifierError : public std::runtime_error {
+        public:
+            VerifierError(VerifierIssueKind kind, const std::string& message)
+                : std::runtime_error(message), issue_kind(kind) {}
+
+            VerifierIssueKind kind() const { return issue_kind; }
+
+        private:
+            VerifierIssueKind issue_kind;
     };
 
     // Prefix for all Z3 variables

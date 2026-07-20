@@ -72,6 +72,12 @@ namespace ari_exe {
             static std::string generateLLVMIR(const std::string& c_filename);
 
             /**
+             * @brief Remove frontend metadata fields known to be rejected by
+             *        older LLVM textual IR parsers.
+             */
+            static std::string sanitizeLLVMIRForParser(const std::string& ir_content);
+
+            /**
              * @brief Parse the LLVM IR string into a Module
              * @param ir_content The LLVM IR as a string
              * @param context The LLVM context to use for parsing

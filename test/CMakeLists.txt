@@ -38,6 +38,16 @@ add_executable(
   test_witness.cpp
 )
 
+target_compile_definitions(
+  test_engine
+  PRIVATE ARITHEXE_TEST_BENCHMARK_DIR="${CMAKE_SOURCE_DIR}/test/benchmark"
+)
+
+target_compile_definitions(
+  test_witness
+  PRIVATE ARITHEXE_TEST_BENCHMARK_DIR="${CMAKE_SOURCE_DIR}/test/benchmark"
+)
+
 target_link_libraries(
   test_engine
   GTest::gtest_main

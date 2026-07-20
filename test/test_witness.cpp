@@ -12,6 +12,13 @@
 using namespace ari_exe;
 
 namespace {
+#ifndef ARITHEXE_TEST_BENCHMARK_DIR
+#define ARITHEXE_TEST_BENCHMARK_DIR "../../test/benchmark"
+#endif
+
+std::string benchmark_path(const std::string& relative_path) {
+    return std::string(ARITHEXE_TEST_BENCHMARK_DIR) + "/" + relative_path;
+}
 
 void reset_caches() {
     for (auto& [_, instruction] : AInstruction::cached_instructions) {
@@ -19,6 +26,7 @@ void reset_caches() {
     }
     AInstruction::cached_instructions.clear();
     AInstructionPhi::failed_loops.clear();
+    AnalysisManager::unknown_counter = 0;
 
     delete State::func_summaries;
     State::func_summaries = new SymbolTable<FunctionSummary>();
@@ -50,7 +58,7 @@ class WitnessTest : public ::testing::Test {
 };
 
 TEST_F(WitnessTest, WritesCorrectnessWitnessForLoopProof) {
-    const std::string source = "../../test/benchmark/loops/true_3.c";
+    const std::string source = benchmark_path("loops/true_3.c");
     const std::string output = "test-loop-witness.yml";
     Engine engine(source);
     ASSERT_EQ(engine.verify(), HOLD);
@@ -65,6 +73,8 @@ TEST_F(WitnessTest, WritesCorrectnessWitnessForLoopProof) {
 
     const std::string witness = read_file(output);
     EXPECT_NE(witness.find("format_version: \"2.1\""), std::string::npos);
+    EXPECT_NE(witness.find("input_file_hashes:"), std::string::npos);
+    EXPECT_NE(witness.find("data_model: \"LP64\""), std::string::npos);
     EXPECT_NE(witness.find("entry_type: \"invariant_set\""), std::string::npos);
     EXPECT_NE(witness.find("type: \"loop_invariant\""), std::string::npos);
     EXPECT_NE(witness.find("entry_type: \"ghost_instrumentation\""),
@@ -77,7 +87,7 @@ TEST_F(WitnessTest, WritesCorrectnessWitnessForLoopProof) {
 }
 
 TEST_F(WitnessTest, WritesViolationWitnessForRecursiveCounterexample) {
-    const std::string source = "../../test/benchmark/recursion/false_1.c";
+    const std::string source = benchmark_path("recursion/false_1.c");
     const std::string output = "test-recursion-witness.yml";
     Engine engine(source);
     ASSERT_EQ(engine.verify(), FAIL);
@@ -105,7 +115,7 @@ TEST_F(WitnessTest, WritesViolationWitnessForRecursiveCounterexample) {
 }
 
 TEST_F(WitnessTest, WritesFunctionContractForRecursiveProof) {
-    const std::string source = "../../test/benchmark/recursion/true_1.c";
+    const std::string source = benchmark_path("recursion/true_1.c");
     const std::string output = "test-recursion-correctness-witness.yml";
     Engine engine(source);
     ASSERT_EQ(engine.verify(), HOLD);
@@ -133,7 +143,7 @@ TEST_F(WitnessTest, WritesFunctionContractForRecursiveProof) {
 
 TEST_F(WitnessTest, SnapshotsLoopEntryValueInGhostVariable) {
     const std::string source =
-        "../../test/benchmark/loops/true_ghost_initial.c";
+        benchmark_path("loops/true_ghost_initial.c");
     const std::string output = "test-loop-initial-ghost-witness.yml";
     Engine engine(source);
     ASSERT_EQ(engine.verify(), HOLD);
@@ -157,7 +167,7 @@ TEST_F(WitnessTest, SnapshotsLoopEntryValueInGhostVariable) {
 }
 
 TEST_F(WitnessTest, WritesLoopInputsInDynamicExecutionOrder) {
-    const std::string source = "../../test/benchmark/loops/false_nondet.c";
+    const std::string source = benchmark_path("loops/false_nondet.c");
     const std::string output = "test-loop-violation-witness.yml";
     Engine engine(source);
     ASSERT_EQ(engine.verify(), FAIL);

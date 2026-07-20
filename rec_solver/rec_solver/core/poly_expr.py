@@ -716,6 +716,7 @@ def solve_rec(k, p, transitions, inits, ind_var):
                 return (p, 0)
             else:
                 return (p, sp.Piecewise((0, ind_var >= 1), (p.subs(inits, simultaneous=True), True)))
+        return (p, sp.simplify((k ** ind_var) * p.subs(inits, simultaneous=True)))
     else:
         cs = [sp.simplify(p.subs({ind_var: ind_var + 1}, simultaneous=True).subs(tran, simultaneous=True) - p) for tran in transitions]
         if all([c == cs[0] for c in cs]):

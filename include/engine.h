@@ -55,6 +55,7 @@
 #include <vector>
 #include <queue>
 #include <stack>
+#include <string>
 
 namespace ari_exe {
     const std::string default_entry_function_name = "main";
@@ -131,6 +132,14 @@ namespace ari_exe {
                 return function_certificates;
             }
 
+            bool has_issue() const { return issue_recorded; }
+
+            VerifierIssueKind get_issue_kind() const { return issue_kind; }
+
+            const std::string& get_issue_message() const {
+                return issue_message;
+            }
+
         private:
 
             // Set the default entry point of the module if not set
@@ -142,6 +151,9 @@ namespace ari_exe {
             void capture_loop_certificates(state_ptr state);
 
             void capture_function_certificates(state_ptr state);
+
+            void record_issue(VerifierIssueKind kind,
+                              const std::string& message);
 
             /**
              * @brief check if the state just reach a loop
@@ -171,6 +183,12 @@ namespace ari_exe {
             std::vector<LoopCertificate> loop_certificates;
 
             std::vector<FunctionCertificate> function_certificates;
+
+            bool issue_recorded = false;
+
+            VerifierIssueKind issue_kind = VerifierIssueKind::UnknownState;
+
+            std::string issue_message;
 
     };
 }

@@ -5,7 +5,9 @@ import os
 import sys
 from functools import reduce
 from sympy.core.function import AppliedUndef
-sys.path.append('./rec_solver')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'rec_solver'))
 from rec_solver import solve_file, solve_str
 from rec_solver.core.closed_form import MultiFuncClosedForm, ExprClosedForm, SymbolicClosedForm, PiecewiseClosedForm
 from rec_solver.core.utils import to_z3, get_applied_functions

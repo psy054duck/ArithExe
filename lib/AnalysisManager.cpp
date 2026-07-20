@@ -1,7 +1,12 @@
 #include "AnalysisManager.h"
+#include "common.h"
 #include <spdlog/spdlog.h>
 
 #include <cstdlib>
+#include <sstream>
+#include <string>
+
+#include "llvm/Support/raw_ostream.h"
 
 using namespace ari_exe;
 
@@ -11,15 +16,52 @@ AnalysisManager* AnalysisManager::instance = new AnalysisManager();
 
 int AnalysisManager::unknown_counter = 0;
 
+namespace {
+std::string diagnostic_to_string(const llvm::SMDiagnostic& diagnostic) {
+    std::string message;
+    llvm::raw_string_ostream out(message);
+    diagnostic.print("driver", out);
+    return out.str();
+}
+
+std::string clang_debug_flag() {
+    const char* raw = std::getenv("ARITHEXE_CLANG_DEBUG");
+    if (raw == nullptr || raw[0] == '\0') {
+        return "-g";
+    }
+    const std::string mode(raw);
+    if (mode == "0" || mode == "false" || mode == "off" ||
+        mode == "none") {
+        return "-g0";
+    }
+    if (mode == "full" || mode == "2" || mode == "true" ||
+        mode == "on") {
+        return "-g";
+    }
+    if (mode == "line-tables-only" || mode == "line-tables") {
+        return "-gline-tables-only";
+    }
+    spdlog::warn("Unknown ARITHEXE_CLANG_DEBUG={}, using full debug info",
+                 mode);
+    return "-g";
+}
+}
+
 std::unique_ptr<llvm::Module>
 AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
     auto ir_content = generateLLVMIR(c_filename);
     auto mod = parseLLVMIR(ir_content, context);
+    MPM = llvm::ModulePassManager();
     LAM = llvm::LoopAnalysisManager();
     FAM = llvm::FunctionAnalysisManager();
     CGAM = llvm::CGSCCAnalysisManager();
     MAM = llvm::ModuleAnalysisManager();
     PB = llvm::PassBuilder();
+    LIs.clear();
+    DTs.clear();
+    PDTs.clear();
+    DIs.clear();
+    CG = nullptr;
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
     PB.registerFunctionAnalyses(FAM);
@@ -102,15 +144,19 @@ AnalysisManager::generateLLVMIR(const std::string& c_filename) {
 #endif
     std::ostringstream clang_cmd;
     clang_cmd << shell_quote(clang_path)
-              << " -emit-llvm -g -S -O0 -Xclang -disable-O0-optnone ";
+              << " -emit-llvm " << clang_debug_flag()
+              << " -S -O0 -Xclang -disable-O0-optnone ";
     if (const char* data_model = std::getenv("ARITHEXE_DATA_MODEL")) {
         if (std::string(data_model) == "ILP32") clang_cmd << "-m32 ";
         else if (std::string(data_model) == "LP64") clang_cmd << "-m64 ";
     }
     clang_cmd << shell_quote(c_filename) << " -o -";
+    spdlog::debug("Running frontend command: {}", clang_cmd.str());
     FILE* pipe = popen(clang_cmd.str().c_str(), "r");
     if (!pipe) {
-        throw std::runtime_error("Failed to run clang");
+        throw VerifierError(VerifierIssueKind::FrontendCommand,
+                            "failed to run clang command: " +
+                                clang_cmd.str());
     }
 
     std::string ir_content;
@@ -120,9 +166,36 @@ AnalysisManager::generateLLVMIR(const std::string& c_filename) {
     }
     int clang_ret = pclose(pipe);
     if (clang_ret != 0) {
-        throw std::runtime_error("Fail to convert " + c_filename + " into LLVM IR");
+        throw VerifierError(VerifierIssueKind::FrontendCommand,
+                            "failed to convert " + c_filename +
+                                " into LLVM IR with command: " +
+                                clang_cmd.str());
     }
     return ir_content;
+}
+
+std::string
+AnalysisManager::sanitizeLLVMIRForParser(const std::string& ir_content) {
+    std::istringstream input(ir_content);
+    std::ostringstream output;
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.find("!DILabel(") != std::string::npos) {
+            const std::string marker = ", column: ";
+            size_t marker_pos = line.find(marker);
+            if (marker_pos != std::string::npos) {
+                size_t end_pos = line.find(',', marker_pos + marker.size());
+                if (end_pos == std::string::npos) {
+                    end_pos = line.find(')', marker_pos + marker.size());
+                }
+                if (end_pos != std::string::npos) {
+                    line.erase(marker_pos, end_pos - marker_pos);
+                }
+            }
+        }
+        output << line << '\n';
+    }
+    return output.str();
 }
 
 std::unique_ptr<llvm::Module>
@@ -130,11 +203,33 @@ AnalysisManager::parseLLVMIR(const std::string& ir_content, llvm::LLVMContext& c
     llvm::SMDiagnostic err;
     auto memBuffer = llvm::MemoryBuffer::getMemBuffer(ir_content, "in-memory.ll");
     auto module = llvm::parseIR(memBuffer->getMemBufferRef(), err, context);
-    if (!module) {
-        err.print("driver", llvm::errs());
-        throw std::runtime_error("Failed to parse LLVM IR");
+    if (module) {
+        return module;
     }
-    return module;
+
+    const std::string first_error = diagnostic_to_string(err);
+    std::string sanitized = sanitizeLLVMIRForParser(ir_content);
+    if (sanitized != ir_content) {
+        llvm::SMDiagnostic retry_err;
+        auto retry_buffer =
+            llvm::MemoryBuffer::getMemBuffer(sanitized, "in-memory.ll");
+        auto retry_module =
+            llvm::parseIR(retry_buffer->getMemBufferRef(), retry_err,
+                          context);
+        if (retry_module) {
+            spdlog::warn(
+                "LLVM IR parsed after removing unsupported debug metadata: {}",
+                first_error);
+            return retry_module;
+        }
+        throw VerifierError(
+            VerifierIssueKind::FrontendIRParse,
+            "failed to parse LLVM IR after metadata sanitization:\n" +
+                diagnostic_to_string(retry_err));
+    }
+
+    throw VerifierError(VerifierIssueKind::FrontendIRParse,
+                        "failed to parse LLVM IR:\n" + first_error);
 }
 
 z3::expr

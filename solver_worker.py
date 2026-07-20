@@ -1,8 +1,95 @@
 import contextlib
+import os
+import shutil
+import subprocess
 import sys
 import traceback
+from pathlib import Path
 
-from solver import solve_str_to_smt2
+
+def candidate_solver_pythons():
+    seen = set()
+
+    def add(command):
+        if not command or not command[0]:
+            return
+        key = tuple(command)
+        if key in seen:
+            return
+        seen.add(key)
+        yield command
+
+    yield from add([os.environ.get("ARITHEXE_SOLVER_PYTHON", "")])
+
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        yield from add([str(Path(conda_prefix) / "bin" / "python")])
+
+    conda_env = os.environ.get("ARITHEXE_SOLVER_CONDA_ENV", "veri")
+    conda_exe = os.environ.get("CONDA_EXE") or shutil.which("conda")
+    if not conda_exe:
+        return
+
+    try:
+        conda_base = subprocess.check_output(
+            [conda_exe, "info", "--base"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+        ).strip()
+    except Exception:
+        conda_base = ""
+
+    if conda_base:
+        yield from add([str(Path(conda_base) / "envs" / conda_env / "bin" / "python")])
+
+    yield from add([conda_exe, "run", "-n", conda_env, "python"])
+
+
+def same_python(command):
+    if len(command) != 1:
+        return False
+    try:
+        return Path(command[0]).resolve() == Path(sys.executable).resolve()
+    except OSError:
+        return False
+
+
+def can_import_solver_dependencies(command):
+    try:
+        subprocess.run(
+            command + ["-c", "import z3, fire, sympy"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def reexec_with_solver_python():
+    if os.environ.get("ARITHEXE_SOLVER_REEXECED") == "1":
+        return
+
+    env = os.environ.copy()
+    env["ARITHEXE_SOLVER_REEXECED"] = "1"
+    worker_path = str(Path(__file__).resolve())
+    for command in candidate_solver_pythons():
+        if same_python(command):
+            continue
+        if can_import_solver_dependencies(command):
+            os.execvpe(command[0], command + ["-u", worker_path], env)
+
+
+try:
+    from solver import solve_str_to_smt2
+except ModuleNotFoundError as error:
+    if error.name in {"z3", "fire", "sympy"}:
+        reexec_with_solver_python()
+    raise
 
 
 def read_exact(size):

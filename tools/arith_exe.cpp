@@ -215,8 +215,21 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    auto engine = Engine(source_file);
-    auto res = engine.verify();
+    std::unique_ptr<Engine> engine;
+    VeriResult res = VERIUNKNOWN;
+    try {
+        engine = std::make_unique<Engine>(source_file);
+        res = engine->verify();
+    } catch (const VerifierError& error) {
+        spdlog::error("Verification stopped at {}: {}",
+                      to_string(error.kind()), error.what());
+        std::cout << "UNKNOWN\n";
+        return 1;
+    } catch (const std::exception& error) {
+        spdlog::error("Verification stopped: {}", error.what());
+        std::cout << "UNKNOWN\n";
+        return 1;
+    }
 
     bool witness_written = true;
     if (witness_enabled && res != VERIUNKNOWN) {
@@ -228,10 +241,11 @@ int main(int argc, char* argv[]) {
         if (witness_written) {
             WitnessWriter writer(std::move(witness_options));
             witness_written = writer.write(
-                res, *engine.get_module(), engine.get_violation_instruction(),
-                engine.get_counterexample_inputs(),
-                engine.get_loop_certificates(),
-                engine.get_function_certificates());
+                res, *engine->get_module(),
+                engine->get_violation_instruction(),
+                engine->get_counterexample_inputs(),
+                engine->get_loop_certificates(),
+                engine->get_function_certificates());
             if (!witness_written) {
                 spdlog::error("Failed to write witness: {}", writer.error());
             } else {
@@ -254,6 +268,11 @@ int main(int argc, char* argv[]) {
             break;
         case VERIUNKNOWN:
             spdlog::warn("The verification result is unknown.");
+            if (engine && engine->has_issue()) {
+                spdlog::warn("Unknown reason: {} ({})",
+                             to_string(engine->get_issue_kind()),
+                             engine->get_issue_message());
+            }
             std::cout << "UNKNOWN\n";
             break;
     }

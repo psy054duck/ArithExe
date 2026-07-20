@@ -6,6 +6,7 @@
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <optional>
 
@@ -53,6 +54,13 @@ source_variable(llvm::Value* value) {
     return std::nullopt;
 }
 } // namespace
+
+std::string llvm_value_to_string(const llvm::Value& value) {
+    std::string text;
+    llvm::raw_string_ostream stream(text);
+    value.print(stream);
+    return stream.str();
+}
 
 std::map<llvm::Instruction*, AInstruction*>
 AInstruction::cached_instructions;
@@ -176,7 +184,9 @@ AInstructionBinary::execute(state_ptr state) {
     } else if (opcode == llvm::Instruction::Xor) {
         result = op0_value ^ op1_value;
     } else {
-        throw std::runtime_error("Unsupported binary operation");
+        throw std::runtime_error("Unsupported binary operation " +
+                                 std::string(bin_inst->getOpcodeName()) +
+                                 ": " + llvm_value_to_string(*bin_inst));
     }
 
     new_state->memory.put_temp(inst, result);

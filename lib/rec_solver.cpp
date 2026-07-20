@@ -1,27 +1,77 @@
 #include "rec_solver.h"
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <numeric>
+#include <poll.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unordered_map>
 #include <unistd.h>
 #include "boost/algorithm/string/join.hpp"
 
 using namespace ari_exe;
+
+#ifndef ARITHEXE_DEFAULT_SOLVER_WORKER
+#define ARITHEXE_DEFAULT_SOLVER_WORKER "solver_worker.py"
+#endif
+
+#ifndef ARITHEXE_DEFAULT_SOLVER_SCRIPT
+#define ARITHEXE_DEFAULT_SOLVER_SCRIPT "solver.py"
+#endif
 
 namespace {
     class SolverRequestError : public std::runtime_error {
         public:
             using std::runtime_error::runtime_error;
     };
+
+    class SolverTimeoutError : public std::runtime_error {
+        public:
+            using std::runtime_error::runtime_error;
+    };
+
+    bool env_flag(const char* name, bool default_value = false) {
+        const char* raw = std::getenv(name);
+        if (raw == nullptr || raw[0] == '\0') return default_value;
+        std::string value(raw);
+        return value != "0" && value != "false" && value != "False" &&
+               value != "no" && value != "off";
+    }
+
+    int env_int(const char* name, int default_value) {
+        const char* raw = std::getenv(name);
+        if (raw == nullptr || raw[0] == '\0') return default_value;
+        try {
+            return std::stoi(raw);
+        } catch (...) {
+            return default_value;
+        }
+    }
+
+    std::string env_string(const char* name) {
+        const char* raw = std::getenv(name);
+        return raw == nullptr ? "" : raw;
+    }
+
+    std::string shell_quote(const std::string& value) {
+        std::string quoted = "'";
+        for (char ch : value) {
+            if (ch == '\'') quoted += "'\\''";
+            else quoted += ch;
+        }
+        return quoted + "'";
+    }
 
     class SolverWorker {
         public:
@@ -31,12 +81,23 @@ namespace {
 
             std::string solve(const std::string& recurrence, const std::string& ind_var) {
                 std::lock_guard<std::mutex> guard(mu);
+                std::string cache_key = make_cache_key(recurrence, ind_var);
+                auto cached = cache.find(cache_key);
+                if (cached != cache.end()) {
+                    return cached->second;
+                }
+
                 std::string last_error;
                 for (int attempt = 0; attempt < 2; attempt++) {
                     try {
                         ensure_started();
-                        return send_solve_request(recurrence, ind_var);
+                        std::string smt2 = send_solve_request(recurrence, ind_var);
+                        cache.insert_or_assign(std::move(cache_key), smt2);
+                        return smt2;
                     } catch (const SolverRequestError&) {
+                        throw;
+                    } catch (const SolverTimeoutError&) {
+                        stop();
                         throw;
                     } catch (const std::exception& e) {
                         last_error = e.what();
@@ -52,6 +113,23 @@ namespace {
             int child_stdout = -1;
             uint64_t next_request_id = 1;
             std::mutex mu;
+            std::unordered_map<std::string, std::string> cache;
+
+            static int request_timeout_ms() {
+                return env_int("ARITHEXE_SOLVER_TIMEOUT_MS", 60000);
+            }
+
+            static std::string make_cache_key(const std::string& recurrence,
+                                              const std::string& ind_var) {
+                std::ostringstream key;
+                key << "ind=" << ind_var << '\n'
+                    << "bounded=" << env_string("ARITHEXE_ENABLE_BOUNDED_CFINITE") << '\n'
+                    << "strategy=" << env_string("ARITHEXE_POLY_EXPR_STRATEGY") << '\n'
+                    << "order=" << env_string("ARITHEXE_POLY_EXPR_ORDER") << '\n'
+                    << "degree=" << env_string("ARITHEXE_POLY_EXPR_DEGREE") << '\n'
+                    << recurrence;
+                return key.str();
+            }
 
             static void close_fd(int& fd) {
                 if (fd != -1) {
@@ -109,7 +187,7 @@ namespace {
                     }
                     const char* worker = std::getenv("ARITHEXE_SOLVER_WORKER");
                     if (worker == nullptr || worker[0] == '\0') {
-                        worker = "solver_worker.py";
+                        worker = ARITHEXE_DEFAULT_SOLVER_WORKER;
                     }
 
                     execlp(python, python, "-u", worker, static_cast<char*>(nullptr));
@@ -143,10 +221,39 @@ namespace {
                 }
             }
 
-            static void write_all(int fd, const std::string& data) {
+            static void wait_for_fd(int fd, short events, int timeout_ms,
+                                    const std::string& action) {
+                struct pollfd pfd;
+                pfd.fd = fd;
+                pfd.events = events;
+                pfd.revents = 0;
+                int res = 0;
+                do {
+                    res = poll(&pfd, 1, timeout_ms);
+                } while (res == -1 && errno == EINTR);
+                if (res == 0) {
+                    throw SolverTimeoutError(
+                        "timed out while trying to " + action +
+                        " after " + std::to_string(timeout_ms) + " ms");
+                }
+                if (res == -1) {
+                    throw std::runtime_error(errno_message("poll failed"));
+                }
+                if ((pfd.revents & (POLLERR | POLLNVAL)) != 0) {
+                    throw std::runtime_error("solver worker pipe error while trying to " + action);
+                }
+                if ((pfd.revents & POLLHUP) != 0 &&
+                    (pfd.revents & events) == 0) {
+                    throw std::runtime_error("solver worker pipe closed while trying to " + action);
+                }
+            }
+
+            static void write_all(int fd, const std::string& data,
+                                  int timeout_ms) {
                 const char* cursor = data.data();
                 size_t remaining = data.size();
                 while (remaining > 0) {
+                    wait_for_fd(fd, POLLOUT, timeout_ms, "write request");
                     ssize_t written = write(fd, cursor, remaining);
                     if (written == -1) {
                         if (errno == EINTR) continue;
@@ -160,10 +267,11 @@ namespace {
                 }
             }
 
-            static std::string read_line(int fd) {
+            static std::string read_line(int fd, int timeout_ms) {
                 std::string line;
                 char c = '\0';
                 while (true) {
+                    wait_for_fd(fd, POLLIN, timeout_ms, "read response header");
                     ssize_t count = read(fd, &c, 1);
                     if (count == -1) {
                         if (errno == EINTR) continue;
@@ -182,10 +290,12 @@ namespace {
                 }
             }
 
-            static std::string read_exact(int fd, size_t size) {
+            static std::string read_exact(int fd, size_t size,
+                                          int timeout_ms) {
                 std::string data(size, '\0');
                 size_t offset = 0;
                 while (offset < size) {
+                    wait_for_fd(fd, POLLIN, timeout_ms, "read response payload");
                     ssize_t count = read(fd, data.data() + offset, size - offset);
                     if (count == -1) {
                         if (errno == EINTR) continue;
@@ -199,16 +309,29 @@ namespace {
                 return data;
             }
 
+            void trace_payload(const std::string& request_id,
+                               const std::string& suffix,
+                               const std::string& payload) const {
+                std::string dir = env_string("ARITHEXE_SOLVER_TRACE_DIR");
+                if (dir.empty()) return;
+                std::filesystem::create_directories(dir);
+                std::ofstream out(std::filesystem::path(dir) /
+                                  ("rec_solver_" + request_id + suffix));
+                out << payload;
+            }
+
             std::string send_solve_request(const std::string& recurrence, const std::string& ind_var) {
                 std::string request_id = std::to_string(next_request_id++);
+                int timeout_ms = request_timeout_ms();
                 std::string header = "SOLVE " + request_id + " " +
                                      std::to_string(ind_var.size()) + " " +
                                      std::to_string(recurrence.size()) + "\n";
-                write_all(child_stdin, header);
-                write_all(child_stdin, ind_var);
-                write_all(child_stdin, recurrence);
+                trace_payload(request_id, "_request.rec", recurrence);
+                write_all(child_stdin, header, timeout_ms);
+                write_all(child_stdin, ind_var, timeout_ms);
+                write_all(child_stdin, recurrence, timeout_ms);
 
-                std::string response_header = read_line(child_stdout);
+                std::string response_header = read_line(child_stdout, timeout_ms);
                 std::istringstream header_in(response_header);
                 std::string status;
                 std::string response_id;
@@ -216,14 +339,17 @@ namespace {
                 if (!(header_in >> status >> response_id >> payload_size)) {
                     throw std::runtime_error("invalid solver worker response header: " + response_header);
                 }
-                std::string payload = read_exact(child_stdout, payload_size);
+                std::string payload = read_exact(child_stdout, payload_size,
+                                                 timeout_ms);
                 if (response_id != request_id) {
                     throw std::runtime_error("solver worker response id mismatch");
                 }
                 if (status == "OK") {
+                    trace_payload(request_id, "_response.smt2", payload);
                     return payload;
                 }
                 if (status == "ERR") {
+                    trace_payload(request_id, "_error.txt", payload);
                     throw SolverRequestError(payload);
                 }
                 throw std::runtime_error("unknown solver worker response status: " + status);
@@ -301,12 +427,6 @@ coeff_of(z3::expr e, z3::expr term, z3::context& z3ctx) {
     return res.simplify();
 }
 
-static bool
-is_one_stride_simple_rec(z3::expr lhs, z3::expr rhs) {
-    assert(lhs.decl().arity() == 1);
-    z3::expr lhs_arg = lhs.arg(0);
-}
-
 void
 rec_solver::add_assumption(z3::expr e) {
     assumption  = assumption && e;
@@ -330,14 +450,49 @@ void rec_solver::set_eqs(rec_ty& eqs) {
 }
 
 bool rec_solver::solve() {
+    const bool force_file_transport =
+        env_string("ARITHEXE_SOLVER_TRANSPORT") == "file" ||
+        env_flag("ARITHEXE_SOLVER_USE_FILES");
+    const bool fallback_to_files =
+        force_file_transport ||
+        env_flag("ARITHEXE_SOLVER_FALLBACK_TO_FILES");
     try {
-        std::string smt2 = solver_worker().solve(rec2string(), ind_var.to_string());
-        smt2_to_z3(smt2);
-        return true;
+        if (!force_file_transport) {
+            std::string smt2 =
+                solver_worker().solve(rec2string(), ind_var.to_string());
+            smt2_to_z3(smt2);
+            return true;
+        }
     } catch (const std::exception& e) {
-        std::cerr << "Error solving recurrence: " << e.what() << "\n";
-        return false;
+        std::cerr << "Error solving recurrence through worker: "
+                  << e.what() << "\n";
+        if (!fallback_to_files) {
+            return false;
+        }
+        std::cerr << "Falling back to file-based recurrence solver\n";
     }
+
+    if (fallback_to_files) {
+        rec2file();
+        const std::string python =
+            env_string("ARITHEXE_SOLVER_PYTHON").empty()
+                ? "python"
+                : env_string("ARITHEXE_SOLVER_PYTHON");
+        const std::string cmd = shell_quote(python) +
+                                " " +
+                                shell_quote(ARITHEXE_DEFAULT_SOLVER_SCRIPT) +
+                                " tmp/recurrence.txt " +
+                                shell_quote(ind_var.to_string());
+        int err = system(cmd.c_str());
+        if (err) {
+            std::cerr << "Error solving recurrence through files\n";
+            return false;
+        }
+        file2z3();
+        return true;
+    }
+
+    return false;
 }
 
 static std::set<z3::expr>
