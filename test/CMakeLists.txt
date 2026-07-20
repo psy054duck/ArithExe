@@ -33,6 +33,11 @@ add_executable(
   test_algebra.cpp
 )
 
+add_executable(
+  test_witness
+  test_witness.cpp
+)
+
 target_link_libraries(
   test_engine
   GTest::gtest_main
@@ -57,7 +62,16 @@ target_link_libraries(
   ${llvm_libs} 
 )
 
+target_link_libraries(
+  test_witness
+  GTest::gtest_main
+  ${ARITHEXEC_LIBS}
+  ${Z3_LIBRARIES}
+  ${llvm_libs}
+)
+
 include(GoogleTest)
 gtest_discover_tests(test_engine)
 gtest_discover_tests(test_logic)
 gtest_discover_tests(test_algebra)
+gtest_discover_tests(test_witness)

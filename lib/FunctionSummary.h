@@ -27,6 +27,8 @@ namespace ari_exe {
                 return params;
             }
 
+            z3::expr get_summary() const { return summary.as_expr(); }
+
             bool is_over_approximated() const {
                 return !summary_over_approx.empty();
             }

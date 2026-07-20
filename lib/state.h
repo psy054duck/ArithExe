@@ -48,6 +48,20 @@ namespace ari_exe {
 #include "LoopSummary.h"
 
 namespace ari_exe {
+    struct NondetCall {
+        llvm::CallInst* instruction;
+        std::optional<z3::expr> value;
+        std::optional<z3::func_decl> values;
+        std::optional<z3::expr> count;
+
+        NondetCall(llvm::CallInst* instruction, const z3::expr& value)
+            : instruction(instruction), value(value) {}
+
+        NondetCall(llvm::CallInst* instruction, const z3::func_decl& values,
+                   const z3::expr& count)
+            : instruction(instruction), values(values), count(count) {}
+    };
+
     class State {
         private:
             // path condition collected so far
@@ -66,7 +80,7 @@ namespace ari_exe {
 
         public:
             State(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const trace_ty& trace, Status status = RUNNING): z3ctx(z3ctx), pc(pc), prev_pc(prev_pc), memory(memory), path_condition(path_condition), trace(trace), status(status) {};
-            State(const State& state): z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), is_over_approx(state.is_over_approx) {};
+            State(const State& state): z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), is_over_approx(state.is_over_approx), nondet_calls(state.nondet_calls), counterexample_complete(state.counterexample_complete), loop_certificates(state.loop_certificates), function_certificates(state.function_certificates) {};
 
             // if the state is in the process of summarizing a loop
             virtual bool is_summarizing() const { return false; }
@@ -118,6 +132,23 @@ namespace ari_exe {
             z3::model get_model();
 
             std::optional<z3::model> model;
+
+            // Nondeterministic function calls made on this execution path, in
+            // dynamic execution order. Their symbolic return values are
+            // evaluated when a feasible violation is found.
+            std::vector<NondetCall> nondet_calls;
+
+            // False if a summary hides a nondeterministic call whose dynamic
+            // return sequence cannot be reconstructed soundly.
+            bool counterexample_complete = true;
+
+            // Exact scalar loop summaries encountered on this path. These are
+            // converted to source-level invariants for correctness witnesses.
+            std::vector<LoopCertificate> loop_certificates;
+
+            // Exact recursive summaries encountered on this path. These are
+            // converted to source-level function contracts.
+            std::vector<FunctionCertificate> function_certificates;
     };
 
     class LoopState: public State {

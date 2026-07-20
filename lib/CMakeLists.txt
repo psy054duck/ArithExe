@@ -14,6 +14,7 @@ add_library(MemoryObject MemoryObject.cpp)
 add_library(common common.cpp)
 add_library(cache cache.cpp)
 add_library(Expression Expr.cpp)
+add_library(Witness Witness.cpp)
 
 
 target_link_libraries(engine PRIVATE spdlog::spdlog AInstruction)
@@ -26,7 +27,12 @@ target_link_libraries(LoopSummarizer PRIVATE spdlog::spdlog rec_solver LoopSumma
 target_link_libraries(MStack PRIVATE spdlog::spdlog)
 target_link_libraries(AInstruction PRIVATE spdlog::spdlog cache FunctionSummarizer FunctionSummary LoopSummarizer LoopSummary MemoryObject common Expression)
 target_link_libraries(AnalysisManager PRIVATE spdlog::spdlog)
+target_compile_definitions(
+    AnalysisManager
+    PRIVATE ARITHEXE_DEFAULT_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
+)
 target_link_libraries(logics PRIVATE spdlog::spdlog AnalysisManager ${llvm_libs})
 target_link_libraries(Memory PRIVATE spdlog::spdlog)
 target_link_libraries(MemoryObject PRIVATE spdlog::spdlog logics)
 target_link_libraries(Expression PRIVATE common logics)
+target_link_libraries(Witness PRIVATE ${llvm_libs})

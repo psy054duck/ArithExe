@@ -8,9 +8,57 @@
 
 #include <string>
 #include <algorithm>
+#include <set>
+#include <utility>
+#include <vector>
 #include "z3++.h"
 
 namespace ari_exe {
+    struct ClosedFormVariable {
+        const llvm::Value* value;
+        std::string source_name;
+        std::string source_type;
+        z3::expr expression;
+
+        ClosedFormVariable(const llvm::Value* value, std::string source_name,
+                           std::string source_type,
+                           const z3::expr& expression)
+            : value(value), source_name(std::move(source_name)),
+              source_type(std::move(source_type)), expression(expression) {}
+    };
+
+    struct LoopCertificate {
+        const llvm::Loop* loop;
+        std::vector<ClosedFormVariable> variables;
+    };
+
+    struct FunctionParameterCertificate {
+        std::string source_name;
+        z3::expr symbol;
+
+        FunctionParameterCertificate(std::string source_name,
+                                     const z3::expr& symbol)
+            : source_name(std::move(source_name)), symbol(symbol) {}
+    };
+
+    struct FunctionCertificate {
+        const llvm::Function* function;
+        std::vector<FunctionParameterCertificate> parameters;
+        z3::expr result;
+
+        FunctionCertificate(
+            const llvm::Function* function,
+            std::vector<FunctionParameterCertificate> parameters,
+            const z3::expr& result)
+            : function(function), parameters(std::move(parameters)),
+              result(result) {}
+    };
+
+    struct CounterexampleInput {
+        const llvm::Instruction* call;
+        std::string value;
+    };
+
     enum VeriResult {
         HOLD,        // the verification condition is true
         FAIL,        // the verification condition is false

@@ -111,10 +111,37 @@ namespace ari_exe {
              */
             VeriResult verify();
 
+            llvm::Module* get_module() const { return mod.get(); }
+
+            llvm::Instruction* get_violation_instruction() const {
+                return violation_instruction;
+            }
+
+            const std::vector<CounterexampleInput>&
+            get_counterexample_inputs() const {
+                return counterexample_inputs;
+            }
+
+            const std::vector<LoopCertificate>& get_loop_certificates() const {
+                return loop_certificates;
+            }
+
+            const std::vector<FunctionCertificate>&
+            get_function_certificates() const {
+                return function_certificates;
+            }
+
         private:
 
             // Set the default entry point of the module if not set
             void set_default_entry();
+
+            void capture_counterexample(state_ptr state,
+                                        const z3::model& model);
+
+            void capture_loop_certificates(state_ptr state);
+
+            void capture_function_certificates(state_ptr state);
 
             /**
              * @brief check if the state just reach a loop
@@ -135,6 +162,15 @@ namespace ari_exe {
 
             // store all verification results for all paths
             std::vector<VeriResult> results;
+
+            // Source instruction associated with the first feasible violation.
+            llvm::Instruction* violation_instruction = nullptr;
+
+            std::vector<CounterexampleInput> counterexample_inputs;
+
+            std::vector<LoopCertificate> loop_certificates;
+
+            std::vector<FunctionCertificate> function_certificates;
 
     };
 }

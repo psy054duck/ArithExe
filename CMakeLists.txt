@@ -63,6 +63,7 @@ set(ARITHEXEC_LIBS
     MemoryObject
     common
     cache
+    Witness
 )
 
 add_subdirectory(lib)

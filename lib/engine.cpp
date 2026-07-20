@@ -18,6 +18,11 @@ Engine::Engine(const std::string& c_filename): mod(nullptr), solver(z3ctx) {
 
 VeriResult
 Engine::verify() {
+    results.clear();
+    violation_instruction = nullptr;
+    counterexample_inputs.clear();
+    loop_certificates.clear();
+    function_certificates.clear();
     run();
     auto res = VERIUNKNOWN;
     if (std::all_of(results.begin(), results.end(), [](VeriResult veri_res) { return veri_res == HOLD; })) {
@@ -53,6 +58,8 @@ Engine::run(state_ptr state) {
         // llvm::errs() << cur_state->memory.to_string() << "\n";
 
         if (cur_state->status == State::TERMINATED) {
+            capture_loop_certificates(cur_state);
+            capture_function_certificates(cur_state);
             continue;
         } else if (cur_state->status == State::VERIFYING) {
             auto res = verify(cur_state);
@@ -60,7 +67,12 @@ Engine::run(state_ptr state) {
             results.push_back(res);
             // llvm::errs() << cur_state->memory.to_string() << "\n";
             // llvm::errs() << "Verification condition: " << cur_state->verification_condition.to_string() << "\n";
-            if (res == FAIL) return;
+            if (res == FAIL) {
+                violation_instruction = cur_state->prev_pc
+                                            ? cur_state->prev_pc->inst
+                                            : cur_state->pc->inst;
+                return;
+            }
             cur_state->append_path_condition(cur_state->verification_condition);
             cur_state->status = State::RUNNING;
             states.push(cur_state);
@@ -68,7 +80,17 @@ Engine::run(state_ptr state) {
         } else if (cur_state->status == State::REACH_ERROR) {
             auto res = test(cur_state);
             if (res == FEASIBLE) {
+                if (cur_state->is_over_approx ||
+                    !cur_state->counterexample_complete) {
+                    results.push_back(VERIUNKNOWN);
+                    return;
+                }
                 results.push_back(FAIL);
+                violation_instruction = cur_state->pc->inst;
+                capture_counterexample(cur_state, solver.get_model());
+                return;
+            } else if (res == TESTUNKNOWN) {
+                results.push_back(VERIUNKNOWN);
                 return;
             }
         } else if (cur_state->status == State::TESTING) {
@@ -84,7 +106,12 @@ Engine::run(state_ptr state) {
             results.push_back(VERIUNKNOWN);
             return;
         } else if (cur_state->status == State::FAIL) {
+            if (!cur_state->counterexample_complete) {
+                results.push_back(VERIUNKNOWN);
+                return;
+            }
             results.push_back(FAIL);
+            violation_instruction = cur_state->pc->inst;
             return;
         }
         assert(cur_state->status == State::RUNNING);
@@ -129,11 +156,12 @@ Engine::verify(state_ptr state) {
             result = HOLD;
             break;
         case z3::sat:
-            if (state->is_over_approx) {
+            if (state->is_over_approx || !state->counterexample_complete) {
                 result = VERIUNKNOWN;
                 break;
             }
             llvm::errs() << solver.get_model().to_string() << "\n";
+            capture_counterexample(state, solver.get_model());
             result = FAIL;
             break;
         case z3::unknown:
@@ -141,6 +169,66 @@ Engine::verify(state_ptr state) {
             break;
     }
     return result;
+}
+
+void
+Engine::capture_counterexample(state_ptr state, const z3::model& model) {
+    counterexample_inputs.clear();
+    for (const NondetCall& call : state->nondet_calls) {
+        std::vector<z3::expr> values;
+        if (call.value) {
+            values.push_back(model.eval(*call.value, true).simplify());
+        } else if (call.values && call.count) {
+            z3::expr evaluated_count = model.eval(*call.count, true).simplify();
+            int64_t count = 0;
+            if (!evaluated_count.is_numeral_i64(count) || count < 0) continue;
+            for (int64_t index = 0; index < count; ++index) {
+                z3::expr argument = z3ctx.int_val(std::to_string(index).c_str());
+                values.push_back(
+                    model.eval((*call.values)(argument), true).simplify());
+            }
+        }
+
+        for (const z3::expr& value : values) {
+            std::string rendered = value.to_string();
+            int64_t integer_value = 0;
+            if (value.is_numeral_i64(integer_value)) {
+                rendered = std::to_string(integer_value);
+            } else if (value.is_true()) {
+                rendered = "1";
+            } else if (value.is_false()) {
+                rendered = "0";
+            }
+            counterexample_inputs.push_back({call.instruction, rendered});
+        }
+    }
+}
+
+void
+Engine::capture_loop_certificates(state_ptr state) {
+    for (const LoopCertificate& certificate : state->loop_certificates) {
+        const bool already_recorded = std::any_of(
+            loop_certificates.begin(), loop_certificates.end(),
+            [&](const LoopCertificate& existing) {
+                return existing.loop == certificate.loop;
+            });
+        if (!already_recorded) loop_certificates.push_back(certificate);
+    }
+}
+
+void
+Engine::capture_function_certificates(state_ptr state) {
+    for (const FunctionCertificate& certificate :
+         state->function_certificates) {
+        const bool already_recorded = std::any_of(
+            function_certificates.begin(), function_certificates.end(),
+            [&](const FunctionCertificate& existing) {
+                return existing.function == certificate.function;
+            });
+        if (!already_recorded) {
+            function_certificates.push_back(certificate);
+        }
+    }
 }
 
 TestResult

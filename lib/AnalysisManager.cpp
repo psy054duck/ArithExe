@@ -1,6 +1,8 @@
 #include "AnalysisManager.h"
 #include <spdlog/spdlog.h>
 
+#include <cstdlib>
+
 using namespace ari_exe;
 
 AnalysisManager* AnalysisManager::instance = new AnalysisManager();
@@ -82,9 +84,30 @@ AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
 
 std::string
 AnalysisManager::generateLLVMIR(const std::string& c_filename) {
+    auto shell_quote = [](const std::string& value) {
+        std::string quoted = "'";
+        for (char ch : value) {
+            if (ch == '\'') quoted += "'\\''";
+            else quoted += ch;
+        }
+        return quoted + "'";
+    };
+
+    const char* configured_clang = std::getenv("ARITHEXE_CLANG");
+#ifdef ARITHEXE_DEFAULT_CLANG
+    const std::string clang_path = configured_clang ? configured_clang
+                                                    : ARITHEXE_DEFAULT_CLANG;
+#else
+    const std::string clang_path = configured_clang ? configured_clang : "clang";
+#endif
     std::ostringstream clang_cmd;
-    clang_cmd << "clang -emit-llvm -g -S -O0 -Xclang -disable-O0-optnone "
-              << c_filename << " -o -";
+    clang_cmd << shell_quote(clang_path)
+              << " -emit-llvm -g -S -O0 -Xclang -disable-O0-optnone ";
+    if (const char* data_model = std::getenv("ARITHEXE_DATA_MODEL")) {
+        if (std::string(data_model) == "ILP32") clang_cmd << "-m32 ";
+        else if (std::string(data_model) == "LP64") clang_cmd << "-m64 ";
+    }
+    clang_cmd << shell_quote(c_filename) << " -o -";
     FILE* pipe = popen(clang_cmd.str().c_str(), "r");
     if (!pipe) {
         throw std::runtime_error("Failed to run clang");

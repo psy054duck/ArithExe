@@ -2,8 +2,57 @@
 #include <spdlog/spdlog.h>
 
 #include "z3++.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DebugProgramInstruction.h"
+#include "llvm/IR/InstIterator.h"
+
+#include <optional>
 
 using namespace ari_exe;
+
+namespace {
+std::string source_type_name(const llvm::DIType* type) {
+    const llvm::DIType* current = type;
+    while (current) {
+        if (const auto* basic = llvm::dyn_cast<llvm::DIBasicType>(current)) {
+            const uint64_t width = basic->getSizeInBits();
+            switch (basic->getEncoding()) {
+            case llvm::dwarf::DW_ATE_boolean:
+                return "_Bool";
+            case llvm::dwarf::DW_ATE_unsigned:
+            case llvm::dwarf::DW_ATE_unsigned_char:
+                if (width <= 8) return "unsigned char";
+                if (width <= 16) return "unsigned short";
+                if (width <= 32) return "unsigned int";
+                return "unsigned long long";
+            case llvm::dwarf::DW_ATE_signed:
+            case llvm::dwarf::DW_ATE_signed_char:
+                if (width <= 8) return "signed char";
+                if (width <= 16) return "short";
+                if (width <= 32) return "int";
+                return "long long";
+            default:
+                return "int";
+            }
+        }
+        const auto* derived = llvm::dyn_cast<llvm::DIDerivedType>(current);
+        current = derived ? derived->getBaseType() : nullptr;
+    }
+    return "int";
+}
+
+std::optional<std::pair<std::string, std::string>>
+source_variable(llvm::Value* value) {
+    for (llvm::DbgVariableRecord* record : llvm::findDVRValues(value)) {
+        llvm::DILocalVariable* variable = record->getVariable();
+        if (!variable || variable->getName().empty()) continue;
+        return std::pair{variable->getName().str(),
+                         source_type_name(variable->getType())};
+    }
+    return std::nullopt;
+}
+} // namespace
 
 std::map<llvm::Instruction*, AInstruction*>
 AInstruction::cached_instructions;
@@ -205,7 +254,9 @@ AInstructionCall::execute(state_ptr state) {
     if (called_func && called_func->getName().ends_with("assert")) {
         // verification. should check if the condition is true
         return {execute_assert(state)};
-    } else if (called_func && called_func->getName().find("reach_error") != std::string::npos) {
+    } else if (called_func &&
+               (called_func->getName().find("reach_error") != std::string::npos ||
+                called_func->getName() == "__VERIFIER_error")) {
         return {execute_reach_error(state)};
     } else if (called_func && called_func->getName().find("assume") != std::string::npos) {
         // assume function, add the condition to the path condition
@@ -256,6 +307,44 @@ AInstructionCall::execute_normal(state_ptr state) {
 
     state_ptr new_state = std::make_shared<State>(*state);
     if (summary.has_value() && !summary->is_over_approximated()) {
+        const z3::expr_vector parameters = summary->get_params();
+        if (parameters.size() == called_func->arg_size()) {
+            std::vector<FunctionParameterCertificate> source_parameters;
+            bool source_complete = true;
+            for (unsigned index = 0; index < parameters.size(); ++index) {
+                const auto source = source_variable(
+                    called_func->getArg(index));
+                if (!source) {
+                    source_complete = false;
+                    break;
+                }
+                source_parameters.emplace_back(source->first,
+                                               parameters[index]);
+            }
+            if (source_complete) {
+                const bool already_recorded = std::any_of(
+                    new_state->function_certificates.begin(),
+                    new_state->function_certificates.end(),
+                    [&](const FunctionCertificate& existing) {
+                        return existing.function == called_func;
+                    });
+                if (!already_recorded) {
+                    new_state->function_certificates.emplace_back(
+                        called_func, std::move(source_parameters),
+                        summary->get_summary());
+                }
+            }
+        }
+        for (llvm::Instruction& candidate : llvm::instructions(called_func)) {
+            auto* nested_call = llvm::dyn_cast<llvm::CallInst>(&candidate);
+            llvm::Function* nested_callee =
+                nested_call ? nested_call->getCalledFunction() : nullptr;
+            if (nested_callee && nested_callee->getName().starts_with(
+                                     "__VERIFIER_nondet_")) {
+                new_state->counterexample_complete = false;
+                break;
+            }
+        }
         std::vector<Expression> args;
         for (unsigned i = 0; i < call_inst->arg_size(); i++) {
             auto arg = call_inst->getArgOperand(i);
@@ -435,12 +524,62 @@ AInstructionCall::execute_unknown(state_ptr state) {
     }
     state_ptr new_state = std::make_shared<State>(*state);
     new_state->memory.put_temp(inst, result);
+    if (called_func &&
+        called_func->getName().starts_with("__VERIFIER_nondet_")) {
+        new_state->nondet_calls.emplace_back(call_inst, result.as_expr());
+    }
     // new_state->write(inst, result);
-    if (called_func && called_func->getName().ends_with("uint")) {
-        new_state->append_path_condition(result >= z3ctx.int_val(0));
-    } else if (called_func && called_func->getName().ends_with("uchar")) {
-        new_state->append_path_condition(result >= z3ctx.int_val(0));
-        new_state->append_path_condition(result <= z3ctx.int_val(255));
+    if (called_func &&
+        called_func->getName().starts_with("__VERIFIER_nondet_") &&
+        ret_type->isIntegerTy()) {
+        const llvm::StringRef function_name = called_func->getName();
+        const unsigned width = ret_type->getIntegerBitWidth();
+        const bool is_unsigned =
+            function_name.contains("nondet_u") ||
+            function_name.ends_with("bool");
+
+        const char* signed_min = nullptr;
+        const char* signed_max = nullptr;
+        const char* unsigned_max = nullptr;
+        switch (width) {
+        case 1:
+            signed_min = "0";
+            signed_max = "1";
+            unsigned_max = "1";
+            break;
+        case 8:
+            signed_min = "-128";
+            signed_max = "127";
+            unsigned_max = "255";
+            break;
+        case 16:
+            signed_min = "-32768";
+            signed_max = "32767";
+            unsigned_max = "65535";
+            break;
+        case 32:
+            signed_min = "-2147483648";
+            signed_max = "2147483647";
+            unsigned_max = "4294967295";
+            break;
+        case 64:
+            signed_min = "-9223372036854775808";
+            signed_max = "9223372036854775807";
+            unsigned_max = "18446744073709551615";
+            break;
+        default:
+            break;
+        }
+        if (is_unsigned && unsigned_max) {
+            new_state->append_path_condition(result >= z3ctx.int_val(0));
+            new_state->append_path_condition(
+                result <= z3ctx.int_val(unsigned_max));
+        } else if (signed_min && signed_max) {
+            new_state->append_path_condition(
+                result >= z3ctx.int_val(signed_min));
+            new_state->append_path_condition(
+                result <= z3ctx.int_val(signed_max));
+        }
     }
     new_state->step_pc();
     return new_state;
@@ -798,10 +937,74 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     }
 
     state_ptr new_state = std::make_shared<State>(*state);
+    if (!summary->is_over_approximated()) {
+        LoopCertificate certificate{loop, {}};
+        const auto modified = summary->get_modified_values();
+        const unsigned count = std::min<unsigned>(
+            modified.size(), summary->get_closed_forms().size());
+        for (unsigned i = 0; i < count; ++i) {
+            auto* phi = llvm::dyn_cast<llvm::PHINode>(modified[i]);
+            if (!phi || !phi->getType()->isIntegerTy()) continue;
+            if (const auto source = source_variable(phi)) {
+                certificate.variables.emplace_back(
+                    phi, source->first, source->second,
+                    summary->get_closed_forms()[i]);
+            }
+        }
+        if (!certificate.variables.empty()) {
+            const bool already_recorded = std::any_of(
+                new_state->loop_certificates.begin(),
+                new_state->loop_certificates.end(),
+                [&](const LoopCertificate& existing) {
+                    return existing.loop == loop;
+                });
+            if (!already_recorded) {
+                new_state->loop_certificates.push_back(
+                    std::move(certificate));
+            }
+        }
+    }
+    const auto iteration_count = summary->get_N();
+    auto& loop_info = manager->get_LI(phi_inst->getFunction());
+    auto& dominator_tree = manager->get_DT(phi_inst->getFunction());
+    llvm::BasicBlock* latch = loop->getLoopLatch();
+    for (llvm::BasicBlock* block : loop->blocks()) {
+        for (llvm::Instruction& candidate : *block) {
+            auto* call = llvm::dyn_cast<llvm::CallInst>(&candidate);
+            llvm::Function* callee = call ? call->getCalledFunction()
+                                          : nullptr;
+            if (!callee ||
+                !callee->getName().starts_with("__VERIFIER_nondet_")) {
+                continue;
+            }
+            const bool executes_once_per_iteration =
+                iteration_count && latch &&
+                loop_info.getLoopFor(block) == loop &&
+                dominator_tree.dominates(block, latch);
+            if (!executes_once_per_iteration) {
+                new_state->counterexample_complete = false;
+                continue;
+            }
+            const std::string name =
+                "ari_" + call->getName().str() + "_unknown";
+            const z3::func_decl values = state->z3ctx.function(
+                name.c_str(), state->z3ctx.int_sort(),
+                state->z3ctx.int_sort());
+            z3::expr call_count = *iteration_count;
+            if (block == header) {
+                // A call in the loop header is also evaluated once for the
+                // final, false guard check.
+                call_count = call_count + 1;
+            }
+            new_state->nondet_calls.emplace_back(
+                call, values, call_count);
+        }
+    }
     if (summary.has_value()) {
         auto invariant_result = summary->get_invariant_results();
         if (std::find(invariant_result.begin(), invariant_result.end(), FAIL) != invariant_result.end()) {
-            if (summary->is_over_approximated() || new_state->is_over_approx) {
+            if (summary->is_over_approximated() || new_state->is_over_approx ||
+                !new_state->counterexample_complete) {
                 new_state->status = State::UNKNOWN;
             } else {
                 new_state->status = State::FAIL;

@@ -99,6 +99,12 @@ namespace ari_exe {
 
             z3::expr get_constraints() const { return constraints; }
 
+            const z3::expr_vector& get_params() const { return params; }
+
+            const z3::expr_vector& get_closed_forms() const {
+                return summary_closed_form;
+            }
+
             /**
              * @brief The over-approximated summary of the loop
              * @details if is_over_approx is true, which means the loop summary is
