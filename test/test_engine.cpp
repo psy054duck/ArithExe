@@ -166,6 +166,18 @@ TEST(BENCHMARK_LOOPS, true_1) {
     EXPECT_EQ(veri_res, HOLD) << "Failed on: benchmark/loops/true_1.c";
 }
 
+TEST(Z3UnknownPropagationRegression,
+     UnsafeProgramMustNotBeReportedAsHold) {
+    auto run = run_benchmark("loops/false_z3_unknown_branch.c");
+    constexpr VeriResult expected_result = VERIUNKNOWN;
+
+    EXPECT_TRUE(run.has_issue);
+    EXPECT_EQ(run.issue_kind, VerifierIssueKind::Z3Unknown);
+    EXPECT_EQ(run.result, expected_result)
+        << "Ground truth is UNSAFE; an unexplored branch must produce UNKNOWN, "
+           "never HOLD";
+}
+
 TEST(BENCHMARK_LOOPS, true_10) {
     auto veri_res = verify_benchmark("loops/true_10.c");
     EXPECT_EQ(veri_res, HOLD) << "Failed on: benchmark/loops/true_10.c";

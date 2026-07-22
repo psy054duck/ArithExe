@@ -107,8 +107,9 @@ Engine::run(state_ptr state) {
             if (res == FEASIBLE) {
                 cur_state->status = State::RUNNING;
                 states.push(cur_state);
+            } else if (res == TESTUNKNOWN) {
+                results.push_back(VERIUNKNOWN);
             }
-            // TODO: what to do with unknown path?
             continue;
         } else if (cur_state->status == State::UNKNOWN) {
             // if the state is unknown, we should not continue
