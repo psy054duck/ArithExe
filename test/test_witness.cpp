@@ -5,7 +5,6 @@
 
 #include <gtest/gtest.h>
 
-#include "AInstruction.h"
 #include "Witness.h"
 #include "engine.h"
 
@@ -18,20 +17,6 @@ namespace {
 
 std::string benchmark_path(const std::string& relative_path) {
     return std::string(ARITHEXE_TEST_BENCHMARK_DIR) + "/" + relative_path;
-}
-
-void reset_caches() {
-    for (auto& [_, instruction] : AInstruction::cached_instructions) {
-        delete instruction;
-    }
-    AInstruction::cached_instructions.clear();
-    AInstructionPhi::failed_loops.clear();
-    AnalysisManager::unknown_counter = 0;
-
-    delete State::func_summaries;
-    State::func_summaries = new SymbolTable<FunctionSummary>();
-    delete State::loop_summaries;
-    State::loop_summaries = new SymbolTable<LoopSummary>();
 }
 
 std::string read_file(const std::string& path) {
@@ -51,11 +36,7 @@ size_t count_occurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-class WitnessTest : public ::testing::Test {
-  protected:
-    void SetUp() override { reset_caches(); }
-    void TearDown() override { reset_caches(); }
-};
+class WitnessTest : public ::testing::Test {};
 
 TEST_F(WitnessTest, WritesCorrectnessWitnessForLoopProof) {
     const std::string source = benchmark_path("loops/true_3.c");

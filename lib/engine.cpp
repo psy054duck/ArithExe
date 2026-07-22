@@ -8,16 +8,29 @@
 
 using namespace ari_exe;
 
-Engine::Engine(): mod(nullptr), solver(z3ctx) {}
+Engine::Engine()
+    : session(std::make_shared<VerificationSession>()),
+      z3ctx(session->analyses().get_z3ctx()), mod(nullptr), solver(z3ctx) {}
 
-Engine::Engine(const std::string& c_filename): mod(nullptr), solver(z3ctx) {
-    auto manager = AnalysisManager::get_instance();
+Engine::Engine(const std::string& c_filename)
+    : session(std::make_shared<VerificationSession>()),
+      z3ctx(session->analyses().get_z3ctx()), mod(nullptr), solver(z3ctx) {
+    auto activation = session->activate();
+    auto manager = &session->analyses();
     assert(&manager->get_z3ctx() == &z3ctx && "The z3 context is not the same as the analysis manager");
     mod = manager->get_module(c_filename, z3ctx);
 }
 
+Engine::~Engine() {
+    auto activation = session->activate();
+    states = {};
+    session->clear_module_state();
+    mod.reset();
+}
+
 VeriResult
 Engine::verify() {
+    auto activation = session->activate();
     results.clear();
     issue_recorded = false;
     issue_message.clear();
@@ -37,6 +50,7 @@ Engine::verify() {
 
 std::vector<state_ptr>
 Engine::step(state_ptr state) {
+    auto activation = session->activate();
     auto pc = state->pc;
     return pc->execute(state);
 }
@@ -48,6 +62,7 @@ Engine::set_entry(llvm::Function* entry) {
 
 void
 Engine::run(state_ptr state) {
+    auto activation = session->activate();
     // set the default entry point if not set
     set_default_entry();
 
@@ -155,6 +170,7 @@ Engine::reach_loop(state_ptr state) {
 
 void
 Engine::run() {
+    auto activation = session->activate();
     // set the default entry point if not set
     llvm::errs() << "Running the engine...\n";
     set_default_entry();
@@ -166,6 +182,7 @@ Engine::run() {
 
 VeriResult
 Engine::verify(state_ptr state) {
+    auto activation = session->activate();
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->get_path_condition().as_expr());
     assumptions.push_back(!state->verification_condition.as_expr());
@@ -262,6 +279,7 @@ Engine::capture_function_certificates(state_ptr state) {
 
 TestResult
 Engine::test(state_ptr state) {
+    auto activation = session->activate();
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->get_path_condition().as_expr());
     auto res = solver.check(assumptions);
@@ -284,6 +302,7 @@ Engine::test(state_ptr state) {
 
 state_ptr
 Engine::build_initial_state() {
+    auto activation = session->activate();
     // build the initial state
     // this state should record global variables
     Memory memory;
@@ -303,7 +322,7 @@ Engine::build_initial_state() {
         // obj->write(arg_value);
         memory.put_temp(&arg, arg_value);
     }
-    auto initial_state = std::make_shared<State>(State(z3ctx, AInstruction::create(pc), nullptr,
+    auto initial_state = std::make_shared<State>(State(*session, z3ctx, AInstruction::create(pc), nullptr,
                                memory, path_condition, {}));
     return initial_state;
 }

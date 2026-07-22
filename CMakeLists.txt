@@ -64,6 +64,7 @@ set(ARITHEXEC_LIBS
     common
     cache
     Witness
+    VerificationSession
 )
 
 add_subdirectory(lib)

@@ -10,11 +10,38 @@
 
 using namespace ari_exe;
 
-AnalysisManager* AnalysisManager::instance = new AnalysisManager();
+thread_local AnalysisManager* AnalysisManager::active_instance = nullptr;
 
-// z3::context AnalysisManager::z3ctx;
+AnalysisManager::AnalysisManager()
+    : ind_var(z3ctx.int_const("ari_loop_n")),
+      loop_N(z3ctx.int_const("ari_loop_N")) {}
 
-int AnalysisManager::unknown_counter = 0;
+AnalysisManager* AnalysisManager::get_instance() {
+    if (active_instance) return active_instance;
+    static thread_local AnalysisManager fallback;
+    return &fallback;
+}
+
+AnalysisManager* AnalysisManager::set_active(AnalysisManager* manager) {
+    AnalysisManager* previous = active_instance;
+    active_instance = manager;
+    return previous;
+}
+
+void AnalysisManager::clear_module_state() {
+    LIs.clear();
+    DTs.clear();
+    PDTs.clear();
+    DIs.clear();
+    CG = nullptr;
+    MPM = llvm::ModulePassManager();
+    LAM = llvm::LoopAnalysisManager();
+    FAM = llvm::FunctionAnalysisManager();
+    CGAM = llvm::CGSCCAnalysisManager();
+    MAM = llvm::ModuleAnalysisManager();
+    PB = llvm::PassBuilder();
+    unknown_counter = 0;
+}
 
 namespace {
 std::string diagnostic_to_string(const llvm::SMDiagnostic& diagnostic) {
@@ -51,17 +78,7 @@ std::unique_ptr<llvm::Module>
 AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
     auto ir_content = generateLLVMIR(c_filename);
     auto mod = parseLLVMIR(ir_content, context);
-    MPM = llvm::ModulePassManager();
-    LAM = llvm::LoopAnalysisManager();
-    FAM = llvm::FunctionAnalysisManager();
-    CGAM = llvm::CGSCCAnalysisManager();
-    MAM = llvm::ModuleAnalysisManager();
-    PB = llvm::PassBuilder();
-    LIs.clear();
-    DTs.clear();
-    PDTs.clear();
-    DIs.clear();
-    CG = nullptr;
+    clear_module_state();
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
     PB.registerFunctionAnalyses(FAM);

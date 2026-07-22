@@ -3,10 +3,6 @@
 
 using namespace ari_exe;
 
-SymbolTable<FunctionSummary>* State::func_summaries = new SymbolTable<FunctionSummary>();
-
-SymbolTable<LoopSummary>* State::loop_summaries = new SymbolTable<LoopSummary>();
-
 void
 State::append_path_condition(const Expression& _path_condition) {
     auto z3_cond = _path_condition.as_expr();
@@ -88,13 +84,21 @@ State::is_concrete(const Expression& e, const Expression& concrete_value) {
     return res;
 }
 
-LoopState::LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status):
-    State(z3ctx, pc, prev_pc, memory, path_condition, trace, status),
+LoopState::LoopState(VerificationSession& session, z3::context& z3ctx,
+                     AInstruction* pc, AInstruction* prev_pc,
+                     const Memory& memory, const Expression& path_condition,
+                     const Expression& path_condition_in_loop,
+                     const trace_ty& trace, Status status):
+    State(session, z3ctx, pc, prev_pc, memory, path_condition, trace, status),
     path_condition_in_loop(path_condition_in_loop),
     summarizing_loop(nullptr) {}
 
-RecState::RecState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status):
-    State(z3ctx, pc, prev_pc, memory, path_condition, trace, status) {}
+RecState::RecState(VerificationSession& session, z3::context& z3ctx,
+                   AInstruction* pc, AInstruction* prev_pc,
+                   const Memory& memory, const Expression& path_condition,
+                   const Expression& path_condition_in_loop,
+                   const trace_ty& trace, Status status):
+    State(session, z3ctx, pc, prev_pc, memory, path_condition, trace, status) {}
 
 void
 LoopState::append_path_condition(const Expression& _path_condition) {

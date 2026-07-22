@@ -51,9 +51,6 @@ namespace ari_exe {
             // Factory method to create an AInstruction from an LLVM instruction
             static AInstruction* create(llvm::Instruction* inst);
 
-            // cache all instructions
-            static std::map<llvm::Instruction*, AInstruction*> cached_instructions;
-
             llvm::Instruction* inst;
     };
 
@@ -103,8 +100,6 @@ namespace ari_exe {
             state_ptr execute_cache(state_ptr state);
             state_ptr execute_reach_error(state_ptr state);
 
-            static std::map<llvm::Value*, int> value_counter;
-
     };
 
     class AInstructionBranch: public AInstruction {
@@ -150,10 +145,6 @@ namespace ari_exe {
              */
             std::vector<state_ptr> execute_if_summarizable(state_ptr state);
     
-            /**
-             * @brief record all loops that are failed to be summarized
-             */
-            static std::set<llvm::Loop*> failed_loops;
     };
 
     class AInstructionSelect: public AInstruction {

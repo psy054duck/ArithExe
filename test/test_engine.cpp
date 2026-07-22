@@ -1,8 +1,6 @@
 #include <gtest/gtest.h>
 #include <string>
 #include "engine.h"
-#include "AInstruction.h"
-#include "z3++.h"
 
 using namespace ari_exe;
 
@@ -22,22 +20,7 @@ struct BenchmarkRun {
     std::string issue_message;
 };
 
-void reset_test_caches() {
-    for (auto& pair : AInstruction::cached_instructions) {
-        delete pair.second;
-    }
-    AInstruction::cached_instructions.clear();
-    AInstructionPhi::failed_loops.clear();
-    AnalysisManager::unknown_counter = 0;
-
-    delete State::func_summaries;
-    State::func_summaries = new SymbolTable<FunctionSummary>();
-    delete State::loop_summaries;
-    State::loop_summaries = new SymbolTable<LoopSummary>();
-}
-
 BenchmarkRun run_benchmark(const std::string& relative_path) {
-    reset_test_caches();
     auto engine = Engine(benchmark_path(relative_path));
     auto veri_res = engine.verify();
     BenchmarkRun run{
@@ -47,7 +30,6 @@ BenchmarkRun run_benchmark(const std::string& relative_path) {
                            : VerifierIssueKind::UnknownState,
         engine.get_issue_message(),
     };
-    reset_test_caches();
     return run;
 }
 
@@ -59,6 +41,19 @@ void run_bounded_cfinite_benchmark(const std::string& filename) {
     auto veri_res = verify_benchmark("bounded-cfinite/" + filename);
     EXPECT_EQ(veri_res, HOLD) << "Failed on: test/bounded-cfinite/" << filename;
 }
+}
+
+TEST(VerificationSessionTest, EnginesKeepIndependentModuleState) {
+    Engine loop_engine(benchmark_path("loops/true_3.c"));
+    Engine failing_engine(benchmark_path("loop_free/false_1.c"));
+
+    EXPECT_NE(&loop_engine.get_session(), &failing_engine.get_session());
+    EXPECT_NE(&loop_engine.get_session().analyses().get_z3ctx(),
+              &failing_engine.get_session().analyses().get_z3ctx());
+
+    EXPECT_EQ(loop_engine.verify(), HOLD);
+    EXPECT_EQ(failing_engine.verify(), FAIL);
+    EXPECT_EQ(loop_engine.verify(), HOLD);
 }
 
 TEST(BENCHMARK_ARRAYS_LOOP, true_1) {

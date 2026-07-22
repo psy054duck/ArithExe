@@ -96,7 +96,10 @@ namespace ari_exe {
         auto& z3ctx = manager->get_z3ctx();
         auto memory = Memory(parent_state->memory);
         auto initial_pc = AInstruction::create(&*loop->getHeader()->getFirstNonPHIOrDbg());
-        auto initial_state = std::make_shared<LoopState>(LoopState(z3ctx, initial_pc, nullptr, memory, z3ctx.bool_val(true), z3ctx.bool_val(true), {}, State::RUNNING));
+        auto initial_state = std::make_shared<LoopState>(LoopState(
+            parent_state->session, z3ctx, initial_pc, nullptr, memory,
+            z3ctx.bool_val(true), z3ctx.bool_val(true), {},
+            State::RUNNING));
         initial_state->summarizing_loop = loop;
 
         put_header_phis_in_initial_state(initial_state);

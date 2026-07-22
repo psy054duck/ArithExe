@@ -28,6 +28,7 @@
 #include "FunctionSummary.h"
 #include "common.h"
 #include "logics.h"
+#include "VerificationSession.h"
 
 namespace ari_exe {
     class State;

@@ -1,8 +1,19 @@
 #include "MemoryObject.h"
+#include "VerificationSession.h"
 
 using namespace ari_exe;
 
-std::map<std::string, int> MemoryObject::name_counter;
+MemoryObject::MemoryObject(
+    llvm::Value* llvm_value, const MemoryAddress_ty& obj_addr,
+    const Expression& value, std::optional<MemoryAddress_ty> ptr_value,
+    const z3::expr_vector& indices, const std::vector<Expression>& sizes,
+    const std::string& name, bool is_signed)
+    : llvm_value(llvm_value), addr(obj_addr), value(value),
+      ptr_value(std::move(ptr_value)), indices(indices), sizes(sizes),
+      name(name + std::to_string(
+                      VerificationSession::current().memory_object_name_id(
+                          name))),
+      _is_signed(is_signed), constraints(indices.ctx()) {}
 
 Expression
 MemoryObject::read(const std::vector<Expression>& index) const {

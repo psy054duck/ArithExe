@@ -51,18 +51,18 @@
 namespace ari_exe {
     
     /**
-     * @brief The analysis manager for the whole module. It is implemented in singleton pattern.
-     * @details This class is used to manage the analysis of the whole program.
-     *          It is a singleton class, and only one instance of it can be created.
+     * @brief Own the LLVM and Z3 analysis context for one verification session.
      */
     class AnalysisManager {
         public:
+            AnalysisManager();
             ~AnalysisManager() = default;
             AnalysisManager(const AnalysisManager&) = delete;
             AnalysisManager& operator=(const AnalysisManager&) = delete;
             AnalysisManager(AnalysisManager&&) = delete;
             AnalysisManager& operator=(AnalysisManager&&) = delete;
-            static AnalysisManager* get_instance() { return instance; }
+            static AnalysisManager* get_instance();
+            static AnalysisManager* set_active(AnalysisManager* manager);
 
             /** 
              * @brief Run clang to compile C into llvm ir
@@ -113,14 +113,16 @@ namespace ari_exe {
             z3::expr get_ind_var() { return ind_var; }
             z3::expr get_loop_N() { return loop_N; }
 
-            // counter for unknowns
-            static int unknown_counter;
+            int unknown_counter = 0;
 
-            static z3::context& get_ctx() { return z3ctx; }
+            static z3::context& get_ctx() {
+                return get_instance()->get_z3ctx();
+            }
+
+            void clear_module_state();
 
         private :
-            AnalysisManager(): ind_var(z3ctx.int_const("ari_loop_n")), loop_N(z3ctx.int_const("ari_loop_N")) {}
-            static AnalysisManager* instance;
+            static thread_local AnalysisManager* active_instance;
 
             // LLVM context for keeping the module
             llvm::LLVMContext context;
@@ -141,7 +143,7 @@ namespace ari_exe {
 
             llvm::CallGraph* CG = nullptr;
 
-            inline static z3::context z3ctx;
+            z3::context z3ctx;
 
             // The symbolic variable for the loop induction variable
             z3::expr ind_var;

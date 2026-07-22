@@ -49,6 +49,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include "AnalysisManager.h"
+#include "VerificationSession.h"
 #include "state.h"
 #include "FunctionSummarizer.h"
 
@@ -56,6 +57,7 @@
 #include <queue>
 #include <stack>
 #include <string>
+#include <memory>
 
 namespace ari_exe {
     const std::string default_entry_function_name = "main";
@@ -66,6 +68,7 @@ namespace ari_exe {
 
 
             Engine();
+            ~Engine();
             
             // /**
             //  * @brief Construct a new Engine object with the given module
@@ -114,6 +117,8 @@ namespace ari_exe {
 
             llvm::Module* get_module() const { return mod.get(); }
 
+            VerificationSession& get_session() const { return *session; }
+
             llvm::Instruction* get_violation_instruction() const {
                 return violation_instruction;
             }
@@ -160,8 +165,10 @@ namespace ari_exe {
              */
             bool reach_loop(state_ptr state);
 
+            std::shared_ptr<VerificationSession> session;
+
             // Z3 related
-            z3::context& z3ctx = AnalysisManager::get_instance()->get_z3ctx();
+            z3::context& z3ctx;
 
             std::unique_ptr<llvm::Module> mod;
             llvm::Function* entry = nullptr;

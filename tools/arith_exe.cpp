@@ -254,9 +254,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    delete State::func_summaries;
-    delete State::loop_summaries;
-
     switch (res) {
         case HOLD:
             spdlog::info("The program is safe.");
@@ -275,9 +272,6 @@ int main(int argc, char* argv[]) {
             }
             std::cout << "UNKNOWN\n";
             break;
-    }
-    for (auto& pair : AInstruction::cached_instructions) {
-        delete pair.second;
     }
     return witness_written ? 0 : 2;
 }

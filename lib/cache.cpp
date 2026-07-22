@@ -1,7 +1,5 @@
 #include "cache.h"
 
-Cache* Cache::instance = new Cache();
-
 std::optional<int> 
 Cache::get_func_value(llvm::Function* func, const param_list_ty& args) {
     auto it = cache.find(func);
@@ -29,4 +27,10 @@ Cache::is_visited(llvm::Function* func) const {
 void
 Cache::mark_visited(llvm::Function* func) {
     visited_funcs.insert(func);
+}
+
+void
+Cache::clear() {
+    cache.clear();
+    visited_funcs.clear();
 }

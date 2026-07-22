@@ -1,4 +1,5 @@
 #include "AInstruction.h"
+#include "VerificationSession.h"
 #include <spdlog/spdlog.h>
 
 #include "z3++.h"
@@ -62,16 +63,12 @@ std::string llvm_value_to_string(const llvm::Value& value) {
     return stream.str();
 }
 
-std::map<llvm::Instruction*, AInstruction*>
-AInstruction::cached_instructions;
-
-std::map<llvm::Value*, int>
-AInstructionCall::value_counter;
-
 AInstruction*
 AInstruction::create(llvm::Instruction* inst) {
+    auto& cached_instructions =
+        VerificationSession::current().instructions();
     if (cached_instructions.find(inst) != cached_instructions.end()) {
-        return cached_instructions.at(inst);
+        return cached_instructions.at(inst).get();
     }
 
     AInstruction* res = nullptr;
@@ -109,7 +106,8 @@ AInstruction::create(llvm::Instruction* inst) {
     } else {
         assert(false && "Unspported instruction type");
     }
-    cached_instructions.insert_or_assign(inst, res);
+    cached_instructions.insert_or_assign(
+        inst, std::shared_ptr<AInstruction>(res));
     return res;
 }
 
@@ -303,16 +301,19 @@ AInstructionCall::execute_normal(state_ptr state) {
 
     // check if the function is recursive and not yet summarized
     auto ret_type = called_func->getReturnType();
-    bool is_visited = Cache::get_instance()->is_visited(called_func);
-    if (!is_visited && !state->is_summarizing() && is_recursive(called_func) && !State::func_summaries->get_value(called_func).has_value()) {
-        Cache::get_instance()->mark_visited(called_func);
+    auto& session = state->session;
+    auto& function_summaries = session.function_summaries();
+    auto& function_cache = session.function_cache();
+    bool is_visited = function_cache.is_visited(called_func);
+    if (!is_visited && !state->is_summarizing() && is_recursive(called_func) && !function_summaries.get_value(called_func).has_value()) {
+        function_cache.mark_visited(called_func);
         auto summary = summarize_complete(state->z3ctx);
         if (summary.has_value()) {
-            State::func_summaries->insert_or_assign(called_func, *summary);
+            function_summaries.insert_or_assign(called_func, *summary);
         }
     }
 
-    auto summary = State::func_summaries->get_value(called_func);
+    auto summary = function_summaries.get_value(called_func);
     auto& z3ctx = state->z3ctx;
 
     state_ptr new_state = std::make_shared<State>(*state);
@@ -377,7 +378,8 @@ AInstructionCall::execute_normal(state_ptr state) {
             auto arg_obj = new_state->memory.get_object_pointed_by(arg);
             auto arg_value = arg_obj->read().as_expr();
             initial_values.push_back(arg_value);
-            auto name = arg->getName() + "_unknwon_over_approximated" + std::to_string(value_counter[inst]++);
+            auto name = arg->getName() + "_unknwon_over_approximated" +
+                        std::to_string(session.next_call_value_id(inst));
             auto unknown = z3ctx.int_const(name.str().c_str());
             unknowns.push_back(unknown);
             arg_obj->write(unknown);
@@ -434,7 +436,7 @@ AInstructionCall::execute_cache(state_ptr state) {
         }
     }
 
-    auto cache = Cache::get_instance();
+    auto& cache = state->session.function_cache();
     auto model = state->get_model();
     param_list_ty args;
     for (int i = 0; i < call_inst->arg_size(); i++) {
@@ -446,7 +448,7 @@ AInstructionCall::execute_cache(state_ptr state) {
         }
         args.push_back(concrete_value.as_int64());
     }
-    auto cached_value = cache->get_func_value(called_func, args);
+    auto cached_value = cache.get_func_value(called_func, args);
     if (cached_value.has_value()) {
         // if the function is cached, return the cached value
         state_ptr new_state = std::make_shared<State>(*state);
@@ -520,7 +522,8 @@ AInstructionCall::execute_unknown(state_ptr state) {
     Expression result(z3ctx);
 
     // external function value is unknown, so symbolic
-    auto name = "ari_" + inst->getName().str() + "_unknown_" + std::to_string(value_counter[inst]++);
+    auto name = "ari_" + inst->getName().str() + "_unknown_" +
+                std::to_string(state->session.next_call_value_id(inst));
     auto ret_type = call_inst->getType();
 
     if (ret_type->isIntegerTy()) {
@@ -800,7 +803,7 @@ AInstructionReturn::execute(state_ptr state) {
 
 void
 AInstructionReturn::cache_func_value(state_ptr state, const Expression& result) {
-    auto cache_instance = Cache::get_instance();
+    auto& cache_instance = state->session.function_cache();
     auto& top_frame = state->memory.top_frame();
     param_list_ty args;
 
@@ -814,7 +817,8 @@ AInstructionReturn::cache_func_value(state_ptr state, const Expression& result) 
         if (!state->is_concrete(arg_value, concrete_value)) return;
         args.push_back(concrete_value.as_int64());
     }
-    cache_instance->cache_func_value(top_frame.func, args, concrete_result.as_int64());
+    cache_instance.cache_func_value(top_frame.func, args,
+                                    concrete_result.as_int64());
 }
 
 std::vector<state_ptr>
@@ -849,8 +853,6 @@ AInstructionSExt::execute(state_ptr state) {
     return {new_state};
 }
 
-std::set<llvm::Loop*> AInstructionPhi::failed_loops;
-
 std::vector<state_ptr>
 AInstructionPhi::execute(state_ptr state) {
     auto phi_inst = dyn_cast<llvm::PHINode>(inst);
@@ -858,13 +860,13 @@ AInstructionPhi::execute(state_ptr state) {
     auto& LI = manager->get_LI(phi_inst->getFunction());
     auto loop = LI.getLoopFor(phi_inst->getParent());
 
-    if (loop && failed_loops.find(loop) == failed_loops.end()) {
+    if (loop && !state->session.loop_summary_failed(loop)) {
         if (!state->is_summarizing()) {
             auto accelarated_states = execute_if_summarizable(state);
             if (accelarated_states.size() > 0) {
                 return accelarated_states;
             } else {
-                failed_loops.insert(loop);
+                state->session.mark_loop_summary_failed(loop);
             }
         }
     }
@@ -889,7 +891,7 @@ AInstructionPhi::execute(loop_state_ptr state) {
     auto& LI = manager->get_LI(phi_inst->getFunction());
     auto loop = LI.getLoopFor(phi_inst->getParent());
 
-    if (loop && failed_loops.find(loop) == failed_loops.end()) {
+    if (loop && !state->session.loop_summary_failed(loop)) {
         auto outer_loop = state->summarizing_loop;
         auto header = loop->getHeader();
         bool is_first_phi = phi_inst == &*header->phis().begin();
@@ -898,7 +900,7 @@ AInstructionPhi::execute(loop_state_ptr state) {
             spdlog::info("Summarizing nested loop {}", loop->getHeader()->getName().str());
             auto accelerated_states = execute_if_summarizable(std::static_pointer_cast<State>(state));
             if (accelerated_states.empty()) {
-                failed_loops.insert(loop);
+                state->session.mark_loop_summary_failed(loop);
                 return {};
             }
 

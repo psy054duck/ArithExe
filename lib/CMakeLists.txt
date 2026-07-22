@@ -15,6 +15,7 @@ add_library(common common.cpp)
 add_library(cache cache.cpp)
 add_library(Expression Expr.cpp)
 add_library(Witness Witness.cpp)
+add_library(VerificationSession VerificationSession.cpp)
 
 target_compile_definitions(
     rec_solver
@@ -23,15 +24,15 @@ target_compile_definitions(
         ARITHEXE_DEFAULT_SOLVER_SCRIPT="${CMAKE_SOURCE_DIR}/solver.py"
 )
 
-target_link_libraries(engine PRIVATE spdlog::spdlog AInstruction)
+target_link_libraries(engine PRIVATE spdlog::spdlog AInstruction VerificationSession)
 target_link_libraries(state PRIVATE spdlog::spdlog MStack)
-target_link_libraries(rec_solver PRIVATE spdlog::spdlog)
+target_link_libraries(rec_solver PRIVATE spdlog::spdlog VerificationSession)
 target_link_libraries(FunctionSummary PRIVATE spdlog::spdlog)
-target_link_libraries(FunctionSummarizer PRIVATE spdlog::spdlog rec_solver FunctionSummary)
+target_link_libraries(FunctionSummarizer PRIVATE spdlog::spdlog rec_solver FunctionSummary VerificationSession)
 target_link_libraries(LoopSummary PRIVATE spdlog::spdlog)
 target_link_libraries(LoopSummarizer PRIVATE spdlog::spdlog rec_solver LoopSummary)
 target_link_libraries(MStack PRIVATE spdlog::spdlog)
-target_link_libraries(AInstruction PRIVATE spdlog::spdlog cache FunctionSummarizer FunctionSummary LoopSummarizer LoopSummary MemoryObject common Expression)
+target_link_libraries(AInstruction PRIVATE spdlog::spdlog cache FunctionSummarizer FunctionSummary LoopSummarizer LoopSummary MemoryObject common Expression VerificationSession)
 target_link_libraries(AnalysisManager PRIVATE spdlog::spdlog)
 target_compile_definitions(
     AnalysisManager
@@ -39,6 +40,7 @@ target_compile_definitions(
 )
 target_link_libraries(logics PRIVATE spdlog::spdlog AnalysisManager ${llvm_libs})
 target_link_libraries(Memory PRIVATE spdlog::spdlog)
-target_link_libraries(MemoryObject PRIVATE spdlog::spdlog logics)
+target_link_libraries(MemoryObject PRIVATE spdlog::spdlog logics VerificationSession)
 target_link_libraries(Expression PRIVATE common logics)
 target_link_libraries(Witness PRIVATE ${llvm_libs})
+target_link_libraries(VerificationSession PRIVATE AnalysisManager cache FunctionSummary LoopSummary)

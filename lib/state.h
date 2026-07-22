@@ -23,6 +23,7 @@ namespace ari_exe {
     class State;
     class LoopState;
     class RecState;
+    class VerificationSession;
 
     using trace_ty = std::vector<llvm::BasicBlock*>;
 
@@ -79,8 +80,14 @@ namespace ari_exe {
             };
 
         public:
-            State(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const trace_ty& trace, Status status = RUNNING): z3ctx(z3ctx), pc(pc), prev_pc(prev_pc), memory(memory), path_condition(path_condition), trace(trace), status(status) {};
-            State(const State& state): z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), is_over_approx(state.is_over_approx), nondet_calls(state.nondet_calls), counterexample_complete(state.counterexample_complete), loop_certificates(state.loop_certificates), function_certificates(state.function_certificates) {};
+            State(VerificationSession& session, z3::context& z3ctx,
+                  AInstruction* pc, AInstruction* prev_pc,
+                  const Memory& memory, const Expression& path_condition,
+                  const trace_ty& trace, Status status = RUNNING)
+                : session(session), z3ctx(z3ctx), pc(pc), prev_pc(prev_pc),
+                  memory(memory), path_condition(path_condition), trace(trace),
+                  status(status) {};
+            State(const State& state): session(state.session), z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), is_over_approx(state.is_over_approx), nondet_calls(state.nondet_calls), counterexample_complete(state.counterexample_complete), loop_certificates(state.loop_certificates), function_certificates(state.function_certificates) {};
 
             // if the state is in the process of summarizing a loop
             virtual bool is_summarizing() const { return false; }
@@ -94,6 +101,8 @@ namespace ari_exe {
 
             // step the pc
             void step_pc(AInstruction* next_pc = nullptr);
+
+            VerificationSession& session;
 
             // The context for Z3
             z3::context& z3ctx;
@@ -117,12 +126,6 @@ namespace ari_exe {
 
             // verification condition
             Expression verification_condition = z3ctx.bool_val(true);
-
-            // Function summarization result shared by all states
-            static SymbolTable<FunctionSummary>* func_summaries;
-
-            // Loop summary result shared by all states
-            static SymbolTable<LoopSummary>* loop_summaries;
 
             Expression get_path_condition() const { return path_condition; }
 
@@ -153,7 +156,11 @@ namespace ari_exe {
 
     class LoopState: public State {
         public:
-            LoopState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
+            LoopState(VerificationSession& session, z3::context& z3ctx,
+                      AInstruction* pc, AInstruction* prev_pc,
+                      const Memory& memory, const Expression& path_condition,
+                      const Expression& path_condition_in_loop,
+                      const trace_ty& trace, Status status = RUNNING);
             LoopState(const State& state): State(state), path_condition_in_loop(state.z3ctx.bool_val(true)), summarizing_loop(nullptr) {};
             LoopState(const LoopState& state): State(state), path_condition_in_loop(state.path_condition_in_loop), summarizing_loop(state.summarizing_loop) {};
 
@@ -181,7 +188,11 @@ namespace ari_exe {
 
     class RecState: public State {
         public:
-            RecState(z3::context& z3ctx, AInstruction* pc, AInstruction* prev_pc, const Memory& memory, const Expression& path_condition, const Expression& path_condition_in_loop, const trace_ty& trace, Status status = RUNNING);
+            RecState(VerificationSession& session, z3::context& z3ctx,
+                     AInstruction* pc, AInstruction* prev_pc,
+                     const Memory& memory, const Expression& path_condition,
+                     const Expression& path_condition_in_loop,
+                     const trace_ty& trace, Status status = RUNNING);
             RecState(const State& state): State(state) {};
             RecState(const RecState& state): State(state) {};
 

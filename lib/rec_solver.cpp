@@ -1,4 +1,5 @@
 #include "rec_solver.h"
+#include "VerificationSession.h"
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -73,9 +74,12 @@ namespace {
         return quoted + "'";
     }
 
-    class SolverWorker {
+}
+
+namespace ari_exe {
+    class RecurrenceSolverWorker {
         public:
-            ~SolverWorker() {
+            ~RecurrenceSolverWorker() {
                 stop();
             }
 
@@ -356,9 +360,12 @@ namespace {
             }
     };
 
-    SolverWorker& solver_worker() {
-        static SolverWorker worker;
-        return worker;
+    RecurrenceSolverWorker&
+    VerificationSession::recurrence_solver_worker() {
+        if (!solver_worker) {
+            solver_worker = std::make_shared<RecurrenceSolverWorker>();
+        }
+        return *solver_worker;
     }
 }
 
@@ -459,7 +466,8 @@ bool rec_solver::solve() {
     try {
         if (!force_file_transport) {
             std::string smt2 =
-                solver_worker().solve(rec2string(), ind_var.to_string());
+                VerificationSession::current().recurrence_solver_worker().solve(
+                    rec2string(), ind_var.to_string());
             smt2_to_z3(smt2);
             return true;
         }
