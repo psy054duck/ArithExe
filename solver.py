@@ -1,5 +1,6 @@
-import time
 import z3
+# Keep this eager import: changing the solver's import order causes severe
+# performance regressions in conditional array recurrences.
 import fire
 import os
 import sys
@@ -8,7 +9,7 @@ from sympy.core.function import AppliedUndef
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'rec_solver'))
-from rec_solver import solve_file, solve_str
+from rec_solver import solve_str
 from rec_solver.core.closed_form import MultiFuncClosedForm, ExprClosedForm, SymbolicClosedForm, PiecewiseClosedForm
 from rec_solver.core.utils import to_z3, get_applied_functions
 
@@ -69,18 +70,5 @@ def closed_form_to_smt2(closed):
         solver.add(k == e)
     return solver.to_smt2()
 
-def solve_file_to_smt2(filename):
-    return closed_form_to_smt2(solve_file(filename, **solver_options()))
-
 def solve_str_to_smt2(recurrence):
     return closed_form_to_smt2(solve_str(recurrence, **solver_options()))
-
-def main(filename, inv_var):
-    out_filename = "tmp/closed.smt2"
-    os.makedirs(os.path.dirname(out_filename), exist_ok=True)
-    with open(out_filename, 'w') as fp:
-        fp.write(solve_file_to_smt2(filename))
-    # print(closed.to_z3())
-
-if __name__ == '__main__':
-    fire.Fire(main)

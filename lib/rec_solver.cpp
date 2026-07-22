@@ -1,7 +1,6 @@
 #include "rec_solver.h"
 #include "VerificationSession.h"
 #include <cerrno>
-#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -10,7 +9,6 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
-#include <numeric>
 #include <poll.h>
 #include <sstream>
 #include <stdexcept>
@@ -27,10 +25,6 @@ using namespace ari_exe;
 #define ARITHEXE_DEFAULT_SOLVER_WORKER "solver_worker.py"
 #endif
 
-#ifndef ARITHEXE_DEFAULT_SOLVER_SCRIPT
-#define ARITHEXE_DEFAULT_SOLVER_SCRIPT "solver.py"
-#endif
-
 namespace {
     class SolverRequestError : public std::runtime_error {
         public:
@@ -41,14 +35,6 @@ namespace {
         public:
             using std::runtime_error::runtime_error;
     };
-
-    bool env_flag(const char* name, bool default_value = false) {
-        const char* raw = std::getenv(name);
-        if (raw == nullptr || raw[0] == '\0') return default_value;
-        std::string value(raw);
-        return value != "0" && value != "false" && value != "False" &&
-               value != "no" && value != "off";
-    }
 
     int env_int(const char* name, int default_value) {
         const char* raw = std::getenv(name);
@@ -63,15 +49,6 @@ namespace {
     std::string env_string(const char* name) {
         const char* raw = std::getenv(name);
         return raw == nullptr ? "" : raw;
-    }
-
-    std::string shell_quote(const std::string& value) {
-        std::string quoted = "'";
-        for (char ch : value) {
-            if (ch == '\'') quoted += "'\\''";
-            else quoted += ch;
-        }
-        return quoted + "'";
     }
 
 }
@@ -457,50 +434,17 @@ void rec_solver::set_eqs(rec_ty& eqs) {
 }
 
 bool rec_solver::solve() {
-    const bool force_file_transport =
-        env_string("ARITHEXE_SOLVER_TRANSPORT") == "file" ||
-        env_flag("ARITHEXE_SOLVER_USE_FILES");
-    const bool fallback_to_files =
-        force_file_transport ||
-        env_flag("ARITHEXE_SOLVER_FALLBACK_TO_FILES");
     try {
-        if (!force_file_transport) {
-            std::string smt2 =
-                VerificationSession::current().recurrence_solver_worker().solve(
-                    rec2string(), ind_var.to_string());
-            smt2_to_z3(smt2);
-            return true;
-        }
+        std::string smt2 =
+            VerificationSession::current().recurrence_solver_worker().solve(
+                rec2string(), ind_var.to_string());
+        smt2_to_z3(smt2);
+        return true;
     } catch (const std::exception& e) {
         std::cerr << "Error solving recurrence through worker: "
                   << e.what() << "\n";
-        if (!fallback_to_files) {
-            return false;
-        }
-        std::cerr << "Falling back to file-based recurrence solver\n";
+        return false;
     }
-
-    if (fallback_to_files) {
-        rec2file();
-        const std::string python =
-            env_string("ARITHEXE_SOLVER_PYTHON").empty()
-                ? "python"
-                : env_string("ARITHEXE_SOLVER_PYTHON");
-        const std::string cmd = shell_quote(python) +
-                                " " +
-                                shell_quote(ARITHEXE_DEFAULT_SOLVER_SCRIPT) +
-                                " tmp/recurrence.txt " +
-                                shell_quote(ind_var.to_string());
-        int err = system(cmd.c_str());
-        if (err) {
-            std::cerr << "Error solving recurrence through files\n";
-            return false;
-        }
-        file2z3();
-        return true;
-    }
-
-    return false;
 }
 
 static std::set<z3::expr>
@@ -594,24 +538,9 @@ void rec_solver::apply_initial_values() {
     }
 }
 
-void rec_solver::rec2file() {
-    // if tmp oflder does not exist, create it
-    if (system("mkdir -p tmp") == -1) {
-        std::cerr << "Error creating tmp directory\n";
-        assert(false);
-    }
-    std::ofstream out("tmp/recurrence.txt", std::ios::out);
-    if (!out.is_open()) {
-        std::cerr << "Error opening file for writing\n";
-        assert(false);
-    }
-    _rec2file(out);
-    out.close();
-}
-
 std::string rec_solver::rec2string() {
     std::ostringstream out;
-    _rec2file(out);
+    write_recurrence(out);
     return out.str();
 }
 
@@ -691,7 +620,7 @@ std::string rec_solver::z3_infix(z3::expr e) {
     }
 }
 
-void rec_solver::_rec2file(std::ostream& out) {
+void rec_solver::write_recurrence(std::ostream& out) {
     if (!is_formatted()) {
         _format();
     }
@@ -840,26 +769,6 @@ bool rec_solver::is_ite_free(z3::expr e) {
         res = res && is_ite_free(ep);
     }
     return res;
-}
-
-void rec_solver::file2z3() {
-    _file2z3("tmp/closed.smt2");
-}
-
-void rec_solver::_file2z3(const std::string& filename) {
-    z3::expr_vector c = z3ctx.parse_file(filename.data());
-    for (auto e : c) {
-        auto kind = e.decl().decl_kind();
-        auto args = e.args();
-        assert(kind == Z3_OP_EQ);
-        z3::expr k = args[0].simplify();
-        z3::expr v = args[1].simplify();
-        if (k.is_numeral()) {
-            k = args[1];
-            v = args[0];
-        }
-        res.insert_or_assign(k, v.simplify());
-    }
 }
 
 void rec_solver::smt2_to_z3(const std::string& smt2) {

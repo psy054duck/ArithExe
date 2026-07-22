@@ -13,7 +13,6 @@
 
 #include <map>
 #include <set>
-#include <fstream>
 #include <ostream>
 #include <string>
 
@@ -57,16 +56,13 @@ namespace ari_exe {
             void print_recs();
             void add_assumption(z3::expr e);
             void _format();
-            void rec2file();
             std::string rec2string();
-            void _rec2file(std::ostream& out);
+            void write_recurrence(std::ostream& out);
             std::vector<z3::expr> parse_expr(z3::expr e);
             std::vector<z3::expr> parse_cond(z3::expr);
             bool is_ite_free(z3::expr e);
             bool implies(z3::expr e1, z3::expr e2);
             std::string z3_infix(z3::expr e);
-            void file2z3();
-            void _file2z3(const std::string& filename);
             void smt2_to_z3(const std::string& smt2);
             void print_res();
             bool solve();

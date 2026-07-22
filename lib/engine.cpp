@@ -31,6 +31,9 @@ Engine::~Engine() {
 VeriResult
 Engine::verify() {
     auto activation = session->activate();
+    // Early termination may leave unexplored sibling paths from the previous
+    // run. A top-level verification must always start from a fresh queue.
+    states = {};
     results.clear();
     issue_recorded = false;
     issue_message.clear();
@@ -188,7 +191,12 @@ Engine::verify(state_ptr state) {
     assumptions.push_back(!state->verification_condition.as_expr());
     // llvm::errs() << state->get_path_condition().as_expr().to_string() << "\n";
     // llvm::errs() << assumptions.to_string() << "\n";
-    auto res = solver.check(assumptions);
+    // Each program assertion is an independent query. Reusing Z3's
+    // incremental state here can make a later nonlinear query dramatically
+    // slower after an earlier UNSAT result.
+    solver.reset();
+    solver.add(assumptions);
+    auto res = solver.check();
     VeriResult result;
     switch (res) {
         case z3::unsat:
@@ -282,7 +290,9 @@ Engine::test(state_ptr state) {
     auto activation = session->activate();
     z3::expr_vector assumptions(z3ctx);
     assumptions.push_back(state->get_path_condition().as_expr());
-    auto res = solver.check(assumptions);
+    solver.reset();
+    solver.add(assumptions);
+    auto res = solver.check();
     TestResult result;
     switch (res) {
         case z3::unsat:

@@ -56,6 +56,23 @@ TEST(VerificationSessionTest, EnginesKeepIndependentModuleState) {
     EXPECT_EQ(loop_engine.verify(), HOLD);
 }
 
+TEST(EngineRegression, ReverifyStartsWithFreshStateQueue) {
+    Engine engine(
+        benchmark_path("loop_free/false_reverify_pending_states.c"));
+    llvm::Module* module = engine.get_module();
+    llvm::Function* unsafe_entry = module->getFunction("unsafe_entry");
+    llvm::Function* safe_entry = module->getFunction("safe_entry");
+
+    ASSERT_NE(unsafe_entry, nullptr);
+    ASSERT_NE(safe_entry, nullptr);
+
+    engine.set_entry(unsafe_entry);
+    ASSERT_EQ(engine.verify(), FAIL);
+
+    engine.set_entry(safe_entry);
+    EXPECT_EQ(engine.verify(), HOLD);
+}
+
 TEST(BENCHMARK_ARRAYS_LOOP, true_1) {
     auto veri_res = verify_benchmark("arrays/loop/true_1.c");
     EXPECT_EQ(veri_res, HOLD) << "Failed on: benchmark/arrays/loop/true_1.c";

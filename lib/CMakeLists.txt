@@ -21,7 +21,6 @@ target_compile_definitions(
     rec_solver
     PRIVATE
         ARITHEXE_DEFAULT_SOLVER_WORKER="${CMAKE_SOURCE_DIR}/solver_worker.py"
-        ARITHEXE_DEFAULT_SOLVER_SCRIPT="${CMAKE_SOURCE_DIR}/solver.py"
 )
 
 target_link_libraries(engine PRIVATE spdlog::spdlog AInstruction VerificationSession)
