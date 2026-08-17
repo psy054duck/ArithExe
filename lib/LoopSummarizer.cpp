@@ -3,6 +3,65 @@
 
 
 namespace ari_exe {
+    static unsigned expression_size(const z3::expr& expression) {
+        unsigned size = 1;
+        if (!expression.is_app()) return size;
+        for (const z3::expr& argument : expression.args()) {
+            size += expression_size(argument);
+        }
+        return size;
+    }
+
+    static void collect_boolean_atoms(const z3::expr& expression,
+                                      std::vector<z3::expr>& atoms) {
+        if (!expression.is_app()) return;
+        const Z3_decl_kind kind = expression.decl().decl_kind();
+        const bool connective =
+            kind == Z3_OP_AND || kind == Z3_OP_OR || kind == Z3_OP_NOT ||
+            kind == Z3_OP_IMPLIES || kind == Z3_OP_ITE;
+        if (expression.is_bool() && !connective) {
+            const bool already_present = std::any_of(
+                atoms.begin(), atoms.end(), [&](const z3::expr& atom) {
+                    return z3::eq(atom, expression);
+                });
+            if (!already_present) atoms.push_back(expression);
+        }
+        for (const z3::expr& argument : expression.args()) {
+            collect_boolean_atoms(argument, atoms);
+        }
+    }
+
+    static z3::expr simplify_boolean_condition(
+        const z3::expr& condition, const z3::expr& assumptions) {
+        z3::expr simplified = simplify(condition, assumptions);
+        std::vector<z3::expr> atoms;
+        collect_boolean_atoms(simplified, atoms);
+        std::sort(atoms.begin(), atoms.end(),
+                  [](const z3::expr& lhs, const z3::expr& rhs) {
+                      return expression_size(lhs) < expression_size(rhs);
+                  });
+
+        z3::solver solver(condition.ctx());
+        z3::params params(condition.ctx());
+        params.set("timeout", 200u);
+        solver.set(params);
+        solver.add(assumptions);
+        for (const z3::expr& atom : atoms) {
+            solver.push();
+            solver.add(simplified != atom);
+            const z3::check_result same_result = solver.check();
+            solver.pop();
+            if (same_result == z3::unsat) return atom;
+
+            solver.push();
+            solver.add(simplified == atom);
+            const z3::check_result opposite_result = solver.check();
+            solver.pop();
+            if (opposite_result == z3::unsat) return !atom;
+        }
+        return simplified;
+    }
+
     static MemoryAddress_ty
     parse_ptr(const MemoryObjectPtr ptr, state_ptr state) {
         assert(ptr->is_pointer() && "Pointer object expected");
@@ -159,7 +218,29 @@ namespace ari_exe {
                 assert(pointed_obj && "Pointed object must exist");
 
                 auto load_value = pointed_obj->read(addr.offset);
-                new_state->memory.put_temp(load_inst, load_value);
+                const z3::expr path =
+                    new_state->get_path_condition().as_expr();
+                const auto load_conditions = load_value.get_conditions();
+                const auto load_expressions = load_value.get_expressions();
+                const auto load_definitions = load_value.get_definitions();
+                z3::expr_vector restricted_conditions(z3ctx);
+                z3::expr_vector restricted_expressions(z3ctx);
+                z3::expr_vector restricted_definitions(z3ctx);
+                for (unsigned i = 0; i < load_conditions.size(); ++i) {
+                    z3::expr condition =
+                        simplify_boolean_condition(load_conditions[i], path);
+                    if (!is_feasible(condition, path)) continue;
+                    restricted_conditions.push_back(condition);
+                    restricted_expressions.push_back(load_expressions[i]);
+                    restricted_definitions.push_back(load_definitions[i]);
+                }
+                assert(!restricted_conditions.empty() &&
+                       "An array read must have a feasible value branch");
+                new_state->memory.put_temp(
+                    load_inst,
+                    Expression(restricted_conditions,
+                               restricted_expressions,
+                               restricted_definitions));
                 new_state->step_pc();
                 return {new_state};
             }
@@ -416,8 +497,23 @@ namespace ari_exe {
                               std::inserter(iteration_related_vars, iteration_related_vars.begin()));
 
         auto [N_constraints, N] = get_iterations_constraints(exit_states, params, params_values);
+        const auto contains_modulo = [](const z3::expr& expression,
+                                        const auto& self) -> bool {
+            if (expression.is_var()) return false;
+            if (expression.is_quantifier()) {
+                return self(expression.body(), self);
+            }
+            if (!expression.is_app()) return false;
+            if (expression.decl().decl_kind() == Z3_OP_MOD) return true;
+            for (const z3::expr& argument : expression.args()) {
+                if (self(argument, self)) return true;
+            }
+            return false;
+        };
         if (std::includes(params_str.begin(), params_str.end(),
-                          iteration_related_vars.begin(), iteration_related_vars.end())) {
+                          iteration_related_vars.begin(),
+                          iteration_related_vars.end()) &&
+            !contains_modulo(N_constraints, contains_modulo)) {
             auto linear_logic = LinearLogic();
             z3::expr_vector N_vec(z3ctx);
             N_vec.push_back(N);
@@ -425,7 +521,6 @@ namespace ari_exe {
             auto N_value = linear_logic.solve_vars(N_constraints, N_vec);
             if (N_value.size() == 0) {
                 spdlog::info("fail to compute the number of iterations, record the constraints on it in path conditions");
-                N_constraints = z3ctx.bool_val(true);
             } else {
                 spdlog::info("The number of iterations is {}", N_value[0].to_string());
                 N_opt = N_value[0];
@@ -453,11 +548,21 @@ namespace ari_exe {
                 // summary = LoopSummary(params, closed, params.ctx().bool_val(true), modified_values, N_opt);
                 summary = LoopSummary(params, exit_values, params_values, over_closed, params.ctx().bool_val(true), N_opt);
             } else {
-                auto [exit_condition, N] = get_exit_loop_guard(exit_states);
-                summary = LoopSummary(params, exit_values, params_values, over_closed, exit_condition, N_opt);
+                auto [exit_condition, symbolic_N] =
+                    get_exit_loop_guard(exit_states);
+                (void)symbolic_N;
+                summary = LoopSummary(
+                    params, exit_values, params_values, over_closed,
+                    exit_condition, N_opt);
             }
         } else {
-            summary = LoopSummary(params, exit_values, params_values, N_constraints, modified_values, N_opt);
+            z3::expr summary_constraints =
+                N_opt.has_value() ? z3ctx.bool_val(true) : N_constraints;
+            summary = LoopSummary(
+                params, exit_values, params_values, summary_constraints,
+                modified_values,
+                N_opt.has_value() ? N_opt
+                                  : std::optional<z3::expr>(N));
         }
     }
 
@@ -613,7 +718,8 @@ namespace ari_exe {
             auto N = scalar_summary.get_N().value_or(manager->get_loop_N());
             N_dst.push_back(N);
             auto dims = array->get_sizes();
-            z3::expr domain(z3ctx.bool_val(true));
+            z3::expr domain =
+                parent_state->get_path_condition().as_expr();
             auto indices = array->get_indices();
             for (int i = 0 ; i < dims.size(); i++) {
                 domain = domain && 0 <= indices[i] && indices[i] < dims[i].as_expr() && 0 <= N;
@@ -623,7 +729,15 @@ namespace ari_exe {
             }
             for (auto& [func, expr] : closed) {
                 spdlog::info("Restricting array summaries to the domain");
-                auto all_apps = get_app_of(expr, array->get_signature().decl());
+                z3::expr normalized_expr = expr;
+                auto returned_indices = func.args();
+                if (returned_indices.size() == indices.size()) {
+                    normalized_expr =
+                        normalized_expr.substitute(returned_indices, indices)
+                            .simplify();
+                }
+                auto all_apps = get_app_of(
+                    normalized_expr, array->get_signature().decl());
                 z3::expr_vector app_values(z3ctx);
                 auto initial_value = array->get_value().as_expr();
                 auto params = array->get_indices();
@@ -632,7 +746,9 @@ namespace ari_exe {
                     app_values.push_back(initial_value.substitute(params, args).simplify());
                 }
                 // substitute initial values
-                auto real_closed_form = expr.substitute(all_apps, app_values).substitute(n_src, N_dst);
+                auto real_closed_form = normalized_expr
+                                            .substitute(all_apps, app_values)
+                                            .substitute(n_src, N_dst);
                 // auto real_closed_form = closed_form.substitute(all_apps, app_values);
                 auto closed_form = restrict_to_domain(real_closed_form, domain).simplify();
                 spdlog::info("Array closed form: {}", closed_form.to_string());
@@ -911,6 +1027,19 @@ namespace ari_exe {
         return res.simplify();
     }
 
+    static bool contains_modulo(const z3::expr& expression) {
+        if (expression.is_var()) return false;
+        if (expression.is_quantifier()) {
+            return contains_modulo(expression.body());
+        }
+        if (!expression.is_app()) return false;
+        if (expression.decl().decl_kind() == Z3_OP_MOD) return true;
+        for (const z3::expr& argument : expression.args()) {
+            if (contains_modulo(argument)) return true;
+        }
+        return false;
+    }
+
     std::pair<z3::expr, z3::expr>
     LoopSummarizer::get_iterations_constraints(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values) {
         spdlog::info("Computing the number of iterations");
@@ -934,6 +1063,10 @@ namespace ari_exe {
         spdlog::info("constraints for N: {}", constraints.to_string());
         constraints = constraints && parent_state->get_path_condition().as_expr();
         constraints = constraints.substitute(params, values);
+
+        if (contains_modulo(constraints)) {
+            return {constraints, N};
+        }
 
         z3::tactic qe_tactic = z3::tactic(z3ctx, "qe");
         z3::goal g(z3ctx);

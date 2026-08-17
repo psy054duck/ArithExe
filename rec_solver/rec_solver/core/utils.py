@@ -264,7 +264,7 @@ def pow_to_mul(expr):
 def num2z3(expr):
     '''Convert a number in sympy to z3'''
     assert(isinstance(expr, int) or expr.is_number)
-    if expr.is_integer or isinstance(expr, int):
+    if isinstance(expr, int) or expr.is_integer:
         return z3.IntVal(int(expr))
     elif expr.is_Rational:
         return z3.RatVal(int(expr.numerator), int(expr.denominator))

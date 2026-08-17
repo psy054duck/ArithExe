@@ -157,7 +157,7 @@ namespace ari_exe {
     static void
     aux_expr2piecewise(const z3::expr& expr, const z3::expr& cur_cond, z3::expr_vector& conditions, z3::expr_vector& expressions) {
         // Base case: if the expression is a constant or a variable, we can directly add it
-        if (expr.is_const() || expr.is_var()) {
+        if (expr.is_const() || expr.is_var() || expr.is_quantifier()) {
             conditions.push_back(cur_cond);
             expressions.push_back(expr);
         } else if (expr.is_app() && expr.decl().decl_kind() == Z3_OP_ITE) {

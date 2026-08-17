@@ -1,4 +1,5 @@
 #include "AInstruction.h"
+#include "IntegerSemantics.h"
 #include "VerificationSession.h"
 #include <spdlog/spdlog.h>
 
@@ -10,10 +11,218 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <optional>
+#include <functional>
+#include <unordered_map>
 
 using namespace ari_exe;
 
 namespace {
+const llvm::Function* resolve_called_function(const llvm::CallBase* call) {
+    if (const llvm::Function* function = call->getCalledFunction()) {
+        return function;
+    }
+    return llvm::dyn_cast<llvm::Function>(
+        call->getCalledOperand()->stripPointerCasts());
+}
+
+llvm::Function* resolve_called_function(llvm::CallBase* call) {
+    return const_cast<llvm::Function*>(
+        resolve_called_function(static_cast<const llvm::CallBase*>(call)));
+}
+
+state_ptr clone_state_preserving_type(const state_ptr& state) {
+    if (auto rec_state = std::dynamic_pointer_cast<RecState>(state)) {
+        return std::make_shared<RecState>(*rec_state);
+    }
+    if (auto loop_state = std::dynamic_pointer_cast<LoopState>(state)) {
+        return std::make_shared<LoopState>(*loop_state);
+    }
+    return std::make_shared<State>(*state);
+}
+
+using IntegerBinaryOperation = std::function<std::pair<z3::expr, z3::expr>(
+    const z3::expr&, const z3::expr&)>;
+
+Expression map_integer_binary(const Expression& lhs, const Expression& rhs,
+                              const IntegerBinaryOperation& operation) {
+    const auto lhs_conditions = lhs.get_conditions();
+    const auto rhs_conditions = rhs.get_conditions();
+    const auto lhs_expressions = lhs.get_expressions();
+    const auto rhs_expressions = rhs.get_expressions();
+    const auto lhs_definitions = lhs.get_definitions();
+    const auto rhs_definitions = rhs.get_definitions();
+    z3::expr_vector conditions(lhs.ctx());
+    z3::expr_vector expressions(lhs.ctx());
+    z3::expr_vector definitions(lhs.ctx());
+    const std::vector<int> sizes = {
+        static_cast<int>(lhs_conditions.size()),
+        static_cast<int>(rhs_conditions.size())};
+
+    for (const auto& indices : cartesian_product(sizes)) {
+        const unsigned lhs_index = indices[0];
+        const unsigned rhs_index = indices[1];
+        z3::expr condition = lhs_conditions[lhs_index] &&
+                             rhs_conditions[rhs_index];
+        if (!is_feasible(condition)) continue;
+        auto [value, operation_defined] = operation(
+            lhs_expressions[lhs_index], rhs_expressions[rhs_index]);
+        conditions.push_back(condition);
+        expressions.push_back(value);
+        definitions.push_back(lhs_definitions[lhs_index] &&
+                              rhs_definitions[rhs_index] &&
+                              operation_defined);
+    }
+    return Expression(conditions, expressions, definitions);
+}
+
+using IntegerUnaryOperation =
+    std::function<z3::expr(const z3::expr&)>;
+
+Expression map_integer_unary(const Expression& operand,
+                             const IntegerUnaryOperation& operation) {
+    const auto conditions = operand.get_conditions();
+    const auto expressions = operand.get_expressions();
+    const auto definitions = operand.get_definitions();
+    z3::expr_vector mapped(operand.ctx());
+    for (const z3::expr& expression : expressions) {
+        mapped.push_back(operation(expression));
+    }
+    return Expression(conditions, mapped, definitions);
+}
+
+Expression canonicalize_signed(const Expression& operand, unsigned width,
+                               const z3::expr& assumptions) {
+    if (width == 1) return operand;
+
+    const auto conditions = operand.get_conditions();
+    const auto expressions = operand.get_expressions();
+    const auto definitions = operand.get_definitions();
+    z3::expr_vector canonical(operand.ctx());
+    for (unsigned i = 0; i < expressions.size(); ++i) {
+        z3::expr integer = integer_semantics::as_int(expressions[i]);
+        z3::expr known = assumptions && conditions[i] && definitions[i];
+        canonical.push_back(
+            ari_exe::implies(
+                known, integer_semantics::in_signed_range(integer, width))
+                ? integer
+                : integer_semantics::as_signed(integer, width));
+    }
+    return Expression(conditions, canonical, definitions);
+}
+
+bool has_canonical_signed_representation(const llvm::Value* value) {
+    enum class VisitState { Visiting, Canonical, NonCanonical };
+    std::unordered_map<const llvm::Value*, VisitState> visited;
+    const auto underlying_pointer = [](const llvm::Value* pointer) {
+        const llvm::Value* current = pointer->stripPointerCasts();
+        while (const auto* gep =
+                   llvm::dyn_cast<llvm::GetElementPtrInst>(current)) {
+            current = gep->getPointerOperand()->stripPointerCasts();
+        }
+        return current;
+    };
+    std::function<bool(const llvm::Value*)> visit =
+        [&](const llvm::Value* current) {
+            const auto found = visited.find(current);
+            if (found != visited.end()) {
+                return found->second != VisitState::NonCanonical;
+            }
+            visited.emplace(current, VisitState::Visiting);
+
+            bool canonical =
+                llvm::isa<llvm::ConstantInt>(current) ||
+                llvm::isa<llvm::UndefValue>(current) ||
+                llvm::isa<llvm::Argument>(current) ||
+                llvm::isa<llvm::SExtInst>(current) ||
+                llvm::isa<llvm::ZExtInst>(current) ||
+                llvm::isa<llvm::TruncInst>(current) ||
+                llvm::isa<llvm::ICmpInst>(current);
+            if (const auto* call = llvm::dyn_cast<llvm::CallBase>(current)) {
+                canonical = call->getType()->isIntegerTy();
+            } else if (const auto* binary =
+                           llvm::dyn_cast<llvm::BinaryOperator>(current)) {
+                switch (binary->getOpcode()) {
+                case llvm::Instruction::SDiv:
+                case llvm::Instruction::SRem:
+                case llvm::Instruction::And:
+                case llvm::Instruction::Or:
+                case llvm::Instruction::Xor:
+                case llvm::Instruction::Shl:
+                case llvm::Instruction::LShr:
+                case llvm::Instruction::AShr:
+                    canonical = true;
+                    break;
+                default:
+                    canonical = binary->hasNoSignedWrap();
+                    break;
+                }
+            } else if (const auto* phi = llvm::dyn_cast<llvm::PHINode>(current)) {
+                canonical = true;
+                for (const llvm::Value* incoming : phi->incoming_values()) {
+                    canonical = canonical && visit(incoming);
+                }
+            } else if (const auto* load =
+                           llvm::dyn_cast<llvm::LoadInst>(current)) {
+                const llvm::Value* pointer =
+                    underlying_pointer(load->getPointerOperand());
+                canonical = false;
+                bool found_store = false;
+                bool all_stores_canonical = true;
+                for (const llvm::BasicBlock& block :
+                     *load->getFunction()) {
+                    for (const llvm::Instruction& instruction : block) {
+                        const auto* store =
+                            llvm::dyn_cast<llvm::StoreInst>(&instruction);
+                        if (!store ||
+                            underlying_pointer(store->getPointerOperand()) !=
+                                pointer) {
+                            continue;
+                        }
+                        found_store = true;
+                        all_stores_canonical =
+                            all_stores_canonical &&
+                            visit(store->getValueOperand());
+                    }
+                    if (!all_stores_canonical) {
+                        continue;
+                    }
+                }
+                canonical = found_store && all_stores_canonical;
+            } else if (const auto* select =
+                           llvm::dyn_cast<llvm::SelectInst>(current)) {
+                canonical = visit(select->getTrueValue()) &&
+                            visit(select->getFalseValue());
+            }
+
+            visited[current] = canonical ? VisitState::Canonical
+                                         : VisitState::NonCanonical;
+            return canonical;
+        };
+    return visit(value);
+}
+
+z3::expr signed_value(const z3::expr& value, const llvm::Value* llvm_value,
+                      unsigned width, const state_ptr& state) {
+    z3::expr integer = integer_semantics::as_int(value);
+    if (has_canonical_signed_representation(llvm_value) ||
+        ari_exe::implies(state->get_path_condition().as_expr(),
+                         integer_semantics::in_signed_range(integer,
+                                                            width))) {
+        return integer;
+    }
+    return integer_semantics::as_signed(integer, width);
+}
+
+z3::expr unsigned_value(const z3::expr& value, unsigned width,
+                        const state_ptr& state) {
+    z3::expr integer = integer_semantics::as_int(value);
+    return ari_exe::implies(
+               state->get_path_condition().as_expr(),
+               integer_semantics::in_unsigned_range(integer, width))
+               ? integer
+               : integer_semantics::as_unsigned(integer, width);
+}
+
 std::string source_type_name(const llvm::DIType* type) {
     const llvm::DIType* current = type;
     while (current) {
@@ -162,31 +371,220 @@ AInstructionBinary::execute(state_ptr state) {
     auto op1_value = state->evaluate(op1);
 
     auto& z3ctx = op0_value.ctx();
-    Expression result;
+    const unsigned width = bin_inst->getType()->getIntegerBitWidth();
+    const bool no_signed_wrap = bin_inst->hasNoSignedWrap();
+    const bool no_unsigned_wrap = bin_inst->hasNoUnsignedWrap();
+    const bool exact = bin_inst->isExact();
 
-    state_ptr new_state = std::make_shared<State>(*state);
-    if (opcode == llvm::Instruction::Add) {
-        result = op0_value + op1_value;
-    } else if (opcode == llvm::Instruction::Sub) {
-        result = op0_value - op1_value;
-    } else if (opcode == llvm::Instruction::Mul) {
-        result = op0_value * op1_value;
-    } else if (opcode == llvm::Instruction::SDiv || opcode == llvm::Instruction::UDiv) {
-        result = op0_value / op1_value;
-    } else if (opcode == llvm::Instruction::SRem || opcode == llvm::Instruction::URem) {
-        result = op0_value % op1_value;
-    } else if (opcode == llvm::Instruction::And) {
-        result = op0_value && op1_value;
-    } else if (opcode == llvm::Instruction::Or) {
-        result = op0_value || op1_value;
-    } else if (opcode == llvm::Instruction::Xor) {
-        result = op0_value ^ op1_value;
-    } else {
-        throw std::runtime_error("Unsupported binary operation " +
-                                 std::string(bin_inst->getOpcodeName()) +
-                                 ": " + llvm_value_to_string(*bin_inst));
-    }
+    Expression result = map_integer_binary(
+        op0_value, op1_value,
+        [&](const z3::expr& lhs, const z3::expr& rhs) {
+            using namespace integer_semantics;
+            z3::expr lhs_bv(z3ctx);
+            z3::expr rhs_bv(z3ctx);
+            bool bitvectors_ready = false;
+            const auto prepare_bitvectors = [&]() {
+                if (bitvectors_ready) return;
+                lhs_bv = to_bv(lhs, width);
+                rhs_bv = to_bv(rhs, width);
+                bitvectors_ready = true;
+            };
+            z3::expr defined = z3ctx.bool_val(true);
+            z3::expr result_bv(z3ctx);
+            z3::expr value(z3ctx);
 
+            if (opcode == llvm::Instruction::Add) {
+                if (no_signed_wrap) {
+                    z3::expr integer_result =
+                        signed_value(lhs, op0, width, state) +
+                        signed_value(rhs, op1, width, state);
+                    defined = defined && in_signed_range(integer_result, width);
+                    if (width == 1) {
+                        prepare_bitvectors();
+                        value = from_bv(lhs_bv + rhs_bv, width);
+                    } else {
+                        value = integer_result;
+                    }
+                } else {
+                    value = as_int(lhs) + as_int(rhs);
+                }
+                if (no_unsigned_wrap) {
+                    defined = defined &&
+                              as_unsigned(lhs, width) +
+                                      as_unsigned(rhs, width) <
+                                  power_of_two(z3ctx, width);
+                }
+            } else if (opcode == llvm::Instruction::Sub) {
+                if (no_signed_wrap) {
+                    z3::expr integer_result =
+                        signed_value(lhs, op0, width, state) -
+                        signed_value(rhs, op1, width, state);
+                    defined = defined && in_signed_range(integer_result, width);
+                    if (width == 1) {
+                        prepare_bitvectors();
+                        value = from_bv(lhs_bv - rhs_bv, width);
+                    } else {
+                        value = integer_result;
+                    }
+                } else {
+                    value = as_int(lhs) - as_int(rhs);
+                }
+                if (no_unsigned_wrap) {
+                    defined = defined &&
+                              as_unsigned(lhs, width) >=
+                                  as_unsigned(rhs, width);
+                }
+            } else if (opcode == llvm::Instruction::Mul) {
+                if (no_signed_wrap) {
+                    z3::expr integer_result =
+                        signed_value(lhs, op0, width, state) *
+                        signed_value(rhs, op1, width, state);
+                    defined = defined && in_signed_range(integer_result, width);
+                    if (width == 1) {
+                        prepare_bitvectors();
+                        value = from_bv(lhs_bv * rhs_bv, width);
+                    } else {
+                        value = integer_result;
+                    }
+                } else {
+                    value = as_int(lhs) * as_int(rhs);
+                }
+                if (no_unsigned_wrap) {
+                    defined = defined &&
+                              as_unsigned(lhs, width) *
+                                      as_unsigned(rhs, width) <
+                                  power_of_two(z3ctx, width);
+                }
+            } else if (opcode == llvm::Instruction::SDiv) {
+                z3::expr integer_lhs = signed_value(lhs, op0, width, state);
+                z3::expr integer_rhs = signed_value(rhs, op1, width, state);
+                const bool constant_divisor =
+                    integer_rhs.simplify().is_numeral();
+                defined = integer_rhs != 0 &&
+                          !(integer_lhs == signed_min(z3ctx, width) &&
+                            integer_rhs == -1);
+                if (!state->is_summarizing() && constant_divisor) {
+                    const std::string suffix =
+                        std::to_string(state->session.next_call_value_id(inst));
+                    z3::expr quotient = z3ctx.int_const(
+                        ("ari_sdiv_q_" + suffix).c_str());
+                    z3::expr remainder = z3ctx.int_const(
+                        ("ari_sdiv_r_" + suffix).c_str());
+                    z3::expr abs_rhs =
+                        z3::ite(integer_rhs < 0, -integer_rhs, integer_rhs)
+                            .simplify();
+                    defined =
+                        defined &&
+                        integer_lhs == quotient * integer_rhs + remainder &&
+                        -abs_rhs < remainder && remainder < abs_rhs &&
+                        (remainder == 0 ||
+                         (integer_lhs < 0 && remainder < 0) ||
+                         (integer_lhs > 0 && remainder > 0));
+                    if (exact) defined = defined && remainder == 0;
+                    value = quotient;
+                } else if (state->is_summarizing()) {
+                    value = signed_div(integer_lhs, integer_rhs);
+                    if (exact) {
+                        defined = defined &&
+                                  signed_rem(integer_lhs, integer_rhs) == 0;
+                    }
+                } else {
+                    prepare_bitvectors();
+                    value = from_bv(lhs_bv / rhs_bv, width);
+                    if (exact) {
+                        defined = defined &&
+                                  z3::srem(lhs_bv, rhs_bv) ==
+                                      z3ctx.bv_val(0, width);
+                    }
+                }
+            } else if (opcode == llvm::Instruction::UDiv) {
+                z3::expr integer_lhs = as_unsigned(lhs, width);
+                z3::expr integer_rhs = as_unsigned(rhs, width);
+                defined = integer_rhs != 0;
+                if (exact) {
+                    defined = defined &&
+                              integer_lhs % integer_rhs == 0;
+                }
+                value = integer_lhs / integer_rhs;
+            } else if (opcode == llvm::Instruction::SRem) {
+                z3::expr integer_lhs = signed_value(lhs, op0, width, state);
+                z3::expr integer_rhs = signed_value(rhs, op1, width, state);
+                defined = integer_rhs != 0;
+                if (!state->is_summarizing() &&
+                    integer_rhs.simplify().is_numeral()) {
+                    const std::string suffix =
+                        std::to_string(state->session.next_call_value_id(inst));
+                    z3::expr quotient = z3ctx.int_const(
+                        ("ari_srem_q_" + suffix).c_str());
+                    z3::expr remainder = z3ctx.int_const(
+                        ("ari_srem_r_" + suffix).c_str());
+                    z3::expr abs_rhs =
+                        z3::ite(integer_rhs < 0, -integer_rhs, integer_rhs)
+                            .simplify();
+                    defined =
+                        defined &&
+                        integer_lhs == quotient * integer_rhs + remainder &&
+                        -abs_rhs < remainder && remainder < abs_rhs &&
+                        (remainder == 0 ||
+                         (integer_lhs < 0 && remainder < 0) ||
+                         (integer_lhs > 0 && remainder > 0));
+                    value = remainder;
+                } else if (state->is_summarizing()) {
+                    value = signed_rem(integer_lhs, integer_rhs);
+                } else {
+                    prepare_bitvectors();
+                    value = from_bv(z3::srem(lhs_bv, rhs_bv), width);
+                }
+            } else if (opcode == llvm::Instruction::URem) {
+                z3::expr integer_lhs = as_unsigned(lhs, width);
+                z3::expr integer_rhs = as_unsigned(rhs, width);
+                defined = integer_rhs != 0;
+                value = integer_lhs % integer_rhs;
+            } else if (opcode == llvm::Instruction::And) {
+                prepare_bitvectors();
+                value = from_bv(lhs_bv & rhs_bv, width);
+            } else if (opcode == llvm::Instruction::Or) {
+                prepare_bitvectors();
+                value = from_bv(lhs_bv | rhs_bv, width);
+            } else if (opcode == llvm::Instruction::Xor) {
+                prepare_bitvectors();
+                value = from_bv(lhs_bv ^ rhs_bv, width);
+            } else if (opcode == llvm::Instruction::Shl ||
+                       opcode == llvm::Instruction::LShr ||
+                       opcode == llvm::Instruction::AShr) {
+                z3::expr shift = as_unsigned(rhs, width);
+                defined = shift < z3ctx.int_val(width);
+                prepare_bitvectors();
+                if (opcode == llvm::Instruction::Shl) {
+                    result_bv = z3::shl(lhs_bv, rhs_bv);
+                    if (no_unsigned_wrap) {
+                        defined = defined &&
+                                  z3::lshr(result_bv, rhs_bv) == lhs_bv;
+                    }
+                    if (no_signed_wrap) {
+                        defined = defined &&
+                                  z3::ashr(result_bv, rhs_bv) == lhs_bv;
+                    }
+                } else if (opcode == llvm::Instruction::LShr) {
+                    result_bv = z3::lshr(lhs_bv, rhs_bv);
+                } else {
+                    result_bv = z3::ashr(lhs_bv, rhs_bv);
+                }
+                if (exact) {
+                    defined = defined &&
+                              z3::shl(result_bv, rhs_bv) == lhs_bv;
+                }
+                value = from_bv(result_bv, width);
+            } else {
+                throw std::runtime_error(
+                    "Unsupported binary operation " +
+                    std::string(bin_inst->getOpcodeName()) + ": " +
+                    llvm_value_to_string(*bin_inst));
+            }
+            return std::pair<z3::expr, z3::expr>{value, defined};
+        });
+
+    state_ptr new_state = clone_state_preserving_type(state);
     new_state->memory.put_temp(inst, result);
     new_state->step_pc();
 
@@ -203,24 +601,60 @@ AInstructionICmp::execute(state_ptr state) {
     auto op0_value = state->evaluate(op0);
     auto op1_value = state->evaluate(op1);
     auto& z3ctx = op0_value.ctx();
-    Expression result;
-
-    if (pred == llvm::ICmpInst::ICMP_EQ) {
-        result = op0_value == op1_value;
-    } else if (pred == llvm::ICmpInst::ICMP_NE) {
-        result = op0_value != op1_value;
-    } else if (llvm::ICmpInst::isLT(pred)) {
-        result = op0_value < op1_value;
-    } else if (llvm::ICmpInst::isLE(pred)) {
-        result = op0_value <= op1_value;
-    } else if (llvm::ICmpInst::isGT(pred)) {
-        result = op0_value > op1_value;
-    } else if (llvm::ICmpInst::isGE(pred)) {
-        result = op0_value >= op1_value;
-    } else {
-        llvm::errs() << "Unsupported ICmp predicate\n";
-        assert(false);
-    }
+    const unsigned width = op0->getType()->getIntegerBitWidth();
+    Expression result = map_integer_binary(
+        op0_value, op1_value,
+        [&](const z3::expr& lhs, const z3::expr& rhs) {
+            using namespace integer_semantics;
+            z3::expr value(z3ctx);
+            if (pred == llvm::ICmpInst::ICMP_EQ) {
+                value = has_canonical_signed_representation(op0) &&
+                                has_canonical_signed_representation(op1)
+                            ? lhs == rhs
+                        : lhs.is_int() && rhs.is_int()
+                            ? (as_int(lhs) - as_int(rhs)) %
+                                      power_of_two(z3ctx, width) ==
+                                  0
+                            : lhs == rhs;
+            } else if (pred == llvm::ICmpInst::ICMP_NE) {
+                value = has_canonical_signed_representation(op0) &&
+                                has_canonical_signed_representation(op1)
+                            ? lhs != rhs
+                        : lhs.is_int() && rhs.is_int()
+                            ? (as_int(lhs) - as_int(rhs)) %
+                                      power_of_two(z3ctx, width) !=
+                                  0
+                            : lhs != rhs;
+            } else if (pred == llvm::ICmpInst::ICMP_SLT) {
+                value = signed_value(lhs, op0, width, state) <
+                        signed_value(rhs, op1, width, state);
+            } else if (pred == llvm::ICmpInst::ICMP_SLE) {
+                value = signed_value(lhs, op0, width, state) <=
+                        signed_value(rhs, op1, width, state);
+            } else if (pred == llvm::ICmpInst::ICMP_SGT) {
+                value = signed_value(lhs, op0, width, state) >
+                        signed_value(rhs, op1, width, state);
+            } else if (pred == llvm::ICmpInst::ICMP_SGE) {
+                value = signed_value(lhs, op0, width, state) >=
+                        signed_value(rhs, op1, width, state);
+            } else if (pred == llvm::ICmpInst::ICMP_ULT) {
+                value = unsigned_value(lhs, width, state) <
+                        unsigned_value(rhs, width, state);
+            } else if (pred == llvm::ICmpInst::ICMP_ULE) {
+                value = unsigned_value(lhs, width, state) <=
+                        unsigned_value(rhs, width, state);
+            } else if (pred == llvm::ICmpInst::ICMP_UGT) {
+                value = unsigned_value(lhs, width, state) >
+                        unsigned_value(rhs, width, state);
+            } else if (pred == llvm::ICmpInst::ICMP_UGE) {
+                value = unsigned_value(lhs, width, state) >=
+                        unsigned_value(rhs, width, state);
+            } else {
+                throw std::runtime_error("Unsupported ICmp predicate");
+            }
+            return std::pair<z3::expr, z3::expr>{
+                value, z3ctx.bool_val(true)};
+        });
     state_ptr new_state = std::make_shared<State>(*state);
     new_state->memory.put_temp(inst, result);
     new_state->step_pc();
@@ -253,41 +687,61 @@ AInstructionAlloca::execute(state_ptr state) {
 std::vector<state_ptr>
 AInstructionCall::execute(state_ptr state) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
-    auto& z3ctx = state->z3ctx;
+    state_ptr call_state = state;
+    bool consumed_noundef = false;
+    for (unsigned i = 0; i < call_inst->arg_size(); ++i) {
+        llvm::Value* argument = call_inst->getArgOperand(i);
+        if (!argument->getType()->isIntegerTy() ||
+            !call_inst->paramHasAttr(i, llvm::Attribute::NoUndef)) {
+            continue;
+        }
+        if (call_state == state) {
+            call_state = clone_state_preserving_type(state);
+        }
+        consumed_noundef = true;
+        call_state->append_path_condition(
+            Expression(state->evaluate(argument).defined()));
+    }
+    if (consumed_noundef &&
+        !is_feasible(call_state->get_path_condition().as_expr())) {
+        return {};
+    }
+
+    auto& z3ctx = call_state->z3ctx;
 
     z3::expr result(z3ctx);
 
     if (called_func && called_func->getName().ends_with("assert")) {
         // verification. should check if the condition is true
-        return {execute_assert(state)};
+        return {execute_assert(call_state)};
     } else if (called_func &&
                (called_func->getName().find("reach_error") != std::string::npos ||
                 called_func->getName() == "__VERIFIER_error")) {
-        return {execute_reach_error(state)};
+        return {execute_reach_error(call_state)};
     } else if (called_func && called_func->getName().find("assume") != std::string::npos) {
         // assume function, add the condition to the path condition
-        return {execute_assume(state)};
+        return {execute_assume(call_state)};
     } else if (called_func && called_func->getName().find("malloc") != std::string::npos) {
         // malloc function, allocate memory and return the pointer
-        return {execute_malloc(state)};
+        return {execute_malloc(call_state)};
     } else if (called_func && called_func->hasExactDefinition()) {
-        return {execute_normal(state)};
+        return {execute_normal(call_state)};
     } else if (called_func && called_func->getName().find("llvm.stacksave.p0") != std::string::npos) {
         // handle llvm.stacksave.p0
         auto dummy_ptr = z3ctx.int_val(0); // or create a symbolic pointer
-        state->memory.put_temp(call_inst, dummy_ptr);
-        state->step_pc();
-        return {state};
+        call_state->memory.put_temp(call_inst, dummy_ptr);
+        call_state->step_pc();
+        return {call_state};
     } else if (called_func && called_func->getName().find("llvm.stackrestore.p0") != std::string::npos) {
         // handle llvm.stackrestore.p0
-        state->step_pc();
-        return {state};
+        call_state->step_pc();
+        return {call_state};
     } else if (called_func && called_func->getName().find("llvm.memcpy") != std::string::npos) {
-        return {execute_memcpy(state)};
+        return {execute_memcpy(call_state)};
     } else {
-        return {execute_unknown(state)};
+        return {execute_unknown(call_state)};
     }
 }
 
@@ -297,7 +751,7 @@ AInstructionCall::execute_normal(state_ptr state) {
     if (try_cache) return try_cache;
 
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
     // check if the function is recursive and not yet summarized
     auto ret_type = called_func->getReturnType();
@@ -305,7 +759,9 @@ AInstructionCall::execute_normal(state_ptr state) {
     auto& function_summaries = session.function_summaries();
     auto& function_cache = session.function_cache();
     bool is_visited = function_cache.is_visited(called_func);
-    if (!is_visited && !state->is_summarizing() && is_recursive(called_func) && !function_summaries.get_value(called_func).has_value()) {
+    const bool recursive = is_recursive(called_func);
+    if (!is_visited && !state->is_summarizing() && recursive &&
+        !function_summaries.get_value(called_func).has_value()) {
         function_cache.mark_visited(called_func);
         auto summary = summarize_complete(state->z3ctx);
         if (summary.has_value()) {
@@ -316,7 +772,18 @@ AInstructionCall::execute_normal(state_ptr state) {
     auto summary = function_summaries.get_value(called_func);
     auto& z3ctx = state->z3ctx;
 
-    state_ptr new_state = std::make_shared<State>(*state);
+    state_ptr new_state = clone_state_preserving_type(state);
+    const bool concrete_scalar_call = std::all_of(
+        call_inst->arg_begin(), call_inst->arg_end(),
+        [&](const llvm::Use& argument) {
+            if (argument->getType()->isPointerTy()) return false;
+            return state->evaluate(argument.get()).as_expr().simplify().is_numeral();
+        });
+    if (recursive && !state->is_summarizing() && !summary.has_value() &&
+        !concrete_scalar_call) {
+        new_state->status = State::UNKNOWN;
+        return new_state;
+    }
     if (summary.has_value() && !summary->is_over_approximated()) {
         const z3::expr_vector parameters = summary->get_params();
         if (parameters.size() == called_func->arg_size()) {
@@ -349,7 +816,7 @@ AInstructionCall::execute_normal(state_ptr state) {
         for (llvm::Instruction& candidate : llvm::instructions(called_func)) {
             auto* nested_call = llvm::dyn_cast<llvm::CallInst>(&candidate);
             llvm::Function* nested_callee =
-                nested_call ? nested_call->getCalledFunction() : nullptr;
+                nested_call ? resolve_called_function(nested_call) : nullptr;
             if (nested_callee && nested_callee->getName().starts_with(
                                      "__VERIFIER_nondet_")) {
                 new_state->counterexample_complete = false;
@@ -395,6 +862,15 @@ AInstructionCall::execute_normal(state_ptr state) {
             new_state->append_path_condition(lhs == rhs);
         }
         new_state->append_path_condition(summary->get_exit_condition().substitute(params, unknowns));
+        new_state->append_path_condition(
+            summary->get_iteration_condition().substitute(params,
+                                                          initial_values));
+        z3::expr relation = summary->get_relational_condition();
+        relation = relation.substitute(summary->get_relation_final_params(),
+                                       unknowns);
+        relation = relation.substitute(
+            summary->get_relation_initial_params(), initial_values);
+        new_state->append_path_condition(relation);
         new_state->step_pc();
         new_state->is_over_approx = true;
         return new_state;
@@ -428,7 +904,7 @@ state_ptr
 AInstructionCall::execute_cache(state_ptr state) {
     auto call_inst = dyn_cast_or_null<llvm::CallInst>(inst);
     assert(call_inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
     for (auto& arg : call_inst->args()) {
         if (arg->getType()->isPointerTy()) {
@@ -467,15 +943,22 @@ AInstructionCall::execute_assert(state_ptr state) {
     // assert function, add the condition to the path condition
     // and check if the condition is true
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
     auto& z3ctx = state->z3ctx;
 
     auto cond = call_inst->getArgOperand(0);
     auto cond_value = state->evaluate(cond);
-    auto new_pc = state->pc->get_next_instruction();
-    state_ptr new_state = std::make_shared<State>(*state);
+    state_ptr new_state = clone_state_preserving_type(state);
     new_state->step_pc();
+    if (state->is_summarizing()) {
+        new_state->summary_invariants.push_back(
+            cond_value.as_expr().is_bool()
+                ? cond_value
+                : cond_value != z3ctx.int_val(0));
+        new_state->status = State::RUNNING;
+        return new_state;
+    }
     new_state->status = State::VERIFYING;
     if (cond_value.as_expr().is_bool()) {
         new_state->verification_condition = cond_value;
@@ -498,7 +981,7 @@ AInstructionCall::execute_assume(state_ptr state) {
     // assume function, add the condition to the path condition
     // and check if the condition is true
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
     auto& z3ctx = state->z3ctx;
 
@@ -515,7 +998,7 @@ AInstructionCall::execute_assume(state_ptr state) {
 state_ptr
 AInstructionCall::execute_unknown(state_ptr state) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
     auto& z3ctx = state->z3ctx;
 
@@ -527,7 +1010,11 @@ AInstructionCall::execute_unknown(state_ptr state) {
     auto ret_type = call_inst->getType();
 
     if (ret_type->isIntegerTy()) {
-        result = z3ctx.int_const(name.c_str());
+        if (ret_type->getIntegerBitWidth() == 1) {
+            result = z3ctx.bool_const(name.c_str());
+        } else {
+            result = z3ctx.int_const(name.c_str());
+        }
     } else if (ret_type->isDoubleTy()) {
         result = z3ctx.real_const(name.c_str());
     } else if (ret_type->isFloatTy()) {
@@ -545,49 +1032,33 @@ AInstructionCall::execute_unknown(state_ptr state) {
     if (called_func &&
         called_func->getName().starts_with("__VERIFIER_nondet_") &&
         ret_type->isIntegerTy()) {
-        const llvm::StringRef function_name = called_func->getName();
         const unsigned width = ret_type->getIntegerBitWidth();
-        const bool is_unsigned =
-            function_name.contains("nondet_u") ||
-            function_name.ends_with("bool");
 
         const char* signed_min = nullptr;
         const char* signed_max = nullptr;
-        const char* unsigned_max = nullptr;
         switch (width) {
         case 1:
-            signed_min = "0";
-            signed_max = "1";
-            unsigned_max = "1";
             break;
         case 8:
             signed_min = "-128";
             signed_max = "127";
-            unsigned_max = "255";
             break;
         case 16:
             signed_min = "-32768";
             signed_max = "32767";
-            unsigned_max = "65535";
             break;
         case 32:
             signed_min = "-2147483648";
             signed_max = "2147483647";
-            unsigned_max = "4294967295";
             break;
         case 64:
             signed_min = "-9223372036854775808";
             signed_max = "9223372036854775807";
-            unsigned_max = "18446744073709551615";
             break;
         default:
             break;
         }
-        if (is_unsigned && unsigned_max) {
-            new_state->append_path_condition(result >= z3ctx.int_val(0));
-            new_state->append_path_condition(
-                result <= z3ctx.int_val(unsigned_max));
-        } else if (signed_min && signed_max) {
+        if (signed_min && signed_max) {
             new_state->append_path_condition(
                 result >= z3ctx.int_val(signed_min));
             new_state->append_path_condition(
@@ -630,7 +1101,31 @@ AInstructionCall::execute_malloc(state_ptr state) {
     // TODO: assume it an integer array and the size of an int is 32 bits;
     // TODO: assume it is 1-d
     z3::expr_vector dims(state->z3ctx);
-    dims.push_back((size_bytes_expr / state->z3ctx.int_val(4)).as_expr().simplify());
+    const unsigned size_width = size_bytes->getType()->getIntegerBitWidth();
+    z3::expr element_count =
+        (integer_semantics::as_unsigned(size_bytes_expr.as_expr(), size_width) /
+         4)
+            .simplify();
+    if (auto* multiply = llvm::dyn_cast<llvm::BinaryOperator>(size_bytes);
+        multiply && multiply->getOpcode() == llvm::Instruction::Mul) {
+        for (unsigned constant_index = 0; constant_index < 2;
+             ++constant_index) {
+            auto* element_size = llvm::dyn_cast<llvm::ConstantInt>(
+                multiply->getOperand(constant_index));
+            if (!element_size || !element_size->equalsInt(4)) continue;
+
+            Expression candidate =
+                state->evaluate(multiply->getOperand(1 - constant_index));
+            element_count =
+                (integer_semantics::as_unsigned(candidate.as_expr(),
+                                                size_width) %
+                 integer_semantics::power_of_two(state->z3ctx,
+                                                 size_width - 2))
+                    .simplify();
+            break;
+        }
+    }
+    dims.push_back(element_count);
     auto new_state = std::make_shared<State>(*state);
     new_state->memory.heap_alloca(call_inst, dims);
     new_state->step_pc();
@@ -640,7 +1135,7 @@ AInstructionCall::execute_malloc(state_ptr state) {
 std::vector<state_ptr>
 AInstructionCall::execute_if_not_target(state_ptr state, llvm::Function* target) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
     auto& z3ctx = state->z3ctx;
 
@@ -659,7 +1154,7 @@ std::vector<state_ptr>
 AInstructionCall::execute_naively(state_ptr state) {
     // execute the function call f(args) by simply creating z3::expr f(args)
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
     auto& z3ctx = state->z3ctx;
 
@@ -708,7 +1203,7 @@ AInstructionCall::is_recursive(llvm::Function* target) {
 std::optional<FunctionSummary>
 AInstructionCall::summarize_complete(z3::context& z3ctx) {
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
-    auto called_func = call_inst->getCalledFunction();
+    auto called_func = resolve_called_function(call_inst);
 
     FunctionSummarizer fs(called_func, z3ctx);
     return fs.get_summary();
@@ -826,13 +1321,16 @@ AInstructionZExt::execute(state_ptr state) {
     auto zext_inst = dyn_cast<llvm::ZExtInst>(inst);
     auto op = zext_inst->getOperand(0);
     auto op_value = state->evaluate(op);
-    auto& z3ctx = op_value.ctx();
-    z3::expr result(z3ctx);
+    const unsigned source_width = op->getType()->getIntegerBitWidth();
+    Expression result = map_integer_unary(
+        op_value, [&](const z3::expr& value) {
+            return integer_semantics::as_unsigned(value, source_width);
+        });
 
     state_ptr new_state = std::make_shared<State>(*state);
     // new_state->write(inst, op_value);
     // new_state->memory.allocate(inst, op_value);
-    new_state->memory.put_temp(inst, op_value);
+    new_state->memory.put_temp(inst, result);
     new_state->step_pc();
     return {new_state};
 }
@@ -842,13 +1340,31 @@ AInstructionSExt::execute(state_ptr state) {
     auto sext_inst = dyn_cast_or_null<llvm::SExtInst>(inst);
     auto op = sext_inst->getOperand(0);
     auto op_value = state->evaluate(op);
-    auto& z3ctx = op_value.ctx();
-    z3::expr result(z3ctx);
+    const unsigned source_width = op->getType()->getIntegerBitWidth();
+    if (has_canonical_signed_representation(op)) {
+        state_ptr new_state = std::make_shared<State>(*state);
+        new_state->memory.put_temp(inst, op_value);
+        new_state->step_pc();
+        return {new_state};
+    }
+    z3::expr assumptions = state->get_path_condition().as_expr() &&
+                           op_value.defined();
+    Expression result = map_integer_unary(
+        op_value, [&](const z3::expr& value) {
+            z3::expr integer = integer_semantics::as_int(value);
+            if (ari_exe::implies(
+                    assumptions,
+                    integer_semantics::in_signed_range(integer,
+                                                       source_width))) {
+                return integer;
+            }
+            return integer_semantics::as_signed(value, source_width);
+        });
 
     state_ptr new_state = std::make_shared<State>(*state);
     // new_state->write(inst, op_value);
     // new_state->memory.allocate(inst, op_value);
-    new_state->memory.put_temp(inst, op_value);
+    new_state->memory.put_temp(inst, result);
     new_state->step_pc();
     return {new_state};
 }
@@ -983,7 +1499,7 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     for (llvm::BasicBlock* block : loop->blocks()) {
         for (llvm::Instruction& candidate : *block) {
             auto* call = llvm::dyn_cast<llvm::CallInst>(&candidate);
-            llvm::Function* callee = call ? call->getCalledFunction()
+            llvm::Function* callee = call ? resolve_called_function(call)
                                           : nullptr;
             if (!callee ||
                 !callee->getName().starts_with("__VERIFIER_nondet_")) {
@@ -1095,23 +1611,22 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         for (int i = 0; i < closed_forms.size(); i++) {
             auto modified_value = modified_values[i];
             auto N = summary->get_N();
+            z3::expr summarized_value = closed_forms[i];
             if (N.has_value()) {
                 z3::expr_vector src(z3ctx);
                 z3::expr_vector dst(z3ctx);
                 src.push_back(manager->get_ind_var());
                 dst.push_back(N.value());
-                // new_state->write(modified_value, closed_forms[i].substitute(src, dst));
-                // new_state->memory.allocate(modified_value, closed_forms[i].substitute(src, dst));
-                if (auto obj = new_state->memory.get_object_pointed_by(modified_value)) {
-                    obj->write(closed_forms[i].substitute(src, dst));
-                } else {
-                    new_state->memory.put_temp(modified_value, closed_forms[i].substitute(src, dst));
-                }
-
+                summarized_value = summarized_value.substitute(src, dst);
+            }
+            if (auto obj =
+                    new_state->memory.get_object_pointed_by(modified_value)) {
+                obj->write(summarized_value);
             } else {
-                new_state->memory.put_temp(modified_value, closed_forms[i]);
+                new_state->memory.put_temp(modified_value, summarized_value);
             }
         }
+        new_state->append_path_condition(summary->get_constraints());
     }
     // loop summary only computes the values of phi nodes and store instructions
     // so we need to execute the instructions in the header until the terminator
@@ -1195,9 +1710,14 @@ AInstruction::get_block() {
 
 static MemoryAddress_ty
 parse_ptr(const MemoryObjectPtr ptr, state_ptr state) {
-    assert(ptr->is_pointer() && "Pointer object expected");
+    if (!ptr || !ptr->is_pointer()) {
+        throw std::runtime_error("Pointer object expected while resolving memory address");
+    }
     auto pointed_addr = ptr->get_ptr_value();
     auto pointed_obj = state->memory.get_object(pointed_addr);
+    if (!pointed_obj) {
+        throw std::runtime_error("Pointer target is missing from symbolic memory");
+    }
     if (!pointed_obj->is_pointer()) {
         return pointed_addr;
     }
@@ -1214,13 +1734,28 @@ parse_gep(llvm::GetElementPtrInst* gep, state_ptr state) {
     // it points to, based on the operands and the current state.
     auto& z3ctx = state->z3ctx;
     auto ptr_operand = gep->getPointerOperand();
-    auto pointed_obj = state->memory.get_object_pointed_by(ptr_operand);
+    auto ptr_obj = state->memory.get_object(ptr_operand);
+    if (!ptr_obj) {
+        throw std::runtime_error(
+            "The base pointer has no symbolic-memory binding for GEP: " +
+            llvm_value_to_string(*gep));
+    }
+    if (!ptr_obj->is_pointer()) {
+        throw std::runtime_error(
+            "The GEP base was overwritten by a scalar value: " +
+            llvm_value_to_string(*gep));
+    }
+    auto pointed_obj = state->memory.get_object(ptr_obj->get_ptr_value());
+    if (!pointed_obj) {
+        throw std::runtime_error(
+            "The GEP base points outside symbolic memory: " +
+            llvm_value_to_string(*gep));
+    }
 
     std::vector<Expression> offsets;
 
     MemoryAddress_ty addr;
     if (!pointed_obj->is_pointer()) {
-        auto ptr_obj = state->memory.get_object(ptr_operand);
         addr = ptr_obj->get_ptr_value();
     } else {
         addr = parse_ptr(pointed_obj, state);
@@ -1240,6 +1775,9 @@ AInstructionLoad::execute(state_ptr state) {
     state_ptr new_state = std::make_shared<State>(*state);
 
     auto addr = parse_ptr(new_state->memory.get_object(ptr), new_state);
+    for (const Expression& offset : addr.offset) {
+        new_state->append_path_condition(Expression(offset.defined()));
+    }
     auto pointed_obj = new_state->memory.get_object(addr);
     assert(pointed_obj && "Pointed object must exist");
 
@@ -1278,10 +1816,19 @@ AInstructionStore::execute(state_ptr state) {
     auto pointer_obj = new_state->memory.get_object(ptr);
 
     auto offset = pointer_obj->get_ptr_value().offset;
+    for (const Expression& index : offset) {
+        new_state->append_path_condition(Expression(index.defined()));
+    }
 
     auto pointed_obj = new_state->memory.get_object_pointed_by(ptr);
     auto value_expr = state->evaluate(value, pointed_obj->is_signed());
     assert(pointed_obj && "Pointed object must exist");
+    if (value->getType()->isIntegerTy() &&
+        !has_canonical_signed_representation(value)) {
+        value_expr = canonicalize_signed(
+            value_expr, value->getType()->getIntegerBitWidth(),
+            new_state->get_path_condition().as_expr());
+    }
     pointed_obj->write(offset, value_expr);
 
     new_state->step_pc();
@@ -1308,23 +1855,8 @@ std::vector<state_ptr>
 AInstructionDebug::execute(state_ptr state) {
     // Debug instructions are not executed, just skipped
     if (auto dbg_declare = llvm::dyn_cast_or_null<llvm::DbgDeclareInst>(inst)) {
-        auto* var = dbg_declare->getVariable();
         auto llvm_value = dbg_declare->getAddress();
         assert(llvm_value->getType()->isPointerTy() && "Expected a pointer type for debug declare");
-        if (auto* diType = var->getType()) {
-            if (diType->getName().contains("unsigned char")) {
-                auto addr = parse_ptr(state->memory.get_object(llvm_value), state);
-                auto pointed_obj = state->memory.get_object(addr);
-                pointed_obj->set_signed(true);
-                state->append_path_condition(pointed_obj->get_value() >= state->z3ctx.int_val(0));
-                state->append_path_condition(pointed_obj->get_value() <= state->z3ctx.int_val(255));
-            } else if (diType->getName().contains("unsigned")) {
-                auto addr = parse_ptr(state->memory.get_object(llvm_value), state);
-                auto pointed_obj = state->memory.get_object(addr);
-                pointed_obj->set_signed(false);
-                state->append_path_condition(pointed_obj->get_value() >= state->z3ctx.int_val(0));
-            }
-        }
     } else if (auto dbg_value = llvm::dyn_cast_or_null<llvm::DbgValueInst>(inst)) {
         auto* llvm_value = dbg_value->getValue();
         if (llvm_value->getType()->isPointerTy()) {
@@ -1337,18 +1869,6 @@ AInstructionDebug::execute(state_ptr state) {
                     size = size / size.ctx().int_val(2);
                 }
                 obj->set_sizes(ori_size);
-            }
-        } else if (!llvm::isa<llvm::Constant>(llvm_value)) {
-            if (auto* diType = dbg_value->getVariable()->getType()) {
-                auto obj = state->memory.get_object(llvm_value);
-                if (diType->getName().contains("unsigned char")) {
-                    obj->set_signed(false);
-                    state->append_path_condition(state->evaluate(llvm_value) >= state->z3ctx.int_val(0));
-                    state->append_path_condition(state->evaluate(llvm_value) <= state->z3ctx.int_val(255));
-                } else if (diType->getName().contains("unsigned")) {
-                    obj->set_signed(false);
-                    state->append_path_condition(state->evaluate(llvm_value) >= state->z3ctx.int_val(0));
-                }
             }
         }
     } else {
@@ -1364,13 +1884,18 @@ AInstructionTrunc::execute(state_ptr state) {
     auto trunc_inst = dyn_cast<llvm::TruncInst>(inst);
     auto op = trunc_inst->getOperand(0);
     auto op_value = state->evaluate(op);
-    auto& z3ctx = op_value.ctx();
-    z3::expr result(z3ctx);
+    const unsigned target_width = trunc_inst->getType()->getIntegerBitWidth();
+    Expression result = map_integer_unary(
+        op_value, [&](const z3::expr& value) {
+            return integer_semantics::from_bv(
+                integer_semantics::to_bv(value, target_width),
+                target_width);
+        });
 
     state_ptr new_state = std::make_shared<State>(*state);
     // new_state->write(inst, op_value);
     // new_state->memory.allocate(inst, op_value);
-    new_state->memory.put_temp(inst, op_value);
+    new_state->memory.put_temp(inst, result);
     new_state->step_pc();
     return {new_state};
 }

@@ -5,20 +5,28 @@ using namespace ari_exe;
 
 void
 State::append_path_condition(const Expression& _path_condition) {
-    auto z3_cond = _path_condition.as_expr();
-    if (z3_cond.is_int()) {
-        path_condition = path_condition && z3_cond != 0;
-    } else {
-        path_condition = path_condition && z3_cond;
-    }
+    auto normalize_bool = [](const z3::expr& expr) {
+        return expr.is_int() ? expr != 0 : expr;
+    };
+
+    auto current = normalize_bool(path_condition.as_expr());
+    auto appended = normalize_bool(_path_condition.as_expr());
+    z3::expr_vector conditions(z3ctx);
+    z3::expr_vector expressions(z3ctx);
+    conditions.push_back(z3ctx.bool_val(true));
+    expressions.push_back(current && _path_condition.defined() && appended);
+    path_condition = Expression(conditions, expressions);
+    model.reset();
 }
 
 Expression
 State::evaluate(llvm::Value* v, bool is_signed) {
+    (void)is_signed;
     if (auto undef = llvm::dyn_cast_or_null<llvm::UndefValue>(v)) {
         // If the value is an undef, return a fresh symbolic variable
         auto ty = v->getType();
-        std::string name = (undef->getName() + v->getName()).str();
+        std::string name =
+            "ari_undef_" + std::to_string(session.next_call_value_id(v));
         if (ty->isIntegerTy()) {
             if (ty->getIntegerBitWidth() == 1) {
                 // For boolean types, we can use a boolean constant
@@ -38,15 +46,11 @@ State::evaluate(llvm::Value* v, bool is_signed) {
         if (constant->getBitWidth() == 1) {
             return Expression(z3ctx.bool_val(constant->getSExtValue()));
         }
-        if (is_signed)
-            return Expression(z3ctx.int_val(constant->getSExtValue()));
-        else
-            return Expression(z3ctx.int_val(constant->getZExtValue()));
+        return Expression(z3ctx.int_val(constant->getSExtValue()));
     }
     auto obj = memory.get_object(v);
     if (obj) {
-        auto res = obj->read().as_expr();
-        return res;
+        return obj->read();
     }
     assert(false && "Value not found in memory");
     return Expression(); // return something to avoid compiler warning

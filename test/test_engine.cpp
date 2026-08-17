@@ -73,6 +73,27 @@ TEST(EngineRegression, ReverifyStartsWithFreshStateQueue) {
     EXPECT_EQ(engine.verify(), HOLD);
 }
 
+TEST(IntegerSemantics, CastsPreserveLLVMBitPatterns) {
+    EXPECT_EQ(verify_benchmark("loop_free/true_integer_casts.c"), HOLD);
+}
+
+TEST(IntegerSemantics, UnsignedOperationsUseUnsignedInterpretation) {
+    EXPECT_EQ(verify_benchmark("loop_free/true_unsigned_integer_ops.c"),
+              HOLD);
+}
+
+TEST(IntegerSemantics, BitwiseAndShiftOperationsUseFixedWidths) {
+    EXPECT_EQ(verify_benchmark("loop_free/true_bitwise_shifts.c"), HOLD);
+}
+
+TEST(IntegerSemantics, PoisonShiftPathIsUndefined) {
+    EXPECT_EQ(verify_benchmark("loop_free/true_poison_integer_ops.c"), HOLD);
+}
+
+TEST(IntegerSemantics, UnsafeUnsignedShiftIsReported) {
+    EXPECT_EQ(verify_benchmark("loop_free/false_unsigned_shift.c"), FAIL);
+}
+
 TEST(BENCHMARK_ARRAYS_LOOP, true_1) {
     auto veri_res = verify_benchmark("arrays/loop/true_1.c");
     EXPECT_EQ(veri_res, HOLD) << "Failed on: benchmark/arrays/loop/true_1.c";

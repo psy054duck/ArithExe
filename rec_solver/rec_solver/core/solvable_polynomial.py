@@ -79,8 +79,8 @@ def solve_for_exponential_polynomial(bases_multi_dict, func_decls, first_n_value
 def gen_exponential_polynomials_template(bases_multi_dict, ind_var):
     template = z3.IntVal(0)
     unknowns = []
-    for base, multi in bases_multi_dict.items():
-        poly_template, coeffs = gen_polynomial_template_for_degree(ind_var, multi-1, str(base))
+    for base_index, (base, multi) in enumerate(bases_multi_dict.items()):
+        poly_template, coeffs = gen_polynomial_template_for_degree(ind_var, multi-1, "base_%d" % base_index)
         if base == 0:
             # template += sp_poly_template*sp.Piecewise((1, sp.Eq(utils.to_sympy(ind_var), 0)), (0, True))
             template += poly_template*z3.If(ind_var == 0, 1, 0)
@@ -108,9 +108,9 @@ def z3_pow(expr, p):
         for _ in range(p):
             res *= expr
         return res
-    z3_pow = z3.Function('Pow', z3.RealSort(), z3.IntSort(), z3.IntSort())
+    pow_func = z3.Function('Pow', z3.RealSort(), z3.IntSort(), z3.IntSort())
     base = utils.num2z3(expr)
-    return z3_pow(expr, p)
+    return pow_func(base, p)
 
 def get_layers_for_solvable_map(rec: LoopRecurrence):
     # digraph, functions = build_adjacency_matrix(rec)

@@ -323,28 +323,26 @@ def solve_nearly_tail(rec: MultiRecurrence, is_array=False):
     scalar_closed_form = loop_closed_form.subs({d: piecewise_D})
     branches_rets = [[] for _ in range(len(rets))]
     for base_case in rec.get_base_cases():
-        cond = base_case.condition
-        ops = base_case.op
-        if isinstance(ops, list) and len(ops) > 0 and isinstance(ops[0], tuple):
-            assert(len(ops) == 1)
-            ops = ops[0][0]
-        vars_bases_case = reduce(set.union, [utils.get_vars(op) for op in ops])
-        # args = utils.get_vars(cond) | reduce(set.union, [utils.get_vars(op) for op in ops])
-        # args = utils.get_vars(cond) | vars_bases_case
-        args = set(rec.func_sig.children())
-        symbol2func_mapping = {arg: symbol2func(arg)(d) for arg in args}
-        op_funcs = (z3.substitute(op, *list(symbol2func_mapping.items())) for op in ops)
-        cond_func = z3.substitute(cond, *list(symbol2func_mapping.items()))
-        ops_D = (z3.substitute(op_func, *list(scalar_closed_form.as_dict().items())) for op_func in op_funcs)
-        cond_D = z3.substitute(cond_func, *list(scalar_closed_form.as_dict().items()))
-        ############################################################################
-        # cond_D contains lots of ite, case analysis
-        ############################################################################
-        conditions_D, expressions_D = expr2piecewise(cond_D)
+        alternatives = [(base_case.op, z3.BoolVal(True))]
+        if isinstance(base_case.op, list):
+            alternatives = base_case.op
 
-        for branches, op_D in zip(branches_rets, ops_D):
-            for (cond_D, expr_D) in zip(conditions_D, expressions_D):
-                branches.append((op_D, my_simplify(z3.And(cond_D, expr_D), precondition)))
+        for ops, alternative_condition in alternatives:
+            cond = z3.And(base_case.condition, alternative_condition)
+            args = set(rec.func_sig.children())
+            symbol2func_mapping = {arg: symbol2func(arg)(d) for arg in args}
+            op_funcs = (z3.substitute(op, *list(symbol2func_mapping.items())) for op in ops)
+            cond_func = z3.substitute(cond, *list(symbol2func_mapping.items()))
+            ops_D = (z3.substitute(op_func, *list(scalar_closed_form.as_dict().items())) for op_func in op_funcs)
+            cond_D = z3.substitute(cond_func, *list(scalar_closed_form.as_dict().items()))
+            ############################################################################
+            # cond_D contains lots of ite, case analysis
+            ############################################################################
+            conditions_D, expressions_D = expr2piecewise(cond_D)
+
+            for branches, op_D in zip(branches_rets, ops_D):
+                for (piece_condition, piece_value) in zip(conditions_D, expressions_D):
+                    branches.append((op_D, my_simplify(z3.And(piece_condition, piece_value), precondition)))
 
     res_branches = []
     for branches in branches_rets:
@@ -473,13 +471,73 @@ def compute_D_by_case(d, D, loop_cond, case, hints, preconditions=z3.BoolVal(Tru
 def symbol2func(sym):
     return z3.Function(sym.decl().name(), z3.IntSort(), z3.IntSort())
 
+def solve_bounded_univariate(rec: MultiRecurrence, bound=64):
+    """Compute exact values in a finite interval and over-approximate outside it."""
+    if len(rec.func_sig.children()) != 1 or rec.number_ret() != 1:
+        raise ValueError("bounded fallback requires one argument and one result")
+
+    arg = rec.func_sig.arg(0)
+    memo = {}
+    active = set()
+
+    def condition_holds(condition, value):
+        instantiated = z3.simplify(z3.substitute(condition, (arg, z3.IntVal(value))))
+        return z3.Solver().check(z3.Not(instantiated)) == z3.unsat
+
+    def evaluate(value):
+        if value in memo:
+            return memo[value]
+        if value in active or value < -bound or value > bound:
+            return None
+        active.add(value)
+        try:
+            for case in rec.get_base_cases():
+                if condition_holds(case.condition, value):
+                    result = z3.simplify(
+                        z3.substitute(case.op[0], (arg, z3.IntVal(value))))
+                    memo[value] = result
+                    return result
+
+            for case in rec.get_rec_cases():
+                if not condition_holds(case.condition, value):
+                    continue
+                substitutions = [(arg, z3.IntVal(value))]
+                for name, call in case.recursive_calls.items():
+                    call_arg = z3.simplify(
+                        z3.substitute(call.arg(0), (arg, z3.IntVal(value))))
+                    if not z3.is_int_value(call_arg):
+                        return None
+                    call_value = evaluate(call_arg.as_long())
+                    if call_value is None:
+                        return None
+                    substitutions.append((name, call_value))
+                result = z3.simplify(z3.substitute(case.op[0], substitutions))
+                memo[value] = result
+                return result
+            return None
+        finally:
+            active.remove(value)
+
+    fallback = z3.Function(
+        rec.func_sig.decl().name() + "_fallback", z3.IntSort(), z3.IntSort())
+    result = fallback(arg)
+    for value in range(bound, -bound - 1, -1):
+        exact = evaluate(value)
+        if exact is not None:
+            result = z3.If(arg == value, exact, result)
+
+    for case in reversed(rec.get_base_cases()):
+        result = z3.If(case.condition, case.op[0], result)
+    return MultiFuncClosedForm(rec.func_sig, z3.simplify(result))
+
 def solve_multivariate_rec(rec: MultiRecurrence, is_array=False):
     # rec.pprint()
     if rec.is_nearly_tail():
         closed_forms = solve_nearly_tail(rec, is_array=is_array)
     else:
-        new_rec = rec2nearly_tail(rec)
-        # new_rec.pprint()
-        closed_forms = solve_nearly_tail(new_rec, is_array=is_array)
-        # raise Exception('not a nearly tail recursion')
+        try:
+            return solve_bounded_univariate(rec)
+        except (ValueError, z3.Z3Exception):
+            new_rec = rec2nearly_tail(rec)
+            closed_forms = solve_nearly_tail(new_rec, is_array=is_array)
     return MultiFuncClosedForm(rec.func_sig, closed_forms[0])

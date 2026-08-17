@@ -82,7 +82,13 @@ Engine::run(state_ptr state) {
             capture_function_certificates(cur_state);
             continue;
         } else if (cur_state->status == State::VERIFYING) {
-            auto res = verify(cur_state);
+            VeriResult res;
+            try {
+                res = verify(cur_state);
+            } catch (const z3::exception& error) {
+                throw std::runtime_error("while checking an assertion: " +
+                                         std::string(error.msg()));
+            }
             // early terminate if unsafe path is found
             results.push_back(res);
             // llvm::errs() << cur_state->memory.to_string() << "\n";
@@ -93,7 +99,14 @@ Engine::run(state_ptr state) {
                                             : cur_state->pc->inst;
                 return;
             }
-            cur_state->append_path_condition(cur_state->verification_condition);
+            try {
+                cur_state->State::append_path_condition(
+                    cur_state->verification_condition);
+            } catch (const z3::exception& error) {
+                throw std::runtime_error(
+                    "while recording a verified assertion: " +
+                    std::string(error.msg()));
+            }
             cur_state->status = State::RUNNING;
             states.push(cur_state);
             continue;
@@ -147,7 +160,20 @@ Engine::run(state_ptr state) {
             return;
         }
         assert(cur_state->status == State::RUNNING);
-        auto new_states = step(cur_state);
+        std::vector<state_ptr> new_states;
+        try {
+            new_states = step(cur_state);
+        } catch (const z3::exception& error) {
+            throw std::runtime_error(
+                "while executing LLVM " +
+                std::string(cur_state->pc->inst->getOpcodeName()) + ": " +
+                error.msg());
+        } catch (const std::exception& error) {
+            throw std::runtime_error(
+                "while executing LLVM " +
+                std::string(cur_state->pc->inst->getOpcodeName()) + ": " +
+                error.what());
+        }
         for (auto& new_state : new_states) states.push(new_state);
     }
 }
@@ -186,17 +212,54 @@ Engine::run() {
 VeriResult
 Engine::verify(state_ptr state) {
     auto activation = session->activate();
+    z3::expr path_condition(z3ctx);
+    z3::expr assertion_defined(z3ctx);
+    z3::expr assertion(z3ctx);
+    try {
+        path_condition = state->get_path_condition().as_expr();
+    } catch (const z3::exception& error) {
+        throw std::runtime_error("failed to assemble assertion path: " +
+                                 std::string(error.msg()));
+    }
+    try {
+        assertion_defined = state->verification_condition.defined();
+    } catch (const z3::exception& error) {
+        throw std::runtime_error("failed to assemble assertion definedness: " +
+                                 std::string(error.msg()));
+    }
+    try {
+        assertion = state->verification_condition.as_expr();
+    } catch (const z3::exception& error) {
+        throw std::runtime_error("failed to assemble verification condition: " +
+                                 std::string(error.msg()));
+    }
+    if (!path_condition.is_bool()) {
+        throw std::runtime_error("assertion path condition is not Boolean");
+    }
+    if (!assertion_defined.is_bool()) {
+        throw std::runtime_error("assertion definedness is not Boolean");
+    }
+    if (!assertion.is_bool()) {
+        throw std::runtime_error("verification condition is not Boolean");
+    }
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->get_path_condition().as_expr());
-    assumptions.push_back(!state->verification_condition.as_expr());
+    assumptions.push_back(path_condition);
+    assumptions.push_back(assertion_defined);
+    assumptions.push_back(!assertion);
     // llvm::errs() << state->get_path_condition().as_expr().to_string() << "\n";
     // llvm::errs() << assumptions.to_string() << "\n";
     // Each program assertion is an independent query. Reusing Z3's
     // incremental state here can make a later nonlinear query dramatically
     // slower after an earlier UNSAT result.
     solver.reset();
-    solver.add(assumptions);
-    auto res = solver.check();
+    z3::check_result res = z3::unknown;
+    try {
+        solver.add(assumptions);
+        res = solver.check();
+    } catch (const z3::exception& error) {
+        throw std::runtime_error("Z3 assertion query failed: " +
+                                 std::string(error.msg()));
+    }
     VeriResult result;
     switch (res) {
         case z3::unsat:

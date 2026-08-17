@@ -1,4 +1,5 @@
 #include "FunctionSummarizer.h"
+#include "IntegerSemantics.h"
 #include <spdlog/spdlog.h>
 
 using namespace ari_exe;
@@ -35,6 +36,7 @@ RecExecution::build_initial_state() {
     // set up the stack
     Memory memory;
     memory.push_frame(F); 
+    z3::expr initial_condition = z3ctx.bool_val(true);
     for (auto& arg : F->args()) {
         auto name = "ari_" + arg.getName().str();
         auto arg_value = z3ctx.int_const(name.c_str());
@@ -43,6 +45,16 @@ RecExecution::build_initial_state() {
         if (arg.getType()->isPointerTy()) {
             auto obj = memory.allocate(&arg, z3::expr_vector(z3ctx));
             obj->write(arg_value);
+            for (llvm::User* user : arg.users()) {
+                auto* load = llvm::dyn_cast<llvm::LoadInst>(user);
+                if (!load || !load->getType()->isIntegerTy()) continue;
+                initial_condition =
+                    initial_condition &&
+                    integer_semantics::in_signed_range(
+                        arg_value,
+                        load->getType()->getIntegerBitWidth());
+                break;
+            }
         } else {
             memory.put_temp(&arg, arg_value);
         }
@@ -50,7 +62,7 @@ RecExecution::build_initial_state() {
     auto pc = &*F->getEntryBlock().getFirstNonPHIOrDbg();
     auto initial_state = std::make_shared<RecState>(State(
         VerificationSession::current(), z3ctx, AInstruction::create(pc),
-        nullptr, memory, z3ctx.bool_val(true), {}));
+        nullptr, memory, initial_condition, {}));
     return initial_state;
 }
 
@@ -61,7 +73,13 @@ RecExecution::step(state_ptr state, bool unfold) {
     auto call_llvm_inst = llvm::dyn_cast_or_null<llvm::CallInst>(pc->inst);
     if (auto call_inst = dynamic_cast<AInstructionCall*>(pc)) {
         auto called_func = call_llvm_inst->getCalledFunction();
-        if (unfold && called_func && called_func->hasExactDefinition()) {
+        if (!called_func) {
+            called_func = llvm::dyn_cast<llvm::Function>(
+                call_llvm_inst->getCalledOperand()->stripPointerCasts());
+        }
+        if (called_func && called_func->getName().ends_with("assert")) {
+            next_states = call_inst->execute(state);
+        } else if (unfold && called_func && called_func->hasExactDefinition()) {
             next_states = call_inst->execute_if_not_target(state, F);
         } else if (called_func && called_func->hasExactDefinition()) {
             next_states = call_inst->execute_naively(state);
@@ -143,8 +161,12 @@ FunctionSummarizer::summarize() {
         } else {
             summarize_scalar();
         }
+    } catch (const std::exception& error) {
+        spdlog::info("fail to summarize function {}: {}", F->getName().str(),
+                     error.what());
     } catch (...) {
-        spdlog::info("fail to summarize function: {}", F->getName().str());
+        spdlog::info("fail to summarize function {}: unknown error",
+                     F->getName().str());
     }
 }
 
@@ -231,17 +253,22 @@ FunctionSummarizer::summarize_pointers() {
     }
 
     std::vector<z3::expr> conditions;
+    std::vector<z3::expr> raw_conditions;
     std::vector<rec_ty> rec_eqs;
+    std::vector<z3::expr_vector> raw_transitions;
 
     for (auto& state : rec_states) {
         auto path_cond = state->get_path_condition().as_expr();
-        conditions.push_back(path_cond.substitute(src, dst).simplify());
         rec_ty rec_eq;
+        z3::expr_vector raw_transition(z3ctx);
         for (auto& arg : F->args()) {
             auto obj = state->memory.get_object_pointed_by(&arg);
             auto name = get_z3_name(arg.getName().str());
             auto func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
-            auto obj_value = obj->get_value().as_expr();
+            Expression stored_value = obj->get_value();
+            path_cond = path_cond && stored_value.defined();
+            auto obj_value = stored_value.as_expr();
+            raw_transition.push_back(obj_value);
             auto value = obj_value.substitute(src, dst);
             if (value.to_string().find("_unknown_") != std::string::npos) {
                 spdlog::warn("Unknown value found in function: {} for argument: {}", F->getName().str(), arg.getName().str());
@@ -249,19 +276,158 @@ FunctionSummarizer::summarize_pointers() {
             }
             rec_eq.insert_or_assign(func(manager->get_ind_var() + 1), value);
         }
+        raw_conditions.push_back(path_cond);
+        conditions.push_back(path_cond.substitute(src, dst).simplify());
         rec_eqs.push_back(rec_eq);
+        raw_transitions.push_back(raw_transition);
     }
+
+    z3::expr_vector relation_initial_params(z3ctx);
+    z3::expr_vector relation_final_params(z3ctx);
+    for (const z3::expr& param : params) {
+        relation_initial_params.push_back(z3ctx.int_const(
+            ("ari_initial_" + param.decl().name().str()).c_str()));
+        relation_final_params.push_back(z3ctx.int_const(
+            ("ari_final_" + param.decl().name().str()).c_str()));
+    }
+
+    std::vector<z3::expr> relation_candidates;
+    for (unsigned i = 0; i < params.size(); ++i) {
+        for (int modulus : {2, 4, 8, 16}) {
+            relation_candidates.push_back(
+                params[i] % modulus == relation_initial_params[i] % modulus);
+        }
+        for (unsigned j = i + 1; j < params.size(); ++j) {
+            relation_candidates.push_back(z3::implies(
+                relation_initial_params[i] == relation_initial_params[j],
+                params[i] == params[j]));
+        }
+    }
+
+    std::set<std::string> internal_invariant_keys;
+    z3::expr_vector internal_current_predicates(z3ctx);
+    z3::expr_vector internal_initial_predicates(z3ctx);
+    for (const auto& state : final_states) {
+        for (const Expression& invariant : state->summary_invariants) {
+            z3::expr current_predicate = invariant.as_expr().simplify();
+            std::string key = current_predicate.to_string();
+            if (!internal_invariant_keys.insert(key).second) continue;
+            z3::expr initial_predicate =
+                current_predicate.substitute(src, relation_initial_params)
+                    .simplify();
+            internal_current_predicates.push_back(current_predicate);
+            internal_initial_predicates.push_back(initial_predicate);
+            relation_candidates.push_back(
+                z3::implies(initial_predicate, current_predicate));
+        }
+    }
+    if (internal_current_predicates.size() > 1) {
+        z3::expr current_conjunction =
+            z3::mk_and(internal_current_predicates).simplify();
+        z3::expr initial_conjunction =
+            z3::mk_and(internal_initial_predicates).simplify();
+        internal_invariant_keys.insert(current_conjunction.to_string());
+        relation_candidates.push_back(
+            z3::implies(initial_conjunction, current_conjunction));
+    }
+
+    z3::expr relational_condition = z3ctx.bool_val(true);
+    bool proved_internal_invariant = false;
+    for (z3::expr candidate : relation_candidates) {
+        bool inductive = true;
+        for (unsigned transition_index = 0;
+            transition_index < raw_transitions.size(); ++transition_index) {
+            z3::solver checker(z3ctx);
+            checker.set("timeout", 200u);
+            checker.add(candidate);
+            checker.add(raw_conditions[transition_index]);
+            checker.add(!candidate.substitute(
+                src, raw_transitions[transition_index]));
+            z3::check_result check_result = checker.check();
+            if (check_result != z3::unsat) {
+                inductive = false;
+                break;
+            }
+        }
+        if (inductive) {
+            relational_condition = relational_condition && candidate;
+            if (internal_invariant_keys.contains(
+                    candidate.arg(1).to_string())) {
+                proved_internal_invariant = true;
+            }
+        }
+    }
+    relational_condition = relational_condition
+                               .substitute(src, relation_final_params)
+                               .simplify();
+
     rec_solver rec_s(z3ctx);
     rec_s.set_eqs(conditions, rec_eqs);
     rec_s.add_initial_values(initial_lhs, initial_rhs);
-    rec_s.solve();
-    auto closed = rec_s.get_res();
+    const bool has_modular_transition = std::any_of(
+        rec_eqs.begin(), rec_eqs.end(), [](const rec_ty& equations) {
+            return std::any_of(
+                equations.begin(), equations.end(), [](const auto& equation) {
+                    return equation.second.to_string().find("(mod ") !=
+                           std::string::npos;
+                });
+        });
+    const bool recurrence_solved =
+        !proved_internal_invariant && !has_modular_transition && rec_s.solve();
+    auto closed = recurrence_solved ? rec_s.get_res() : closed_form_ty{};
+    if (closed.empty() && relational_condition.is_true()) {
+        return false;
+    }
     closed_form_ty closed_form;
     for (auto & [key, value] : closed) {
         closed_form.insert_or_assign(key, value);
     }
-    
-    summary = FunctionSummary(params, closed_form, exit_cond);
+
+    z3::expr N = manager->get_ind_var();
+    z3::expr iteration_condition =
+        closed.empty() ? z3ctx.bool_val(true) : N >= 0;
+    const bool guards_are_stable = std::none_of(
+        conditions.begin(), conditions.end(), [](const z3::expr& condition) {
+            return condition.to_string().find("_unknown_") !=
+                   std::string::npos;
+        });
+    if (!closed.empty() && guards_are_stable && !conditions.empty()) {
+        z3::expr_vector predecessor_values(z3ctx);
+        z3::expr_vector n_src(z3ctx);
+        z3::expr_vector n_dst(z3ctx);
+        n_src.push_back(N);
+        n_dst.push_back(N - 1);
+        bool complete = true;
+        for (const z3::expr& param : params) {
+            auto found = std::find_if(
+                closed_form.begin(), closed_form.end(),
+                [&](const auto& entry) {
+                    return entry.first.decl().name().str() ==
+                           param.decl().name().str();
+                });
+            if (found == closed_form.end()) {
+                complete = false;
+                break;
+            }
+            predecessor_values.push_back(
+                found->second.substitute(n_src, n_dst).simplify());
+        }
+        if (complete) {
+            z3::expr recursive_guard = z3ctx.bool_val(false);
+            for (const z3::expr& condition : conditions) {
+                recursive_guard = recursive_guard || condition;
+            }
+            recursive_guard =
+                recursive_guard.substitute(src, predecessor_values).simplify();
+            iteration_condition =
+                iteration_condition &&
+                ari_exe::implies(N > 0, recursive_guard);
+        }
+    }
+
+    summary = FunctionSummary(params, closed_form, exit_cond,
+                              iteration_condition, relation_initial_params,
+                              relation_final_params, relational_condition);
     return true;
 }
 

@@ -65,7 +65,7 @@ MemoryObject::write(const std::vector<Expression>& _index, const Expression& v) 
     for (int i = 0; i < index.size(); i++) {
         new_condition = new_condition && indices[i] == index[i].as_expr();
     }
-    value.push_front(new_condition, v.as_expr());
+    value.push_front(new_condition, v);
 }
 
 z3::expr

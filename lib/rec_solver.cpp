@@ -51,6 +51,111 @@ namespace {
         return raw == nullptr ? "" : raw;
     }
 
+    std::optional<z3::expr> find_innermost_ite(const z3::expr& expression) {
+        // Hoisting a branch condition out of a quantifier would leave its
+        // de Bruijn variables unbound in the generated recurrence.
+        if (expression.is_quantifier()) return std::nullopt;
+        for (const z3::expr& argument : expression.args()) {
+            if (auto nested = find_innermost_ite(argument)) return nested;
+        }
+        if (expression.is_app() &&
+            expression.decl().decl_kind() == Z3_OP_ITE) {
+            return expression;
+        }
+        return std::nullopt;
+    }
+
+    bool depends_on_recurrence(
+        const z3::expr& expression,
+        const std::set<unsigned>& recurrence_declarations,
+        const z3::expr& induction_variable) {
+        if (z3::eq(expression, induction_variable)) return true;
+        if (expression.is_app() &&
+            recurrence_declarations.contains(expression.decl().id())) {
+            return true;
+        }
+        for (const z3::expr& argument : expression.args()) {
+            if (depends_on_recurrence(argument, recurrence_declarations,
+                                      induction_variable)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::optional<z3::expr> find_invariant_ite(
+        const z3::expr& expression,
+        const std::set<unsigned>& recurrence_declarations,
+        const z3::expr& induction_variable) {
+        if (expression.is_quantifier()) return std::nullopt;
+        for (const z3::expr& argument : expression.args()) {
+            if (auto nested = find_invariant_ite(
+                    argument, recurrence_declarations, induction_variable)) {
+                return nested;
+            }
+        }
+        if (expression.is_app() &&
+            expression.decl().decl_kind() == Z3_OP_ITE &&
+            !depends_on_recurrence(expression, recurrence_declarations,
+                                   induction_variable)) {
+            return expression;
+        }
+        return std::nullopt;
+    }
+
+    struct TransitionCase {
+        z3::expr condition;
+        rec_ty equations;
+    };
+
+    std::vector<TransitionCase> split_ite_cases(const z3::expr& condition,
+                                                const rec_ty& equations) {
+        std::vector<TransitionCase> pending{{condition, equations}};
+        std::vector<TransitionCase> result;
+        while (!pending.empty()) {
+            TransitionCase current = std::move(pending.back());
+            pending.pop_back();
+
+            std::optional<z3::expr> ite =
+                find_innermost_ite(current.condition);
+            if (!ite) {
+                for (const auto& [lhs, rhs] : current.equations) {
+                    (void)lhs;
+                    ite = find_innermost_ite(rhs);
+                    if (ite) break;
+                }
+            }
+            if (!ite) {
+                result.push_back(std::move(current));
+                continue;
+            }
+
+            const z3::expr ite_condition = ite->arg(0);
+            for (unsigned branch = 0; branch < 2; ++branch) {
+                const z3::expr replacement = ite->arg(branch + 1);
+                z3::expr_vector source(condition.ctx());
+                z3::expr_vector destination(condition.ctx());
+                source.push_back(*ite);
+                destination.push_back(replacement);
+
+                z3::expr branch_condition =
+                    branch == 0 ? ite_condition : !ite_condition;
+                z3::expr split_condition =
+                    current.condition.substitute(source, destination) &&
+                    branch_condition;
+                rec_ty split_equations;
+                for (const auto& [lhs, rhs] : current.equations) {
+                    z3::expr mutable_rhs = rhs;
+                    split_equations.insert_or_assign(
+                        lhs, mutable_rhs.substitute(source, destination));
+                }
+                pending.push_back(
+                    {split_condition.simplify(), std::move(split_equations)});
+            }
+        }
+        return result;
+    }
+
 }
 
 namespace ari_exe {
@@ -416,15 +521,82 @@ rec_solver::add_assumption(z3::expr e) {
     assumption  = assumption && e;
 }
 
-rec_solver::rec_solver(rec_ty& eqs, z3::expr var, z3::context& z3ctx): z3ctx(z3ctx), ind_var(z3ctx), initial_values_k(z3ctx), initial_values_v(z3ctx), assumption(z3ctx.bool_val(true)) {
+rec_solver::rec_solver(rec_ty& eqs, z3::expr var, z3::context& z3ctx): z3ctx(z3ctx), ind_var(z3ctx), initial_values_k(z3ctx), initial_values_v(z3ctx), recurrence_parameters(z3ctx), recurrence_parameter_values(z3ctx), assumption(z3ctx.bool_val(true)) {
     set_eqs(eqs);
     set_ind_var(var);
 }
 
 void
 rec_solver::set_eqs(const std::vector<z3::expr>& _conds, const std::vector<rec_ty>& _exprs) {
-    conds = _conds;
-    exprs = _exprs;
+    assert(_conds.size() == _exprs.size());
+    conds.clear();
+    exprs.clear();
+    recurrence_parameters.resize(0);
+    recurrence_parameter_values.resize(0);
+
+    std::vector<z3::expr> abstracted_conditions = _conds;
+    std::vector<rec_ty> abstracted_expressions = _exprs;
+    std::set<unsigned> recurrence_declarations;
+    for (const rec_ty& equations : _exprs) {
+        for (const auto& [lhs, rhs] : equations) {
+            (void)rhs;
+            recurrence_declarations.insert(lhs.decl().id());
+        }
+    }
+    while (true) {
+        std::optional<z3::expr> invariant;
+        for (const z3::expr& condition : abstracted_conditions) {
+            invariant = find_invariant_ite(
+                condition, recurrence_declarations, ind_var);
+            if (invariant) break;
+        }
+        if (!invariant) {
+            for (const rec_ty& equations : abstracted_expressions) {
+                for (const auto& [lhs, rhs] : equations) {
+                    (void)lhs;
+                    invariant = find_invariant_ite(
+                        rhs, recurrence_declarations, ind_var);
+                    if (invariant) break;
+                }
+                if (invariant) break;
+            }
+        }
+        if (!invariant) break;
+
+        z3::expr parameter = z3ctx.int_const(
+            ("ari_rec_parameter_" +
+             std::to_string(recurrence_parameters.size()))
+                .c_str());
+        recurrence_parameters.push_back(parameter);
+        recurrence_parameter_values.push_back(*invariant);
+        z3::expr_vector source(z3ctx);
+        z3::expr_vector destination(z3ctx);
+        source.push_back(*invariant);
+        destination.push_back(parameter);
+        for (z3::expr& condition : abstracted_conditions) {
+            condition = condition.substitute(source, destination);
+        }
+        for (rec_ty& equations : abstracted_expressions) {
+            for (auto& [lhs, rhs] : equations) {
+                (void)lhs;
+                rhs = rhs.substitute(source, destination);
+            }
+        }
+    }
+
+    if (abstracted_expressions.size() == 1) {
+        conds.push_back(z3ctx.bool_val(true));
+        exprs.push_back(abstracted_expressions.front());
+        return;
+    }
+    for (unsigned i = 0; i < abstracted_expressions.size(); ++i) {
+        for (TransitionCase& transition :
+             split_ite_cases(abstracted_conditions[i],
+                             abstracted_expressions[i])) {
+            conds.push_back(transition.condition);
+            exprs.push_back(std::move(transition.equations));
+        }
+    }
 }
 
 void rec_solver::set_eqs(rec_ty& eqs) {
@@ -439,6 +611,12 @@ bool rec_solver::solve() {
             VerificationSession::current().recurrence_solver_worker().solve(
                 rec2string(), ind_var.to_string());
         smt2_to_z3(smt2);
+        for (auto& [lhs, rhs] : res) {
+            (void)lhs;
+            rhs = rhs.substitute(recurrence_parameters,
+                                 recurrence_parameter_values)
+                      .simplify();
+        }
         return true;
     } catch (const std::exception& e) {
         std::cerr << "Error solving recurrence through worker: "
@@ -568,6 +746,9 @@ std::string rec_solver::z3_infix(z3::expr e) {
     } else if (kind == Z3_OP_SUB) {
         assert(args.size() == 2);
         return args_infix[0] + " - " + args_infix[1];
+    } else if (kind == Z3_OP_UMINUS) {
+        assert(args.size() == 1);
+        return "-" + args_infix[0];
     } else if (kind == Z3_OP_MUL) {
         std::string args_str = boost::join(args_infix, " * ");
         return args_str;
@@ -612,11 +793,9 @@ std::string rec_solver::z3_infix(z3::expr e) {
         std::string s = f + "(" + args_str + ")";
         return s;
     } else {
-        assert(false && "Unsupported Z3 operation kind");
-        abort();
-        // return e.to_string();
-        // std::cout << e.to_string() << "\n";
-        // assert(false);
+        throw std::runtime_error(
+            "Unsupported Z3 operation in recurrence: " + e.to_string() +
+            " (kind " + std::to_string(static_cast<int>(kind)) + ")");
     }
 }
 
@@ -802,8 +981,11 @@ void rec_solver::print_res() {
 z3::expr rec_solver::hoist_ite(z3::expr e) {
     auto kind = e.decl().decl_kind();
     auto args = e.args();
-    if (e.is_numeral() || e.is_const() || kind == Z3_OP_ITE) {
+    if (e.is_numeral() || e.is_const()) {
         return e;
+    }
+    if (kind == Z3_OP_ITE) {
+        return z3::ite(args[0], hoist_ite(args[1]), hoist_ite(args[2]));
     }
     z3::expr_vector hoisted_args(z3ctx);
     for (auto arg : args) {
@@ -841,21 +1023,32 @@ z3::expr rec_solver::hoist_ite(z3::expr e) {
                 body_false = body_false - hoisted_args[i];
             }
         }
-    } else if (kind == Z3_OP_IDIV) {
+    } else if (kind == Z3_OP_IDIV || kind == Z3_OP_MOD) {
         for (int i = 0; i < hoisted_args.size(); i++) {
             if (i == which) continue;
             if (i < which) {
-                body_true = hoisted_args[i] / body_true;
-                body_false = hoisted_args[i] / body_false;
+                if (kind == Z3_OP_IDIV) {
+                    body_true = hoisted_args[i] / body_true;
+                    body_false = hoisted_args[i] / body_false;
+                } else {
+                    body_true = hoisted_args[i] % body_true;
+                    body_false = hoisted_args[i] % body_false;
+                }
             } else {
-                body_true = body_true / hoisted_args[i];
-                body_false = body_false / hoisted_args[i];
+                if (kind == Z3_OP_IDIV) {
+                    body_true = body_true / hoisted_args[i];
+                    body_false = body_false / hoisted_args[i];
+                } else {
+                    body_true = body_true % hoisted_args[i];
+                    body_false = body_false % hoisted_args[i];
+                }
             }
         }
     } else {
-        std::cout << e.to_string() << "\n";
-        std::cout << kind << "\n";
-        abort();
+        throw std::runtime_error(
+            "Cannot hoist conditional through Z3 expression: " +
+            e.to_string() + " (kind " +
+            std::to_string(static_cast<int>(kind)) + ")");
     }
     return z3::ite(cond, body_true, body_false);
 }
