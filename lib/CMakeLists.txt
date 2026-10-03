@@ -25,14 +25,14 @@ target_compile_definitions(
 )
 
 target_link_libraries(engine PRIVATE spdlog::spdlog AInstruction VerificationSession)
-target_link_libraries(state PRIVATE spdlog::spdlog MStack)
+target_link_libraries(state PRIVATE spdlog::spdlog MStack PathExpression)
 target_link_libraries(rec_solver PRIVATE spdlog::spdlog VerificationSession)
 target_link_libraries(FunctionSummary PRIVATE spdlog::spdlog)
 target_link_libraries(FunctionSummarizer PRIVATE spdlog::spdlog rec_solver FunctionSummary VerificationSession)
 target_link_libraries(LoopSummary PRIVATE spdlog::spdlog)
 target_link_libraries(LoopSummarizer PRIVATE spdlog::spdlog rec_solver LoopSummary)
 target_link_libraries(MStack PRIVATE spdlog::spdlog)
-target_link_libraries(AInstruction PRIVATE spdlog::spdlog cache FunctionSummarizer FunctionSummary LoopSummarizer LoopSummary MemoryObject common Expression VerificationSession)
+target_link_libraries(AInstruction PRIVATE spdlog::spdlog cache FunctionSummarizer FunctionSummary LoopSummarizer LoopSummary MemoryObject common Expression VerificationSession PathExpression)
 target_link_libraries(AnalysisManager PRIVATE spdlog::spdlog)
 target_compile_definitions(
     AnalysisManager

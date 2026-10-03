@@ -1,0 +1,8 @@
+opam-version: "2.0"
+name: "ntl"
+version: "20200321"
+synopsis: "OCaml NTL bindings (upstream v20200321 source)"
+maintainer: "zkincaid@gmail.com"
+depends: ["ocaml" "ocamlfind" {build} "dune" {build} "conf-ntl" "mlgmpidl"]
+build: ["dune" "build" "-p" name "-j" jobs]
+install: ["dune" "install" "--prefix" prefix]
