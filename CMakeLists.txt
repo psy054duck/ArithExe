@@ -15,7 +15,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(LLVM 20 REQUIRED CONFIG)
+find_package(LLVM REQUIRED CONFIG)
+if(LLVM_PACKAGE_VERSION VERSION_LESS 20)
+    message(FATAL_ERROR "LLVM 20 or newer is required for debug-variable records")
+endif()
 find_package(Z3 REQUIRED CONFIG HINTS /opt/homebrew/Cellar/z3)
 find_package(Boost REQUIRED CONFIG)
 

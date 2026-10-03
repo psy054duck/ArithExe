@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 
 
@@ -43,12 +44,23 @@ def main():
         if not executable.is_file():
             raise RuntimeError("Missing executable: " + str(executable))
         config[name]["executable_sha256"] = sha(executable)
+    config["arithexe"]["support_files_sha256"] = {
+        str(path): sha(path) for path in [root / "ArithExe/build/solver.py", root / "ArithExe/build/solver_worker.py"]
+    }
+    for name in ["arithexe", "icra"]:
+        libraries = subprocess.check_output(["ldd", config[name]["executable"]], text=True,
+            env={"PATH": "/usr/bin:/bin", **config[name]["environment"]})
+        dependencies = [Path(p) for p in re.findall(r"(/[^\s()]+)", libraries) if Path(p).is_file()]
+        config[name].setdefault("support_files_sha256", {}).update({str(p): sha(p) for p in dependencies})
+    config["icra"]["support_files_sha256"].update({str(p): sha(p) for p in (root / "icra/duet/lib").iterdir()
+                                                  if p.is_file() and p.suffix in {".jar", ".so", ".64"}})
     config["automizer"]["archive_sha256"] = sha(package)
     config["icra"]["base_patch_sha256"] = sha(root / "archives/icra-linux-base.patch")
     config["icra"]["upstream_revision"] = "ee3fd360ee75490277dd3fd05d92e1548db983e4"
     snapshots = [root / "archives/arithexe-ready.tar.gz", root / "archives/icra-source.tar.gz",
-                 root / "archives/icra-z3-source.tar.gz", root / "archives/path-expression-linux-materials.tar.gz",
-                 root / "archives/path-expression-build-updates.tar.gz"]
+                 root / "archives/icra-z3-generated.tar.gz", root / "archives/path-expression-linux-materials.tar.gz",
+                 root / "archives/path-expression-build-updates.tar.gz",
+                 root / "archives/path-expression-llvm20-updates.tar.gz"]
     config["source_archive_sha256"] = {p.name: sha(p) for p in snapshots}
     (root / "configuration.json").write_text(json.dumps(config, indent=2) + "\n")
     subprocess.run([str(root / "venv/bin/pip"), "freeze"], stdout=(root / "logs/python-inventory.txt").open("w"), check=True)

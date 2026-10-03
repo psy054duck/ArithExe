@@ -142,6 +142,9 @@ def main():
             raise RuntimeError("Tool is absent/held in this experiment configuration: " + name)
         if "executable_sha256" in config[name] and sha(config[name]["executable"]) != config[name]["executable_sha256"]:
             raise RuntimeError("Tool executable identity mismatch: " + name)
+        for path, expected in config[name].get("support_files_sha256", {}).items():
+            if sha(path) != expected:
+                raise RuntimeError("Tool support-file identity mismatch: " + path)
     dataset = Path(config["dataset"]).resolve()
     records = [r for r in json.loads((dataset / "transformations.json").read_text()) if r["status"] == "included"]
     records.sort(key=lambda r: r["task"])
@@ -246,7 +249,13 @@ def main():
             rows.append(row)
             export(output, rows, total)
             print(f"{len(rows)}/{total} {name} {record['task']}: {verdict} ({row['walltime']:.2f}s)", flush=True)
-    save(output / "completed.json", {"time": time.time(), "runs": len(rows), "planned": total})
+    for name in args.tools:
+        if "executable_sha256" in config[name] and sha(config[name]["executable"]) != config[name]["executable_sha256"]:
+            raise RuntimeError("Tool binary changed during execution: " + name)
+        for path, expected in config[name].get("support_files_sha256", {}).items():
+            if sha(path) != expected:
+                raise RuntimeError("Tool support file changed during execution: " + path)
+    save(output / "completed.json", {"time": time.time(), "runs": len(rows), "planned": total, "tool_hashes_verified": True})
     return 0
 
 
