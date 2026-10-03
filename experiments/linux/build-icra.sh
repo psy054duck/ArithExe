@@ -56,11 +56,18 @@ fi
 # Do not build unrelated legacy NWA command-line utilities (not used by ICRA).
 (cd WALi-OpenNWA && scons strong_warnings=0 icra-libs -Q)
 make -j1 duet
+# OCaml's dependency flags can put /usr/lib before the Z3 binding's -L flag.
+# Give its native linker the matching pip Z3 directory first, not system Z3.
+(cd duet && ocamlbuild -use-ocamlfind -tag 'runtime_variant(_pic)' \
+  -lflags "-without-runtime,-ccopt,-L$experiment_dir/venv/lib/python3.14/site-packages/z3/lib" \
+  duet/libduet.native.so)
 make -j1 _build/icra.o _build/icra_callbacks.o _build/ire.o _build/ire_callbacks.o
 # Exactly one modern OCaml runtime, shared with the duet library.
-g++ -g -rdynamic -o icra _build/icra.o _build/ire_callbacks.o _build/ire.o _build/icra_callbacks.o \
-  duet/_build/duet/libduet.native.so WALi-OpenNWA/lib64/libwali.so \
-  WALi-OpenNWA/lib64/libwalidomains.so "$(ocamlc -where)/libasmrun_shared.so" \
+g++ -g -rdynamic -Wl,--no-as-needed -o icra _build/icra.o _build/ire_callbacks.o _build/ire.o _build/icra_callbacks.o \
+  "$experiment_dir/icra/duet/_build/duet/libduet.native.so" \
+  "$experiment_dir/icra/WALi-OpenNWA/lib64/libwali.so" \
+  "$experiment_dir/icra/WALi-OpenNWA/lib64/libwalidomains.so" "$(ocamlc -where)/libasmrun_shared.so" \
+  "$experiment_dir/venv/lib/python3.14/site-packages/z3/lib/libz3.so" \
   -lglog -lrt -ldl -lm \
   -Wl,-rpath,"$experiment_dir/icra/duet/_build/duet" \
   -Wl,-rpath,"$experiment_dir/icra/WALi-OpenNWA/lib64" \

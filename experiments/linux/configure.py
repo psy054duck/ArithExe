@@ -47,6 +47,10 @@ def main():
     config["arithexe"]["support_files_sha256"] = {
         str(path): sha(path) for path in [root / "ArithExe/build/solver.py", root / "ArithExe/build/solver_worker.py"]
     }
+    config["arithexe"]["source_revision"] = subprocess.check_output(
+        ["git", "-C", str(root / "ArithExe"), "rev-parse", "HEAD"], text=True).strip()
+    config["arithexe"]["support_files_sha256"].update({str(p): sha(p)
+        for p in (root / "ArithExe/build/rec_solver").rglob("*.py")})
     for name in ["arithexe", "icra"]:
         libraries = subprocess.check_output(["ldd", config[name]["executable"]], text=True,
             env={"PATH": "/usr/bin:/bin", **config[name]["environment"]})
@@ -55,6 +59,8 @@ def main():
     config["icra"]["support_files_sha256"].update({str(p): sha(p) for p in (root / "icra/duet/lib").iterdir()
                                                   if p.is_file() and p.suffix in {".jar", ".so", ".64"}})
     config["automizer"]["archive_sha256"] = sha(package)
+    config["automizer"]["support_files_sha256"] = {str(p): sha(p)
+        for p in (root / "tools/UAutomizer-linux").rglob("*") if p.is_file()}
     config["icra"]["base_patch_sha256"] = sha(root / "archives/icra-linux-base.patch")
     config["icra"]["library_target_patch_sha256"] = sha(root / "ArithExe/experiments/linux/icra-libraries-only.patch")
     config["icra"]["upstream_revision"] = "ee3fd360ee75490277dd3fd05d92e1548db983e4"
