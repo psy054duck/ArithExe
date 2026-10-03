@@ -33,6 +33,8 @@ static void print_usage() {
         "[--poly-expr-strategy=auto|special|algorithm2|general] "
         "[--poly-expr-degree=N] "
         "[--poly-expr-order=N] "
+        "[--verbose|-v] "
+        "[--ignore-bitwidth-constraints|--ignore-32bit-constraints] "
         "[--witness=PATH|--no-witness] "
         "[--property-file=PATH] "
         "[--data-model=ILP32|LP64] "
@@ -91,6 +93,8 @@ int main(int argc, char* argv[]) {
     int poly_expr_degree = 0;
     int poly_expr_order = 4;
     bool witness_enabled = true;
+    bool verbose = false;
+    bool ignore_bitwidth_constraints = false;
     std::string witness_path = "witness.yml";
     std::string property_file;
     std::string data_model = "LP64";
@@ -99,6 +103,11 @@ int main(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--enable-bounded-cfinite") {
             bounded_cfinite_enabled = true;
+        } else if (arg == "--verbose" || arg == "-v") {
+            verbose = true;
+        } else if (arg == "--ignore-bitwidth-constraints" ||
+                   arg == "--ignore-32bit-constraints") {
+            ignore_bitwidth_constraints = true;
         } else if (arg == "--disable-bounded-cfinite") {
             bounded_cfinite_enabled = false;
         } else if (arg.rfind("--poly-expr-strategy=", 0) == 0) {
@@ -186,6 +195,17 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (verbose) {
+        spdlog::set_level(spdlog::level::debug);
+        spdlog::debug("Verbose logging enabled");
+    }
+    if (ignore_bitwidth_constraints) {
+        spdlog::warn("Experimental integer relaxation: skipping all integer bit-width "
+                     "arithmetic bounds and comparison normalization. "
+                     "Results do not establish fixed-width C correctness; "
+                     "generated witnesses are marked integer-relaxed.");
+    }
+
     setenv("ARITHEXE_ENABLE_BOUNDED_CFINITE", bounded_cfinite_enabled ? "1" : "0", 1);
     setenv("ARITHEXE_POLY_EXPR_STRATEGY", poly_expr_strategy.c_str(), 1);
     if (poly_expr_degree_set) {
@@ -219,6 +239,8 @@ int main(int argc, char* argv[]) {
     VeriResult res = VERIUNKNOWN;
     try {
         engine = std::make_unique<Engine>(source_file);
+        engine->get_session().set_ignore_bitwidth_constraints(
+            ignore_bitwidth_constraints);
         res = engine->verify();
     } catch (const VerifierError& error) {
         spdlog::error("Verification stopped at {}: {}",
@@ -238,6 +260,7 @@ int main(int argc, char* argv[]) {
         witness_options.input_file = source_file;
         witness_options.data_model = data_model;
         witness_options.specification = specification;
+        witness_options.integer_relaxed_32bit = ignore_bitwidth_constraints;
         if (witness_written) {
             WitnessWriter writer(std::move(witness_options));
             witness_written = writer.write(
@@ -249,19 +272,26 @@ int main(int argc, char* argv[]) {
             if (!witness_written) {
                 spdlog::error("Failed to write witness: {}", writer.error());
             } else {
-                spdlog::info("Wrote SV-COMP witness to {}", witness_path);
+                spdlog::info("Wrote {} witness to {}",
+                             ignore_bitwidth_constraints ? "integer-relaxed"
+                                                      : "SV-COMP",
+                             witness_path);
             }
         }
     }
 
     switch (res) {
         case HOLD:
-            spdlog::info("The program is safe.");
-            std::cout << "TRUE\n";
+            spdlog::info("The program is safe{}.",
+                        ignore_bitwidth_constraints ? " under integer relaxation" : "");
+            std::cout << (ignore_bitwidth_constraints
+                              ? "TRUE(integer-relaxed)\n" : "TRUE\n");
             break;
         case FAIL:
-            spdlog::error("The program is unsafe.");
-            std::cout << "FALSE(unreach-call)\n";
+            spdlog::error("The program is unsafe{}.",
+                         ignore_bitwidth_constraints ? " under integer relaxation" : "");
+            std::cout << (ignore_bitwidth_constraints
+                              ? "FALSE(integer-relaxed)\n" : "FALSE(unreach-call)\n");
             break;
         case VERIUNKNOWN:
             spdlog::warn("The verification result is unknown.");

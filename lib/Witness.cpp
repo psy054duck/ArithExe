@@ -662,7 +662,9 @@ void write_metadata(std::ostream& out, const WitnessOptions& options,
         << "    producer:\n"
         << "      name: " << yaml_quote(options.producer_name) << "\n"
         << "      version: " << yaml_quote(options.producer_version) << "\n"
-        << "      configuration: \"svcomp\"\n"
+        << "      configuration: "
+        << yaml_quote(options.integer_relaxed_32bit
+                          ? "integer-relaxed-all-widths" : "svcomp") << "\n"
         << "    task:\n"
         << "      input_files:\n"
         << "        - " << yaml_quote(options.input_file) << "\n"
@@ -763,6 +765,11 @@ bool WitnessWriter::write(VeriResult result, const llvm::Module& module,
     if (!output) {
         error_message = "cannot open witness output: " + options.output_path;
         return false;
+    }
+    if (options.integer_relaxed_32bit) {
+        output << "# Experimental witness: all-width integer-relaxed analysis.\n"
+               << "# Arithmetic bounds and comparison normalization were skipped.\n"
+               << "# Not independently certified under fixed-width C semantics.\n";
     }
 
     if (result == HOLD) {

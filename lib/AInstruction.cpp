@@ -1,5 +1,7 @@
 #include "AInstruction.h"
 #include "IntegerSemantics.h"
+#include "RelaxedIntegerSemantics.h"
+#include "PathAccelerator.h"
 #include "VerificationSession.h"
 #include <spdlog/spdlog.h>
 
@@ -11,12 +13,206 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <optional>
+#include <cstdlib>
 #include <functional>
+#include <sstream>
 #include <unordered_map>
 
 using namespace ari_exe;
 
 namespace {
+std::pair<z3::expr, z3::expr> relaxed_integer_binary(
+    const z3::expr& lhs, const z3::expr& rhs, unsigned opcode,
+    unsigned width, bool exact) {
+    using namespace integer_semantics;
+    auto& ctx = lhs.ctx();
+    const z3::expr left = as_int(lhs), right = as_int(rhs);
+    z3::expr defined = ctx.bool_val(true);
+    z3::expr value(ctx);
+    if (width == 1) {
+        const z3::expr a = left != 0, b = right != 0;
+        switch (opcode) {
+        case llvm::Instruction::Add:
+        case llvm::Instruction::Sub:
+        case llvm::Instruction::Xor: value = a != b; break;
+        case llvm::Instruction::Mul:
+        case llvm::Instruction::And: value = a && b; break;
+        case llvm::Instruction::Or: value = a || b; break;
+        default:
+            throw VerifierError(VerifierIssueKind::UnsupportedSemantics,
+                                "unsupported Boolean arithmetic in integer relaxation");
+        }
+        return {value, defined};
+    }
+    switch (opcode) {
+    case llvm::Instruction::Add: value = left + right; break;
+    case llvm::Instruction::Sub: value = left - right; break;
+    case llvm::Instruction::Mul: value = left * right; break;
+    case llvm::Instruction::SDiv:
+        value = signed_div(left, right);
+        defined = right != 0;
+        if (exact) defined = defined && signed_rem(left, right) == 0;
+        break;
+    case llvm::Instruction::UDiv:
+        value = left / right;
+        defined = right != 0;
+        if (exact) defined = defined && left % right == 0;
+        break;
+    case llvm::Instruction::SRem:
+        value = signed_rem(left, right);
+        defined = right != 0;
+        break;
+    case llvm::Instruction::URem:
+        value = left % right;
+        defined = right != 0;
+        break;
+    case llvm::Instruction::And:
+    case llvm::Instruction::Or:
+    case llvm::Instruction::Xor: {
+        const auto operation = opcode == llvm::Instruction::And
+                                   ? IntegerBitwiseOperation::And
+                               : opcode == llvm::Instruction::Or
+                                   ? IntegerBitwiseOperation::Or
+                                   : IntegerBitwiseOperation::Xor;
+        auto result = integer_bitwise(left, right, operation);
+        if (!result) {
+            throw VerifierError(VerifierIssueKind::UnsupportedSemantics,
+                                "integer relaxation needs a constant bitwise mask "
+                                "(no bitvector fallback)");
+        }
+        value = *result;
+        break;
+    }
+    case llvm::Instruction::Shl:
+    case llvm::Instruction::LShr:
+    case llvm::Instruction::AShr: {
+        auto factor = integer_shift_factor(right);
+        if (!factor) {
+            throw VerifierError(VerifierIssueKind::UnsupportedSemantics,
+                                "integer relaxation needs a constant shift amount "
+                                "between 0 and 4096 (no bitvector fallback)");
+        }
+        defined = right >= 0;
+        value = opcode == llvm::Instruction::Shl
+                    ? left * *factor : left / *factor;
+        if (exact && opcode != llvm::Instruction::Shl) {
+            defined = defined && left % *factor == 0;
+        }
+        break;
+    }
+    default:
+        throw VerifierError(VerifierIssueKind::UnsupportedSemantics,
+                            "unsupported operation in integer relaxation");
+    }
+    return {value.simplify(), defined.simplify()};
+}
+
+std::size_t positive_environment_size(const char* name,
+                                      std::size_t default_value) {
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0') return default_value;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (!end || *end != '\0' || parsed == 0) return default_value;
+    return static_cast<std::size_t>(parsed);
+}
+
+bool force_path_expression_mode() {
+    const char* value = std::getenv("ARITHEXE_FORCE_PATH_EXPRESSIONS");
+    return value && std::string(value) == "1";
+}
+
+bool is_first_header_phi(const llvm::PHINode* phi, const llvm::Loop* loop) {
+    const llvm::BasicBlock* header = loop ? loop->getHeader() : nullptr;
+    return header && !header->phis().empty() &&
+           phi == &*header->phis().begin();
+}
+
+std::string render_exact_prefix(const LoopPathExpressionState& history) {
+    std::ostringstream out;
+    bool first = true;
+    for (const ExactPathPrefixSegment& segment : history.prefix) {
+        if (!first) out << ' ';
+        if (segment.symbolic_power) {
+            out << '(' << render_path_word(segment.symbolic_power->root)
+                << ")^(" << segment.symbolic_power->exponent.to_string()
+                << ')';
+        } else {
+            out << render_path_word(segment.explicit_word);
+        }
+        first = false;
+    }
+    return out.str();
+}
+
+std::optional<PathSymbol>
+record_completed_loop_path(const state_ptr& state, llvm::Loop* loop,
+                           const llvm::PHINode* phi) {
+    if (!loop || !is_first_header_phi(phi, loop)) {
+        return std::nullopt;
+    }
+    auto& history = state->loop_path_expressions[loop];
+    if (!state->trace.empty() && !loop->contains(state->trace.back())) {
+        // A nested loop's next invocation is a new trace, not another
+        // iteration of its previous invocation.
+        history = LoopPathExpressionState{};
+    }
+    if (!history.decision_cursor_initialized) {
+        history.decision_cursor = state->path_decisions.size();
+        history.decision_cursor_initialized = true;
+    }
+    if (state->trace.empty()) return std::nullopt;
+    llvm::BasicBlock* predecessor = state->trace.back();
+    // LLVM's latch query requires an in-loop block; without that check the
+    // preheader can look like a backedge and create a fictitious iteration.
+    if (!loop->contains(predecessor) ||
+        !loop->isLoopLatch(predecessor)) return std::nullopt;
+
+    if (history.decision_cursor > state->path_decisions.size()) {
+        return std::nullopt;
+    }
+    std::vector<PathDecisionEvent> decisions(
+        state->path_decisions.begin() + history.decision_cursor,
+        state->path_decisions.end());
+    history.decision_cursor = state->path_decisions.size();
+    if (decisions.empty()) {
+        // A branch-free iteration still has one precise path.
+        decisions.push_back(
+            {reinterpret_cast<std::uintptr_t>(loop->getHeader()), 0});
+    }
+
+    const PathSymbol symbol =
+        state->session.intern_loop_path(loop, decisions);
+    history.append(symbol);
+    state->session.note_path_compression();
+    history.candidates = compress_path_prefix(
+        history.concrete_frontier(),
+        positive_environment_size("ARITHEXE_PATH_MAX_ROOT", 4),
+        positive_environment_size("ARITHEXE_PATH_BEAM", 4),
+        positive_environment_size("ARITHEXE_PATH_EVIDENCE", 2));
+    const std::string loop_name = loop->getHeader()->getName().str();
+    spdlog::debug(
+        "[path-expr] loop {} completed path p{} ({} decisions); exact "
+        "prefix: {}",
+        loop_name, symbol, decisions.size(), render_exact_prefix(history));
+    if (history.candidates.empty()) {
+        spdlog::debug(
+            "[path-expr] loop {} compression produced no suffix-star "
+            "candidate",
+            loop_name);
+    } else {
+        for (std::size_t i = 0; i < history.candidates.size(); ++i) {
+            const PathSchemaCandidate& candidate = history.candidates[i];
+            spdlog::debug(
+                "[path-expr] loop {} candidate #{}: {} "
+                "(observed repetitions={}, score={})",
+                loop_name, i + 1, render_path_schema(candidate),
+                candidate.observed_star_exponent, candidate.score);
+        }
+    }
+    return symbol;
+}
+
 const llvm::Function* resolve_called_function(const llvm::CallBase* call) {
     if (const llvm::Function* function = call->getCalledFunction()) {
         return function;
@@ -92,7 +288,10 @@ Expression map_integer_unary(const Expression& operand,
 
 Expression canonicalize_signed(const Expression& operand, unsigned width,
                                const z3::expr& assumptions) {
-    if (width == 1) return operand;
+    if (width == 1 ||
+        VerificationSession::current().ignores_integer_width(width)) {
+        return operand;
+    }
 
     const auto conditions = operand.get_conditions();
     const auto expressions = operand.get_expressions();
@@ -204,7 +403,8 @@ bool has_canonical_signed_representation(const llvm::Value* value) {
 z3::expr signed_value(const z3::expr& value, const llvm::Value* llvm_value,
                       unsigned width, const state_ptr& state) {
     z3::expr integer = integer_semantics::as_int(value);
-    if (has_canonical_signed_representation(llvm_value) ||
+    if (state->session.ignores_integer_width(width) ||
+        has_canonical_signed_representation(llvm_value) ||
         ari_exe::implies(state->get_path_condition().as_expr(),
                          integer_semantics::in_signed_range(integer,
                                                             width))) {
@@ -216,6 +416,7 @@ z3::expr signed_value(const z3::expr& value, const llvm::Value* llvm_value,
 z3::expr unsigned_value(const z3::expr& value, unsigned width,
                         const state_ptr& state) {
     z3::expr integer = integer_semantics::as_int(value);
+    if (state->session.ignores_integer_width(width)) return integer;
     return ari_exe::implies(
                state->get_path_condition().as_expr(),
                integer_semantics::in_unsigned_range(integer, width))
@@ -380,6 +581,9 @@ AInstructionBinary::execute(state_ptr state) {
         op0_value, op1_value,
         [&](const z3::expr& lhs, const z3::expr& rhs) {
             using namespace integer_semantics;
+            if (state->session.uses_integer_relaxation()) {
+                return relaxed_integer_binary(lhs, rhs, opcode, width, exact);
+            }
             z3::expr lhs_bv(z3ctx);
             z3::expr rhs_bv(z3ctx);
             bool bitvectors_ready = false;
@@ -598,8 +802,9 @@ AInstructionICmp::execute(state_ptr state) {
 
     auto op0 = cmp_inst->getOperand(0);
     auto op1 = cmp_inst->getOperand(1);
-    auto op0_value = state->evaluate(op0);
-    auto op1_value = state->evaluate(op1);
+    const bool signed_constants = !cmp_inst->isUnsigned();
+    auto op0_value = state->evaluate(op0, signed_constants);
+    auto op1_value = state->evaluate(op1, signed_constants);
     auto& z3ctx = op0_value.ctx();
     const unsigned width = op0->getType()->getIntegerBitWidth();
     Expression result = map_integer_binary(
@@ -608,8 +813,9 @@ AInstructionICmp::execute(state_ptr state) {
             using namespace integer_semantics;
             z3::expr value(z3ctx);
             if (pred == llvm::ICmpInst::ICMP_EQ) {
-                value = has_canonical_signed_representation(op0) &&
-                                has_canonical_signed_representation(op1)
+                value = state->session.ignores_integer_width(width) ||
+                                (has_canonical_signed_representation(op0) &&
+                                 has_canonical_signed_representation(op1))
                             ? lhs == rhs
                         : lhs.is_int() && rhs.is_int()
                             ? (as_int(lhs) - as_int(rhs)) %
@@ -617,8 +823,9 @@ AInstructionICmp::execute(state_ptr state) {
                                   0
                             : lhs == rhs;
             } else if (pred == llvm::ICmpInst::ICMP_NE) {
-                value = has_canonical_signed_representation(op0) &&
-                                has_canonical_signed_representation(op1)
+                value = state->session.ignores_integer_width(width) ||
+                                (has_canonical_signed_representation(op0) &&
+                                 has_canonical_signed_representation(op1))
                             ? lhs != rhs
                         : lhs.is_int() && rhs.is_int()
                             ? (as_int(lhs) - as_int(rhs)) %
@@ -1028,10 +1235,12 @@ AInstructionCall::execute_unknown(state_ptr state) {
         called_func->getName().starts_with("__VERIFIER_nondet_")) {
         new_state->nondet_calls.emplace_back(call_inst, result.as_expr());
     }
+    new_state->constrain_nondet_input(call_inst, result);
     // new_state->write(inst, result);
     if (called_func &&
         called_func->getName().starts_with("__VERIFIER_nondet_") &&
-        ret_type->isIntegerTy()) {
+        ret_type->isIntegerTy() &&
+        !state->session.uses_integer_relaxation()) {
         const unsigned width = ret_type->getIntegerBitWidth();
 
         const char* signed_min = nullptr;
@@ -1103,7 +1312,7 @@ AInstructionCall::execute_malloc(state_ptr state) {
     z3::expr_vector dims(state->z3ctx);
     const unsigned size_width = size_bytes->getType()->getIntegerBitWidth();
     z3::expr element_count =
-        (integer_semantics::as_unsigned(size_bytes_expr.as_expr(), size_width) /
+        (unsigned_value(size_bytes_expr.as_expr(), size_width, state) /
          4)
             .simplify();
     if (auto* multiply = llvm::dyn_cast<llvm::BinaryOperator>(size_bytes);
@@ -1116,8 +1325,9 @@ AInstructionCall::execute_malloc(state_ptr state) {
 
             Expression candidate =
                 state->evaluate(multiply->getOperand(1 - constant_index));
-            element_count =
-                (integer_semantics::as_unsigned(candidate.as_expr(),
+            element_count = state->session.uses_integer_relaxation()
+                ? integer_semantics::as_int(candidate.as_expr())
+                : (integer_semantics::as_unsigned(candidate.as_expr(),
                                                 size_width) %
                  integer_semantics::power_of_two(state->z3ctx,
                                                  size_width - 2))
@@ -1127,6 +1337,11 @@ AInstructionCall::execute_malloc(state_ptr state) {
     }
     dims.push_back(element_count);
     auto new_state = std::make_shared<State>(*state);
+    if (state->session.uses_integer_relaxation()) {
+        new_state->append_path_condition(Expression(size_bytes_expr.defined()));
+        new_state->append_path_condition(Expression(
+            integer_semantics::as_int(size_bytes_expr.as_expr()) >= 0));
+    }
     new_state->memory.heap_alloca(call_inst, dims);
     new_state->step_pc();
     return {new_state};
@@ -1239,6 +1454,8 @@ AInstructionBranch::_execute(std::shared_ptr<state_ty> state) {
         auto true_block = branch_inst->getSuccessor(0);
         auto true_pc = AInstruction::create(&*true_block->instructionsWithoutDebug().begin());
         auto true_state = std::make_shared<state_ty>(*state);
+        true_state->path_decisions.push_back(
+            {reinterpret_cast<std::uintptr_t>(branch_inst), 0});
         true_state->trace = new_trace;
         true_state->status = State::TESTING;
         // true_state->path_condition = state->path_condition && cond_value;
@@ -1248,6 +1465,8 @@ AInstructionBranch::_execute(std::shared_ptr<state_ty> state) {
         auto false_block = branch_inst->getSuccessor(1);
         auto false_pc = AInstruction::create(&*false_block->instructionsWithoutDebug().begin());
         auto false_state = std::make_shared<state_ty>(*state);
+        false_state->path_decisions.push_back(
+            {reinterpret_cast<std::uintptr_t>(branch_inst), 1});
         false_state->trace = new_trace;
         false_state->status = State::TESTING;
         // false_state->path_condition = state->path_condition && !cond_value;
@@ -1320,10 +1539,13 @@ std::vector<state_ptr>
 AInstructionZExt::execute(state_ptr state) {
     auto zext_inst = dyn_cast<llvm::ZExtInst>(inst);
     auto op = zext_inst->getOperand(0);
-    auto op_value = state->evaluate(op);
+    auto op_value = state->evaluate(op, false);
     const unsigned source_width = op->getType()->getIntegerBitWidth();
     Expression result = map_integer_unary(
         op_value, [&](const z3::expr& value) {
+            if (state->session.uses_integer_relaxation()) {
+                return integer_semantics::as_int(value);
+            }
             return integer_semantics::as_unsigned(value, source_width);
         });
 
@@ -1341,6 +1563,17 @@ AInstructionSExt::execute(state_ptr state) {
     auto op = sext_inst->getOperand(0);
     auto op_value = state->evaluate(op);
     const unsigned source_width = op->getType()->getIntegerBitWidth();
+    if (state->session.uses_integer_relaxation()) {
+        Expression result = map_integer_unary(
+            op_value, [&](const z3::expr& value) {
+                z3::expr integer = integer_semantics::as_int(value);
+                return source_width == 1 ? -integer : integer;
+            });
+        state_ptr new_state = std::make_shared<State>(*state);
+        new_state->memory.put_temp(inst, result);
+        new_state->step_pc();
+        return {new_state};
+    }
     if (has_canonical_signed_representation(op)) {
         state_ptr new_state = std::make_shared<State>(*state);
         new_state->memory.put_temp(inst, op_value);
@@ -1376,7 +1609,28 @@ AInstructionPhi::execute(state_ptr state) {
     auto& LI = manager->get_LI(phi_inst->getFunction());
     auto loop = LI.getLoopFor(phi_inst->getParent());
 
-    if (loop && !state->session.loop_summary_failed(loop)) {
+    // Compose exact child exits before attempting a whole-loop legacy
+    // recurrence. Eager entry summarization also includes the zero-trip case.
+    if (loop && is_first_header_phi(phi_inst, loop) &&
+        (loop->getParentLoop() || !loop->getSubLoops().empty()) &&
+        !state->trace.empty() && !loop->contains(state->trace.back())) {
+        if (auto jump = PathExpressionAccelerator::accelerate_nested(loop, state)) {
+            return {jump};
+        }
+    }
+
+    record_completed_loop_path(state, loop, phi_inst);
+
+    // The legacy recurrence route does not distinguish successive Boolean
+    // oracle values in its exit relation. Use the sequence-aware accelerator
+    // for recognized nondeterministic header controls even in normal mode.
+    // The experimental relaxation also selects the path-expression route;
+    // it is intended to bypass the first-break modulo bottleneck here.
+    if (loop && !force_path_expression_mode() &&
+        !loop->getParentLoop() && loop->getSubLoops().empty() &&
+        !state->session.uses_integer_relaxation() &&
+        !PathExpressionAccelerator::has_nondeterministic_header_control(loop) &&
+        !state->session.loop_summary_failed(loop)) {
         if (!state->is_summarizing()) {
             auto accelarated_states = execute_if_summarizable(state);
             if (accelarated_states.size() > 0) {
@@ -1387,15 +1641,50 @@ AInstructionPhi::execute(state_ptr state) {
         }
     }
 
-    auto prev_block = state->trace.back();
-    llvm::Value* selected_value = phi_inst->getIncomingValueForBlock(prev_block);
-    auto selected_value_expr = state->evaluate(selected_value);
+    if (loop && is_first_header_phi(phi_inst, loop)) {
+        auto history = state->loop_path_expressions.find(loop);
+        if (history != state->loop_path_expressions.end()) {
+            for (const PathSchemaCandidate& candidate :
+                 history->second.candidates) {
+                auto acceleration = PathExpressionAccelerator::accelerate(
+                    loop, state, candidate);
+                if (!acceleration) {
+                    spdlog::debug(
+                        "[path-expr] loop {} did not accelerate candidate {}",
+                        loop->getHeader()->getName().str(),
+                        render_path_schema(candidate));
+                    continue;
+                }
+
+                state_list successors{acceleration->jump};
+                state_ptr residual = std::make_shared<State>(*state);
+                residual->append_path_condition(!acceleration->covered);
+                z3::solver residual_solver(residual->z3ctx);
+                z3::params residual_parameters(residual->z3ctx);
+                residual_parameters.set("timeout", 3000u);
+                residual_solver.set(residual_parameters);
+                residual_solver.add(
+                    residual->get_path_condition().as_expr());
+                const z3::check_result residual_result =
+                    residual_solver.check();
+                spdlog::debug(
+                    "[path-expr] loop {} residual feasibility after jump: {}",
+                    loop->getHeader()->getName().str(),
+                    residual_result == z3::sat
+                        ? "sat"
+                        : (residual_result == z3::unsat ? "unsat"
+                                                        : "unknown"));
+                if (residual_result != z3::unsat) {
+                    residual->execute_phi_bundle();
+                    successors.push_back(residual);
+                }
+                return successors;
+            }
+        }
+    }
 
     state_ptr new_state = std::make_shared<State>(*state);
-    // new_state->write(inst, selected_value_expr);
-    // new_state->memory.allocate(inst, selected_value_expr);
-    new_state->memory.put_temp(inst, selected_value_expr);
-    new_state->step_pc();
+    new_state->execute_phi_bundle();
 
     return {new_state};
 }
@@ -1431,14 +1720,8 @@ AInstructionPhi::execute(loop_state_ptr state) {
         }
     }
 
-    auto& z3ctx = state->z3ctx;
-    auto prev_block = state->trace.back();
-    llvm::Value* selected_value = phi_inst->getIncomingValueForBlock(prev_block);
-    auto selected_value_expr = state->evaluate(selected_value);
-
     loop_state_ptr new_state = std::make_shared<LoopState>(*state);
-    new_state->memory.put_temp(inst, selected_value_expr);
-    new_state->step_pc();
+    new_state->execute_phi_bundle();
 
     return {new_state};
 }
@@ -1517,7 +1800,8 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                 "ari_" + call->getName().str() + "_unknown";
             const z3::func_decl values = state->z3ctx.function(
                 name.c_str(), state->z3ctx.int_sort(),
-                state->z3ctx.int_sort());
+                call->getType()->isIntegerTy(1)
+                    ? state->z3ctx.bool_sort() : state->z3ctx.int_sort());
             z3::expr call_count = *iteration_count;
             if (block == header) {
                 // A call in the loop header is also evaluated once for the
@@ -1671,6 +1955,8 @@ AInstructionSelect::_execute(std::shared_ptr<state_ty> state) {
     auto true_value = select_inst->getTrueValue();
     auto true_value_expr = state->evaluate(true_value);
     auto true_state = std::make_shared<state_ty>(*state);
+    true_state->path_decisions.push_back(
+        {reinterpret_cast<std::uintptr_t>(select_inst), 0});
     // true_state->memory.allocate(inst, true_value_expr);
     // true_state->write(inst, true_value_expr);
     true_state->memory.put_temp(inst, true_value_expr);
@@ -1682,6 +1968,8 @@ AInstructionSelect::_execute(std::shared_ptr<state_ty> state) {
     auto false_value = select_inst->getFalseValue();
     auto false_value_expr = state->evaluate(false_value);
     auto false_state = std::make_shared<state_ty>(*state);
+    false_state->path_decisions.push_back(
+        {reinterpret_cast<std::uintptr_t>(select_inst), 1});
     // false_state->memory.allocate(inst, false_value_expr);
     false_state->memory.put_temp(inst, false_value_expr);
     // false_state->write(inst, false_value_expr);
@@ -1887,6 +2175,10 @@ AInstructionTrunc::execute(state_ptr state) {
     const unsigned target_width = trunc_inst->getType()->getIntegerBitWidth();
     Expression result = map_integer_unary(
         op_value, [&](const z3::expr& value) {
+            if (state->session.uses_integer_relaxation()) {
+                z3::expr integer = integer_semantics::as_int(value);
+                return target_width == 1 ? integer % 2 != 0 : integer;
+            }
             return integer_semantics::from_bv(
                 integer_semantics::to_bv(value, target_width),
                 target_width);

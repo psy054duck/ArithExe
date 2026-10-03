@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <string>
 #include "engine.h"
 
@@ -41,6 +42,271 @@ void run_bounded_cfinite_benchmark(const std::string& filename) {
     auto veri_res = verify_benchmark("bounded-cfinite/" + filename);
     EXPECT_EQ(veri_res, HOLD) << "Failed on: test/bounded-cfinite/" << filename;
 }
+
+class ScopedEnvironmentVariable {
+  public:
+    ScopedEnvironmentVariable(const char* name, const char* value)
+        : name(name) {
+        const char* previous_value = std::getenv(name);
+        if (previous_value) previous = previous_value;
+        setenv(name, value, 1);
+    }
+
+    ~ScopedEnvironmentVariable() {
+        if (previous.empty()) {
+            unsetenv(name.c_str());
+        } else {
+            setenv(name.c_str(), previous.c_str(), 1);
+        }
+    }
+
+  private:
+    std::string name;
+    std::string previous;
+};
+}
+
+TEST(PathExpressionIntegration, CompressesAndAcceleratesSymbolicXYLoop) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/true_xy_phase.c"));
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GT(engine.get_session().path_compression_count(), 0u);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, EvaluatesPhiAssignmentsInParallel) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    for (bool relaxed : {false, true}) {
+        Engine engine(benchmark_path("path_expression/true_phi_parallel.c"));
+        engine.get_session().set_ignore_bitwidth_constraints(relaxed);
+        EXPECT_EQ(engine.verify(), HOLD);
+    }
+}
+
+TEST(IntegerRelaxation, RetainsUnsignedInputNonnegativity) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/true_unsigned_nondet_domain.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(IntegerRelaxation, BoundsEachNondetInputInTheLoopBody) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/true_bounded_nondet_body.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), HOLD);
+}
+
+TEST(IntegerRelaxation, AcceleratesLargeUnsignedThreshold) {
+    ScopedEnvironmentVariable normal("ARITHEXE_FORCE_PATH_EXPRESSIONS", "0");
+    Engine engine(benchmark_path("path_expression/true_unsigned_large_threshold.c"));
+    engine.get_session().set_ignore_32bit_constraints(true);
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GE(engine.get_session().path_acceleration_count(), 2u);
+}
+
+TEST(IntegerRelaxation, DetectsWrongLargeThresholdAssertion) {
+    ScopedEnvironmentVariable normal("ARITHEXE_FORCE_PATH_EXPRESSIONS", "0");
+    Engine engine(benchmark_path("path_expression/false_unsigned_large_threshold.c"));
+    engine.get_session().set_ignore_32bit_constraints(true);
+    EXPECT_EQ(engine.verify(), FAIL);
+    EXPECT_GE(engine.get_session().path_acceleration_count(), 2u);
+}
+
+TEST(IntegerRelaxation, IsExplicitAndDoesNotLeakBetweenEngines) {
+    const auto path = benchmark_path("path_expression/true_unsigned_wrap_profile.c");
+    Engine relaxed(path);
+    relaxed.get_session().set_ignore_32bit_constraints(true);
+    EXPECT_EQ(relaxed.verify(), FAIL);
+    Engine fixed_width(path);
+    EXPECT_FALSE(fixed_width.get_session().ignores_integer_width(32));
+    EXPECT_EQ(fixed_width.verify(), HOLD);
+    EXPECT_FALSE(relaxed.get_session().ignores_integer_width(1));
+    EXPECT_TRUE(relaxed.get_session().ignores_integer_width(8));
+    EXPECT_TRUE(relaxed.get_session().ignores_integer_width(16));
+    EXPECT_TRUE(relaxed.get_session().ignores_integer_width(64));
+    EXPECT_TRUE(relaxed.get_session().ignores_integer_width(128));
+}
+
+TEST(IntegerRelaxation, AcceleratesAlternatingUnsignedSumt2) {
+    Engine engine(benchmark_path("path_expression/true_sumt2.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(NestedPathAcceleration, AcceleratesFiveLevelsAndLargeOuterCount) {
+    Engine engine(benchmark_path("path_expression/true_nested5_1.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_EQ(engine.get_session().nested_path_summary_count(), 5u);
+    EXPECT_EQ(engine.get_session().path_acceleration_count(), 5u);
+}
+
+TEST(NestedPathAcceleration, AlsoCertifiesFiveLevelsWithFixedWidthGuards) {
+    Engine engine(benchmark_path("path_expression/true_nested5_1.c"));
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_EQ(engine.get_session().nested_path_summary_count(), 5u);
+    EXPECT_EQ(engine.get_session().path_acceleration_count(), 5u);
+}
+
+TEST(NestedPathAcceleration, RetainsFixedWidthDefinednessAndModeIsolation) {
+    const auto path = benchmark_path("path_expression/true_nested_overflow.c");
+    Engine fixed(path);
+    EXPECT_EQ(fixed.verify(), HOLD);
+    Engine relaxed(path);
+    relaxed.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(relaxed.verify(), FAIL);
+}
+
+TEST(NestedPathAcceleration, DoesNotHideAssertionAfterChildExit) {
+    Engine engine(benchmark_path("path_expression/false_nested_assert.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), FAIL);
+    EXPECT_GT(engine.get_session().nested_path_summary_count(), 0u);
+}
+
+TEST(NestedPathAcceleration, CachedChildRetainsOuterLiveInAndLateViolation) {
+    Engine engine(benchmark_path("path_expression/false_nested_late_assert.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), FAIL);
+    EXPECT_GT(engine.get_session().nested_path_summary_count(), 0u);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(NestedPathAcceleration, PreservesZeroTripAndResetLiveOuts) {
+    Engine engine(benchmark_path("path_expression/true_nested_zero_reset.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_EQ(engine.get_session().nested_path_summary_count(), 2u);
+}
+
+TEST(NestedPathAcceleration, SupportsDescendingAndNonUnitStrides) {
+    Engine engine(benchmark_path("path_expression/true_nested_descending.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_EQ(engine.get_session().nested_path_summary_count(), 2u);
+}
+
+TEST(NestedPathAcceleration, DoesNotSummarizeFreshBodyChoices) {
+    Engine engine(benchmark_path("path_expression/false_nested_unknown_call.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), FAIL);
+    EXPECT_EQ(engine.get_session().nested_path_summary_count(), 0u);
+}
+
+TEST(NestedPathAcceleration, RetainsOrdinaryExecutionForMultipleBodyPaths) {
+    Engine engine(benchmark_path("path_expression/true_nested_multiple_paths.c"));
+    engine.get_session().set_ignore_bitwidth_constraints(true);
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_EQ(engine.get_session().nested_path_summary_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, AcceleratesModuloGuardedParityLoop) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/true_parity_phase.c"));
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GT(engine.get_session().path_compression_count(), 0u);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, DoesNotHideViolationBehindAcceleration) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/false_xy_phase.c"));
+    EXPECT_EQ(engine.verify(), FAIL);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, SummarizesNondeterministicPolynomialFlagLoop) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/true_nondet_flag.c"));
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, SelectsSequenceAccelerationInNormalMode) {
+    ScopedEnvironmentVariable normal("ARITHEXE_FORCE_PATH_EXPRESSIONS", "0");
+    Engine engine(benchmark_path("path_expression/true_nondet_flag.c"));
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, RetainsNondeterministicZeroIterationExit) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/true_nondet_zero.c"));
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, ReconstructsAcceleratedBooleanSequence) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/false_nondet_count.c"));
+    ASSERT_EQ(engine.verify(), FAIL);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+    // One real observed iteration suffices. The preheader is not a path.
+    EXPECT_EQ(engine.get_session().path_compression_count(), 1u);
+    const auto& inputs = engine.get_counterexample_inputs();
+    ASSERT_GE(inputs.size(), 3u);
+    for (std::size_t index = 0; index + 1 < inputs.size(); ++index) {
+        EXPECT_EQ(inputs[index].value, "1");
+    }
+    EXPECT_EQ(inputs.back().value, "0");
+}
+
+TEST(PathExpressionIntegration, ReconstructsInvertedBooleanSequence) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/false_nondet_inverted.c"));
+    ASSERT_EQ(engine.verify(), FAIL);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+    const auto& inputs = engine.get_counterexample_inputs();
+    ASSERT_GE(inputs.size(), 3u);
+    for (std::size_t index = 0; index + 1 < inputs.size(); ++index) {
+        EXPECT_EQ(inputs[index].value, "0");
+    }
+    EXPECT_EQ(inputs.back().value, "1");
+}
+
+TEST(PathExpressionIntegration, FindsFalseEqualityInNondeterministicFlagLoop) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/false_nondet_flag.c"));
+    EXPECT_EQ(engine.verify(), FAIL);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, FindsViolationOnZeroIterationExit) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/false_nondet_zero.c"));
+    ASSERT_EQ(engine.verify(), FAIL);
+    const auto& inputs = engine.get_counterexample_inputs();
+    ASSERT_EQ(inputs.size(), 1u);
+    EXPECT_EQ(inputs.front().value, "0");
+}
+
+TEST(PathExpressionIntegration, DoesNotDiscardChangingBodyPaths) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/false_nondet_changing_path.c"));
+    EXPECT_EQ(engine.verify(), FAIL);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, ExcludesSignedOverflowFromAcceleratedPaths) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    Engine engine(benchmark_path("path_expression/true_nondet_overflow.c"));
+    EXPECT_EQ(engine.verify(), HOLD);
+    EXPECT_GT(engine.get_session().path_acceleration_count(), 0u);
+}
+
+TEST(PathExpressionIntegration, FallsBackForDataAndExternalCalls) {
+    ScopedEnvironmentVariable force("ARITHEXE_FORCE_PATH_EXPRESSIONS", "1");
+    for (const std::string& filename : {
+             "true_unsupported_data_call.c",
+             "true_unsupported_external_call.c"}) {
+        Engine engine(benchmark_path("path_expression/" + filename));
+        EXPECT_EQ(engine.verify(), HOLD) << filename;
+        EXPECT_EQ(engine.get_session().path_acceleration_count(), 0u)
+            << filename;
+    }
 }
 
 TEST(VerificationSessionTest, EnginesKeepIndependentModuleState) {

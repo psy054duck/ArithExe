@@ -21,6 +21,8 @@ struct WitnessOptions {
     std::string data_model = "LP64";
     std::string producer_name = "ArithExe";
     std::string producer_version = "development";
+    // Compatibility name: now marks the all-width integer relaxation.
+    bool integer_relaxed_32bit = false;
 };
 
 /** Write an SV-COMP YAML witness in exchange-format version 2.1. */

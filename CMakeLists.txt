@@ -65,6 +65,7 @@ set(ARITHEXEC_LIBS
     cache
     Witness
     VerificationSession
+    PathExpression
 )
 
 add_subdirectory(lib)

@@ -62,6 +62,16 @@ SV-COMP YAML 2.1 witness to `witness.yml` by default.
 ./arith_exe filename.c
 ```
 
+Pass `--verbose` (or `-v`) to display symbolic-execution progress and the
+intermediate path-expression pipeline: observed loop paths, compressed
+prefixes, candidate schemas, composite guards and updates, certified closed
+forms, first-break constraints, inferred repetition counts, and residual-state
+feasibility.
+
+```
+./arith_exe --verbose filename.c
+```
+
 For an SV-COMP run, pass the task's property file and data model explicitly:
 
 ```
@@ -92,6 +102,192 @@ timestamp, and UUID required by the exchange format.
 If a summarized loop or recursive function hides a conditional nondeterministic
 call whose dynamic return sequence cannot be reconstructed, ArithExe reports
 `UNKNOWN` instead of emitting a potentially non-reproducible violation witness.
+
+## Trace-driven path-expression acceleration
+
+ArithExe also contains an exact fallback accelerator for multi-path loops.  When
+the ordinary whole-loop recurrence summarizer is unavailable, every symbolic
+state records the precise conditional branch and `select` decisions made by one
+header-to-header iteration.  At every completed iteration it:
+
+1. interns the iteration as a path symbol;
+2. runs deterministic minimum-cost primitive-power compression on the exact
+   prefix;
+3. treats the final primitive word as a starred candidate, never as a proof;
+4. composes the guarded maps of the candidate's constituent paths;
+5. solves and checks a closed form for that composite map; and
+6. jumps to its exact first break while retaining the complementary ordinary
+   symbolic state.
+
+The accelerated state carries the exact relation
+
+```
+k >= 1
+and forall t. 0 <= t < k => guard_w(F_w^t(state))
+and not guard_w(F_w^k(state))
+```
+
+and records `w^k` in its segmented exact path prefix. Quantifier elimination is used to
+recognize a functional affine exponent when Z3 exposes one; otherwise `k`
+remains a constrained relational template.  Unsupported loops, failed
+closed-form certificates, solver `unknown`, or unsuccessful first-break queries
+leave the ordinary symbolic state unchanged.
+
+The trace-driven certified implementation profile is deliberately conservative:
+at least one integer scalar PHI, side-effect-free loop bodies, no nested loop, and a
+solvable composite path map.  Most calls, loads, stores, and nested loops fall back
+to the existing engine.  Translation maps use a built-in closed form; other
+polynomial composites are sent to the existing recurrence solver and accepted
+only after base and step checks are proved unsatisfiable.
+
+### Bottom-up nested-loop acceleration
+
+Nested loop families additionally use a certified, parametric exit-summary
+route at entry. It explores one parent iteration with each child replaced by
+its certified complete exit, building summaries from the innermost loop outward.
+This currently supports deterministic scalar counted loops with one returning
+body path, a header exit, integer PHIs, and a monotone `<`, `<=`, `>`, or `>=`
+counter test with a nonzero constant stride. Translations and reset maps have
+built-in closed forms; other maps use the recurrence solver and base/step checks.
+
+For a synthesized functional count `N`, acceptance requires the current entry
+constraints to entail the exact summary domain:
+
+```
+N >= 0
+and exit_guard(F^N(inputs))
+and forall t. 0 <= t < N => returning_guard(F^t(inputs))
+and forall t. 0 <= t <= N => not error_guard(F^t(inputs))
+```
+
+Assertion failures are collected as error obligations, never assumed away.
+Child domains must be proved at their invocation; an unsupported or uncertified
+child prevents its parent from being summarized. External scalar live-ins are
+explicit parameters of the per-session summary cache, so a summary cannot be
+specialized to an earlier outer iteration. Zero-trip exits preserve incoming
+live-outs, including variables reset only by a nonempty body. Each dynamic
+invocation has a fresh path-prefix cursor.
+
+The route works in both default fixed-width mode and the experimental integer
+relaxation. It retains definedness and fixed-width guard constraints in default
+mode. Domain QE is optional and limited to 100 ms; entry certificates are checked
+with the exact domain when QE does not finish. Multiple returning body paths,
+memory effects, fresh body calls, unsupported counter templates, and solver
+`unknown` fall back to ordinary execution. For nested families this fallback
+does not invoke the legacy nested recurrence route. Verbose mode logs construction,
+counter templates, safety/coverage checks, and jumps under `[nested-path]`.
+
+For example, `test/benchmark/path_expression/true_nested5_1.c` builds five
+summaries and skips all 268,435,455 outer repetitions, including the assertions
+inside the `z` loop. No increase in the trace-compression root bound is needed.
+
+Direct external `__VERIFIER_nondet_bool()` header guards also support arbitrary
+finite repetition. The call must have no arguments, return a Boolean, and be
+used only by the header branch, directly or through a single-use Boolean
+negation (`while (!__VERIFIER_nondet_bool())` is supported). The header must
+be the only loop exit, and must contain only PHIs, the call, its optional
+negation, and the branch (apart from debug records).
+The accelerator currently accepts one repeated path symbol and proves that
+no competing body path can be enabled anywhere on its closed-form trajectory
+under the current path condition. This handles invariant choices such as
+`if (flag)`; a changing body path falls back to ordinary execution until a
+stable path can be certified.
+
+Each dynamic guard call is an independent Boolean oracle value `b(t)`.
+Existentially projecting a sequence of `n` continue values followed by an exit
+value permits every `n >= 0`. The accelerated exit retains
+
+```
+n >= 0 and forall t. 0 <= t < n => guard_w(F_w^t(state))
+```
+
+including the definedness conditions of all scalar updates. A symbolic Boolean
+sequence is retained for counterexamples: a lambda array containing `n`
+continue values and one exit value. Previously observed calls stay in order.
+The original zero-iteration exit is explored by ordinary symbolic execution;
+the accelerated suffix also admits zero further iterations. All finite,
+defined continuations are covered before the ordinary residual is removed.
+This proves postconditions on terminating executions; it does not prove loop
+termination. Nondeterministic data calls and other calls remain outside the
+path accelerator's profile.
+
+Recognized nondeterministic header controls select the sequence-aware path
+accelerator automatically, bypassing the legacy whole-loop recurrence route.
+Incoming scalar values must also be proved defined before acceleration.
+
+For differential testing, set `ARITHEXE_FORCE_PATH_EXPRESSIONS=1` to bypass the
+whole-loop fast path.  This is used by the path-expression regression tests; it
+is not required in normal operation. Candidate generation can be configured
+with `ARITHEXE_PATH_MAX_ROOT`, `ARITHEXE_PATH_BEAM`, and
+`ARITHEXE_PATH_EVIDENCE` (defaults: 4, 4, and 2).
+
+### Temporary all-width integer constraint bypass
+
+`--ignore-bitwidth-constraints` is an opt-in, experimental **IR-level integer
+relaxation** for all integer widths. `--ignore-32bit-constraints` remains an
+alias, but now selects this same all-width mode. For example, from the
+repository root:
+
+```sh
+./build/arith_exe \
+  --ignore-bitwidth-constraints --witness=threshold-relaxed.yml \
+  test/benchmark/path_expression/true_unsigned_large_threshold.c
+```
+
+The mode uses Int arithmetic without machine-width normalization, result bounds,
+`nsw`/`nuw` overflow obligations, or bitvectors. This applies to arithmetic,
+signed/unsigned comparisons, division/remainder, integer casts, stores,
+recursive-summary input bounds, and allocation size arithmetic. Recognized
+SV-COMP nondeterministic integer inputs retain their finite source-type domains:
+unsigned APIs (`uchar`, `ushort`, `uint`, `ulong`, `ulonglong`) get
+`0 <= input < 2^w`; signed APIs (`schar`, `short`, `int`, `long`, `longlong`)
+get `-2^(w-1) <= input < 2^(w-1)`. The compiled return width `w` respects the
+selected data model. Bounds are linear Int constraints, applied on every call,
+including fresh inputs sampled during ordinary loop execution and loop probes.
+They do not add modular arithmetic or bounds on intermediate results.
+Plain `char` uses ABI sign/zero-extension attributes when available; otherwise
+its conservative domain is the union of signed and unsigned ranges. Boolean
+inputs remain Boolean (or 0/1 for integer-declared Boolean APIs). Unknown
+external APIs are not assigned a guessed signedness. Acceleration of loops
+with data-valued external calls remains unsupported in the proposed mode;
+such loops fall back to ordinary symbolic execution.
+Unsigned comparison literals and zero-extended literals are decoded as unsigned
+bit patterns, without adding modular constraints.
+Signed division/remainder truncate toward zero; unsigned
+division/remainder use integer div/mod without operand normalization. Integer
+casts preserve the value. Booleans remain Boolean: zero extension maps to 0/1,
+sign extension to 0/-1, and truncation to Boolean keeps the low-bit parity.
+
+Boolean logic is supported directly. Integer `&`, `|`, and `^` with a constant
+mask use unbounded two's-complement integer formulas. Constant shifts use
+multiplication/division by powers of two; both right-shift variants use floor
+division, with no machine-width cap or unsigned zero-fill boundary. Symbolic
+bitwise masks and symbolic shift amounts report `UNKNOWN` instead of generating
+bitvector formulas. Constant masks have a 4096-binary-digit resource limit,
+and constant shift amounts must not exceed 4096. Exceeding these limits also
+reports `UNKNOWN`, not a solver-side bound.
+
+Actual program remainder operations (e.g. `% 2`) are retained. Division by
+zero, negative shifts, arithmetic exactness, operand definedness, and memory
+safety conditions are retained, as are path guards, first-break minimality,
+and assertion checks. Configuration is per verification session and disabled
+by default. The option selects the path-expression accelerator instead of the
+legacy whole-loop route. Optional quantifier elimination has a two-second
+timeout and falls back to the exact relational repetition count.
+
+Results are explicitly labeled `TRUE(integer-relaxed)` or
+`FALSE(integer-relaxed)`. Witness generation is enabled by default, including
+in this mode; `--witness=PATH` chooses the output and `--no-witness` disables it.
+Relaxed witnesses include a warning comment and producer configuration
+`integer-relaxed-all-widths`. Neither the result nor the witness establishes the
+corresponding fixed-width C result without independent validation. This is not
+a complete mathematical-integer C frontend: compilation/optimization and LLVM constants
+still reflect C/LLVM semantics. Frontend-folded constants or branches cannot be
+recovered by the backend relaxation. Memory layout remains the compiled layout.
+Use this bypass primarily for simple scalar polynomial loops with
+ordinary-sized constants. Exact C verification needs a separate
+no-wrap/definedness certificate; that automatic certification is not
+implemented by this option.
 
 ## Google test
 Beside used as unit tests,

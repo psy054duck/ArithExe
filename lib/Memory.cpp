@@ -1,4 +1,5 @@
 #include "Memory.h"
+#include "llvm/ADT/SmallString.h"
 
 using namespace ari_exe;
 
@@ -85,7 +86,9 @@ Memory::add_global(llvm::GlobalVariable& gv) {
         dims.push_back(z3ctx.int_val(value_type->getArrayNumElements()));
     } else if (value_type->isIntegerTy()) {
         if (auto constant = dyn_cast_or_null<llvm::ConstantInt>(initial_value)) {
-            value = z3ctx.int_val(constant->getSExtValue());
+            llvm::SmallString<64> decimal;
+            constant->getValue().toString(decimal, 10, true);
+            value = z3ctx.int_val(decimal.c_str());
         } else {
             llvm::errs() << "Unsupported global variable initializer type\n";
         }

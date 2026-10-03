@@ -5,6 +5,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Value.h"
@@ -14,11 +15,13 @@
 #include "LoopSummary.h"
 #include "SymbolTable.h"
 #include "cache.h"
+#include "PathExpression.h"
 
 namespace ari_exe {
 
 class AInstruction;
 class RecurrenceSolverWorker;
+struct NestedPathSummary;
 
 class VerificationSession {
   public:
@@ -44,6 +47,22 @@ class VerificationSession {
     Activation activate() { return Activation(*this); }
 
     static VerificationSession& current();
+
+    // Experimental IR-level relaxation, not a proof of fixed-width C semantics.
+    // Configure before starting execution; do not mix cached semantic profiles.
+    void set_ignore_bitwidth_constraints(bool enabled) {
+        ignore_bitwidth_constraints_enabled = enabled;
+    }
+    // Compatibility alias; now relaxes all integer widths, not only i32.
+    void set_ignore_32bit_constraints(bool enabled) {
+        set_ignore_bitwidth_constraints(enabled);
+    }
+    bool uses_integer_relaxation() const {
+        return ignore_bitwidth_constraints_enabled;
+    }
+    bool ignores_integer_width(unsigned width) const {
+        return ignore_bitwidth_constraints_enabled && width > 1;
+    }
 
     AnalysisManager& analyses() { return analysis_manager; }
 
@@ -80,12 +99,41 @@ class VerificationSession {
         return memory_object_name_counters[name];
     }
 
+    PathSymbol intern_loop_path(
+        llvm::Loop* loop,
+        const std::vector<PathDecisionEvent>& decisions);
+
+    std::uint64_t next_path_expression_id() {
+        return path_expression_id++;
+    }
+
+    void note_path_compression() { ++path_compressions; }
+    void note_path_acceleration() { ++path_accelerations; }
+    void note_path_affine_template() { ++path_affine_templates; }
+    std::uint64_t path_compression_count() const {
+        return path_compressions;
+    }
+    std::uint64_t path_acceleration_count() const {
+        return path_accelerations;
+    }
+    std::uint64_t path_affine_template_count() const {
+        return path_affine_templates;
+    }
+
+    std::map<llvm::Loop*, std::shared_ptr<NestedPathSummary>>&
+    nested_path_summaries() { return nested_path_summary_cache; }
+    void note_nested_path_summary() { ++nested_path_summaries_built; }
+    std::uint64_t nested_path_summary_count() const {
+        return nested_path_summaries_built;
+    }
+
     void clear_module_state();
 
   private:
     static thread_local VerificationSession* active_session;
 
     AnalysisManager analysis_manager;
+    bool ignore_bitwidth_constraints_enabled = false;
     std::map<llvm::Instruction*, std::shared_ptr<AInstruction>>
         instruction_cache;
     SymbolTable<FunctionSummary> function_summary_cache;
@@ -95,6 +143,17 @@ class VerificationSession {
     std::map<llvm::Value*, int> call_value_counters;
     std::set<llvm::Loop*> failed_loops;
     std::map<std::string, unsigned> memory_object_name_counters;
+    std::map<llvm::Loop*,
+             std::map<std::vector<PathDecisionEvent>, PathSymbol>>
+        loop_path_alphabets;
+    PathSymbol next_path_symbol = 1;
+    std::uint64_t path_expression_id = 1;
+    std::uint64_t path_compressions = 0;
+    std::uint64_t path_accelerations = 0;
+    std::uint64_t path_affine_templates = 0;
+    std::map<llvm::Loop*, std::shared_ptr<NestedPathSummary>>
+        nested_path_summary_cache;
+    std::uint64_t nested_path_summaries_built = 0;
 };
 
 } // namespace ari_exe

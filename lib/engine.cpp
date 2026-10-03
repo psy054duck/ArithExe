@@ -168,6 +168,8 @@ Engine::run(state_ptr state) {
                 "while executing LLVM " +
                 std::string(cur_state->pc->inst->getOpcodeName()) + ": " +
                 error.msg());
+        } catch (const VerifierError&) {
+            throw;
         } catch (const std::exception& error) {
             throw std::runtime_error(
                 "while executing LLVM " +
@@ -295,14 +297,16 @@ Engine::capture_counterexample(state_ptr state, const z3::model& model) {
         std::vector<z3::expr> values;
         if (call.value) {
             values.push_back(model.eval(*call.value, true).simplify());
-        } else if (call.values && call.count) {
+        } else if ((call.values || call.sequence) && call.count) {
             z3::expr evaluated_count = model.eval(*call.count, true).simplify();
             int64_t count = 0;
             if (!evaluated_count.is_numeral_i64(count) || count < 0) continue;
             for (int64_t index = 0; index < count; ++index) {
                 z3::expr argument = z3ctx.int_val(std::to_string(index).c_str());
-                values.push_back(
-                    model.eval((*call.values)(argument), true).simplify());
+                const z3::expr value = call.sequence
+                    ? z3::select(*call.sequence, argument)
+                    : (*call.values)(argument);
+                values.push_back(model.eval(value, true).simplify());
             }
         }
 

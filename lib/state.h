@@ -2,6 +2,7 @@
 #define STATE_H
 
 #include <map>
+#include <optional>
 #include <vector>
 #include <set>
 
@@ -12,8 +13,10 @@
 
 #include "Memory.h"
 #include "Expr.h"
+#include "PathExpression.h"
 
 namespace llvm {
+    class BasicBlock;
     class Loop;
 }
 
@@ -49,11 +52,63 @@ namespace ari_exe {
 #include "LoopSummary.h"
 
 namespace ari_exe {
+    struct SymbolicPathPower {
+        PathWord root;
+        z3::expr exponent;
+    };
+
+    struct ExactPathPrefixSegment {
+        PathWord explicit_word;
+        std::optional<SymbolicPathPower> symbolic_power;
+
+        static ExactPathPrefixSegment explicit_segment(PathWord word) {
+            return {std::move(word), std::nullopt};
+        }
+
+        static ExactPathPrefixSegment symbolic_segment(PathWord root,
+                                                       const z3::expr& exponent) {
+            return {{}, SymbolicPathPower{std::move(root), exponent}};
+        }
+    };
+
+    struct LoopPathExpressionState {
+        std::vector<ExactPathPrefixSegment> prefix;
+        std::vector<PathSchemaCandidate> candidates;
+        std::size_t decision_cursor = 0;
+        bool decision_cursor_initialized = false;
+
+        void append(PathSymbol symbol) {
+            if (prefix.empty() || prefix.back().symbolic_power.has_value()) {
+                prefix.push_back(
+                    ExactPathPrefixSegment::explicit_segment({symbol}));
+            } else {
+                prefix.back().explicit_word.push_back(symbol);
+            }
+        }
+
+        void append_symbolic_power(const PathWord& root,
+                                   const z3::expr& exponent) {
+            prefix.push_back(
+                ExactPathPrefixSegment::symbolic_segment(root, exponent));
+        }
+
+        const PathWord& concrete_frontier() const {
+            static const PathWord empty;
+            if (prefix.empty() || prefix.back().symbolic_power.has_value()) {
+                return empty;
+            }
+            return prefix.back().explicit_word;
+        }
+    };
+
     struct NondetCall {
         llvm::CallInst* instruction;
         std::optional<z3::expr> value;
         std::optional<z3::func_decl> values;
         std::optional<z3::expr> count;
+        // A constructed sequence after existentially projecting pure control
+        // choices out of the path condition. This retains a concrete witness.
+        std::optional<z3::expr> sequence;
 
         NondetCall(llvm::CallInst* instruction, const z3::expr& value)
             : instruction(instruction), value(value) {}
@@ -61,6 +116,10 @@ namespace ari_exe {
         NondetCall(llvm::CallInst* instruction, const z3::func_decl& values,
                    const z3::expr& count)
             : instruction(instruction), values(values), count(count) {}
+
+        NondetCall(llvm::CallInst* instruction, const z3::expr& sequence,
+                   const z3::expr& count)
+            : instruction(instruction), count(count), sequence(sequence) {}
     };
 
     class State {
@@ -87,7 +146,7 @@ namespace ari_exe {
                 : session(session), z3ctx(z3ctx), pc(pc), prev_pc(prev_pc),
                   memory(memory), path_condition(path_condition), trace(trace),
                   status(status) {};
-            State(const State& state): session(state.session), z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), summary_invariants(state.summary_invariants), is_over_approx(state.is_over_approx), nondet_calls(state.nondet_calls), counterexample_complete(state.counterexample_complete), loop_certificates(state.loop_certificates), function_certificates(state.function_certificates) {};
+            State(const State& state): session(state.session), z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), summary_invariants(state.summary_invariants), is_over_approx(state.is_over_approx), nondet_calls(state.nondet_calls), counterexample_complete(state.counterexample_complete), loop_certificates(state.loop_certificates), function_certificates(state.function_certificates), path_decisions(state.path_decisions), loop_path_expressions(state.loop_path_expressions) {};
 
             // if the state is in the process of summarizing a loop
             virtual bool is_summarizing() const { return false; }
@@ -101,6 +160,14 @@ namespace ari_exe {
 
             // step the pc
             void step_pc(AInstruction* next_pc = nullptr);
+
+            // PHIs are parallel assignments on the incoming predecessor edge.
+            void execute_phi_bundle();
+
+            // Restore finite domains of recognized nondeterministic inputs in
+            // mathematical-integer mode, not bounds on arithmetic results.
+            void constrain_nondet_input(llvm::CallInst* call,
+                                        const Expression& value);
 
             VerificationSession& session;
 
@@ -157,6 +224,15 @@ namespace ari_exe {
             // Exact recursive summaries encountered on this path. These are
             // converted to source-level function contracts.
             std::vector<FunctionCertificate> function_certificates;
+
+            // Conditional branch/select choices, independent of the legacy
+            // basic-block trace used by PHI execution.
+            std::vector<PathDecisionEvent> path_decisions;
+
+            // Exact per-loop path prefixes. Compression candidates are evidence
+            // only; only certified accelerations may append symbolic powers.
+            std::map<llvm::Loop*, LoopPathExpressionState>
+                loop_path_expressions;
     };
 
     class LoopState: public State {

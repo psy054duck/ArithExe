@@ -48,6 +48,7 @@ RecExecution::build_initial_state() {
             for (llvm::User* user : arg.users()) {
                 auto* load = llvm::dyn_cast<llvm::LoadInst>(user);
                 if (!load || !load->getType()->isIntegerTy()) continue;
+                if (VerificationSession::current().uses_integer_relaxation()) break;
                 initial_condition =
                     initial_condition &&
                     integer_semantics::in_signed_range(
@@ -88,7 +89,8 @@ RecExecution::step(state_ptr state, bool unfold) {
         }
     } else if (auto bin_inst = llvm::dyn_cast_or_null<llvm::BinaryOperator>(pc->inst)) {
         auto op = bin_inst->getOpcode();
-        if (op == llvm::Instruction::UDiv || op == llvm::Instruction::SDiv) {
+        if (!state->session.uses_integer_relaxation() &&
+            (op == llvm::Instruction::UDiv || op == llvm::Instruction::SDiv)) {
             auto op1 = state->evaluate(bin_inst->getOperand(0));
             auto op2 = state->evaluate(bin_inst->getOperand(1));
             auto& z3ctx = AnalysisManager::get_instance()->get_ctx();

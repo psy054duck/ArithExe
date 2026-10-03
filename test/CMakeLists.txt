@@ -38,6 +38,15 @@ add_executable(
   test_witness.cpp
 )
 
+add_executable(
+  test_path_expression
+  test_path_expression.cpp
+)
+
+add_executable(test_relaxed_integer test_relaxed_integer.cpp)
+target_link_libraries(test_relaxed_integer GTest::gtest_main
+  ${ARITHEXEC_LIBS} ${Z3_LIBRARIES} ${llvm_libs})
+
 target_compile_definitions(
   test_engine
   PRIVATE ARITHEXE_TEST_BENCHMARK_DIR="${CMAKE_SOURCE_DIR}/test/benchmark"
@@ -80,8 +89,16 @@ target_link_libraries(
   ${llvm_libs}
 )
 
+target_link_libraries(
+  test_path_expression
+  GTest::gtest_main
+  PathExpression
+)
+
 include(GoogleTest)
 gtest_discover_tests(test_engine)
 gtest_discover_tests(test_logic)
 gtest_discover_tests(test_algebra)
 gtest_discover_tests(test_witness DISCOVERY_TIMEOUT 30)
+gtest_discover_tests(test_path_expression)
+gtest_discover_tests(test_relaxed_integer)

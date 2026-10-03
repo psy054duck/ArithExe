@@ -1,5 +1,7 @@
 #include "state.h"
+#include "IntegerSemantics.h"
 #include "spdlog/spdlog.h"
+#include "llvm/ADT/SmallString.h"
 
 using namespace ari_exe;
 
@@ -21,7 +23,6 @@ State::append_path_condition(const Expression& _path_condition) {
 
 Expression
 State::evaluate(llvm::Value* v, bool is_signed) {
-    (void)is_signed;
     if (auto undef = llvm::dyn_cast_or_null<llvm::UndefValue>(v)) {
         // If the value is an undef, return a fresh symbolic variable
         auto ty = v->getType();
@@ -46,7 +47,9 @@ State::evaluate(llvm::Value* v, bool is_signed) {
         if (constant->getBitWidth() == 1) {
             return Expression(z3ctx.bool_val(constant->getSExtValue()));
         }
-        return Expression(z3ctx.int_val(constant->getSExtValue()));
+        llvm::SmallString<64> decimal;
+        constant->getValue().toString(decimal, 10, is_signed);
+        return Expression(z3ctx.int_val(decimal.c_str()));
     }
     auto obj = memory.get_object(v);
     if (obj) {
@@ -54,6 +57,79 @@ State::evaluate(llvm::Value* v, bool is_signed) {
     }
     assert(false && "Value not found in memory");
     return Expression(); // return something to avoid compiler warning
+}
+
+void
+State::execute_phi_bundle() {
+    auto* block = pc->inst->getParent();
+    assert(!trace.empty() && "PHIs require a predecessor edge");
+    assert(pc->inst == &*block->phis().begin() &&
+           "PHIs must be evaluated together at block entry");
+    std::vector<std::pair<llvm::PHINode*, Expression>> incoming;
+    for (auto& phi : block->phis()) {
+        auto* value = phi.getIncomingValueForBlock(trace.back());
+        assert(value && "PHI has no value for the incoming edge");
+        incoming.emplace_back(&phi, evaluate(value));
+    }
+    // Do not overwrite any predecessor value until all RHSs are evaluated.
+    for (const auto& [phi, value] : incoming) memory.put_temp(phi, value);
+    step_pc(AInstruction::create(&*block->getFirstNonPHIOrDbg()));
+}
+
+void
+State::constrain_nondet_input(llvm::CallInst* call,
+                             const Expression& value) {
+    if (!session.uses_integer_relaxation() ||
+        !call->getType()->isIntegerTy() || call->getType()->isIntegerTy(1))
+        return;
+    auto* callee = llvm::dyn_cast<llvm::Function>(
+        call->getCalledOperand()->stripPointerCasts());
+    if (!callee) return;
+    const auto name = callee->getName();
+    const unsigned width = call->getType()->getIntegerBitWidth();
+    // LLVM integer types are signless. The API determines signedness; the
+    // actual IR width determines the bounds (e.g. ILP32 vs LP64 long).
+    const bool is_unsigned = name == "__VERIFIER_nondet_uchar" ||
+        name == "__VERIFIER_nondet_ushort" ||
+        name == "__VERIFIER_nondet_uint" ||
+        name == "__VERIFIER_nondet_ulong" ||
+        name == "__VERIFIER_nondet_ulonglong";
+    const bool is_signed = name == "__VERIFIER_nondet_schar" ||
+        name == "__VERIFIER_nondet_short" ||
+        name == "__VERIFIER_nondet_int" ||
+        name == "__VERIFIER_nondet_long" ||
+        name == "__VERIFIER_nondet_longlong";
+    z3::expr domain = z3ctx.bool_val(true);
+    if (is_unsigned) {
+        domain = integer_semantics::in_unsigned_range(value.as_expr(), width);
+    } else if (is_signed) {
+        domain = integer_semantics::in_signed_range(value.as_expr(), width);
+    } else if (name == "__VERIFIER_nondet_bool") {
+        // Some frontends declare this API with an integer rather than i1.
+        domain = value.as_expr() >= 0 && value.as_expr() <= 1;
+    } else if (name == "__VERIFIER_nondet_char") {
+        // Plain char is target-dependent. Clang's ABI extension attribute
+        // identifies it where available; do not guess when it is absent.
+        const bool zero_extended = call->hasRetAttr(llvm::Attribute::ZExt) ||
+            callee->hasRetAttribute(llvm::Attribute::ZExt);
+        const bool sign_extended = call->hasRetAttr(llvm::Attribute::SExt) ||
+            callee->hasRetAttribute(llvm::Attribute::SExt);
+        if (zero_extended && !sign_extended) {
+            domain = integer_semantics::in_unsigned_range(value.as_expr(), width);
+        } else if (sign_extended && !zero_extended) {
+            domain = integer_semantics::in_signed_range(value.as_expr(), width);
+        } else {
+            // Conservative union of signed and unsigned char domains.
+            domain = value.as_expr() >= integer_semantics::signed_min(z3ctx, width) &&
+                value.as_expr() < integer_semantics::power_of_two(z3ctx, width);
+        }
+    } else {
+        // An arbitrary external integer call has no known signedness/API.
+        return;
+    }
+    // These are linear Int bounds only: no normalization, mod, or bitvectors.
+    // Bypass LoopState's branch-only path-condition bookkeeping here.
+    State::append_path_condition(Expression(domain.simplify()));
 }
 
 void

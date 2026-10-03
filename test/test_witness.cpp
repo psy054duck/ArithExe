@@ -56,6 +56,8 @@ TEST_F(WitnessTest, WritesCorrectnessWitnessForLoopProof) {
     EXPECT_NE(witness.find("format_version: \"2.1\""), std::string::npos);
     EXPECT_NE(witness.find("input_file_hashes:"), std::string::npos);
     EXPECT_NE(witness.find("data_model: \"LP64\""), std::string::npos);
+    EXPECT_NE(witness.find("configuration: \"svcomp\""), std::string::npos);
+    EXPECT_EQ(witness.find("integer-relaxed"), std::string::npos);
     EXPECT_NE(witness.find("entry_type: \"invariant_set\""), std::string::npos);
     EXPECT_NE(witness.find("type: \"loop_invariant\""), std::string::npos);
     EXPECT_NE(witness.find("entry_type: \"ghost_instrumentation\""),
@@ -64,6 +66,86 @@ TEST_F(WitnessTest, WritesCorrectnessWitnessForLoopProof) {
     EXPECT_NE(witness.find("type: \"location_invariant\""), std::string::npos);
     EXPECT_NE(witness.find("line: 19"), std::string::npos);
     EXPECT_NE(witness.find("value: \"0\""), std::string::npos);
+    std::filesystem::remove(output);
+}
+
+TEST_F(WitnessTest, WritesMarkedIntegerRelaxedCorrectnessWitness) {
+    const std::string source =
+        benchmark_path("path_expression/true_unsigned_large_threshold.c");
+    const std::string output = "test-integer-relaxed-correctness-witness.yml";
+    Engine engine(source);
+    engine.get_session().set_ignore_32bit_constraints(true);
+    ASSERT_EQ(engine.verify(), HOLD);
+
+    WitnessOptions options;
+    options.input_file = source;
+    options.output_path = output;
+    options.integer_relaxed_32bit = true;
+    WitnessWriter writer(options);
+    ASSERT_TRUE(writer.write(HOLD, *engine.get_module(), nullptr, {},
+                             engine.get_loop_certificates(),
+                             engine.get_function_certificates()))
+        << writer.error();
+
+    const std::string witness = read_file(output);
+    EXPECT_NE(witness.find("configuration: \"integer-relaxed-all-widths\""),
+              std::string::npos);
+    EXPECT_NE(witness.find("# Not independently certified under fixed-width C semantics."),
+              std::string::npos);
+    EXPECT_NE(witness.find("entry_type: \"invariant_set\""), std::string::npos);
+    std::filesystem::remove(output);
+}
+
+TEST_F(WitnessTest, WritesNestedAccelerationWitnessInBothProfiles) {
+    const std::string source = benchmark_path("path_expression/true_nested5_1.c");
+    for (bool relaxed : {false, true}) {
+        Engine engine(source);
+        engine.get_session().set_ignore_bitwidth_constraints(relaxed);
+        ASSERT_EQ(engine.verify(), HOLD);
+        ASSERT_EQ(engine.get_session().nested_path_summary_count(), 5u);
+        WitnessOptions options;
+        options.input_file = source;
+        options.output_path = relaxed ? "test-nested-relaxed-witness.yml"
+                                      : "test-nested-fixed-witness.yml";
+        options.integer_relaxed_32bit = relaxed;
+        WitnessWriter writer(options);
+        ASSERT_TRUE(writer.write(HOLD, *engine.get_module(), nullptr, {},
+                                 engine.get_loop_certificates(),
+                                 engine.get_function_certificates())) << writer.error();
+        const std::string witness = read_file(options.output_path);
+        EXPECT_NE(witness.find("entry_type: \"invariant_set\""), std::string::npos);
+        EXPECT_NE(witness.find("configuration: \"" + std::string(
+                      relaxed ? "integer-relaxed-all-widths" : "svcomp") + "\""),
+                  std::string::npos);
+        std::filesystem::remove(options.output_path);
+    }
+}
+
+TEST_F(WitnessTest, WritesMarkedIntegerRelaxedViolationWitness) {
+    const std::string source =
+        benchmark_path("path_expression/true_unsigned_wrap_profile.c");
+    const std::string output = "test-integer-relaxed-violation-witness.yml";
+    Engine engine(source);
+    engine.get_session().set_ignore_32bit_constraints(true);
+    ASSERT_EQ(engine.verify(), FAIL);
+
+    WitnessOptions options;
+    options.input_file = source;
+    options.output_path = output;
+    options.integer_relaxed_32bit = true;
+    WitnessWriter writer(options);
+    ASSERT_TRUE(writer.write(FAIL, *engine.get_module(),
+                             engine.get_violation_instruction(),
+                             engine.get_counterexample_inputs()))
+        << writer.error();
+
+    const std::string witness = read_file(output);
+    EXPECT_NE(witness.find("configuration: \"integer-relaxed-all-widths\""),
+              std::string::npos);
+    EXPECT_NE(witness.find("entry_type: \"violation_sequence\""),
+              std::string::npos);
+    EXPECT_NE(witness.find("type: \"function_return\""), std::string::npos);
+    EXPECT_NE(witness.find("type: \"target\""), std::string::npos);
     std::filesystem::remove(output);
 }
 

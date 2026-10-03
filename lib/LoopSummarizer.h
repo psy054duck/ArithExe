@@ -86,6 +86,8 @@ namespace ari_exe {
                 return v_conditions;
             }
 
+            bool had_unknown_result() const { return saw_unknown; }
+
         private:
             /**
              * @brief Check if the current state is a final state, which is a state
@@ -153,6 +155,8 @@ namespace ari_exe {
             std::vector<llvm::StoreInst*> stores;
 
             std::vector<llvm::CallInst*> unknown_calls;
+
+            bool saw_unknown = false;
     };
 
     /**

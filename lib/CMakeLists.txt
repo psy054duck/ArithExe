@@ -1,4 +1,4 @@
-add_library(AInstruction AInstruction.cpp)
+add_library(AInstruction AInstruction.cpp PathAccelerator.cpp)
 add_library(MStack MStack.cpp)
 add_library(engine engine.cpp)
 add_library(state state.cpp)
@@ -16,6 +16,7 @@ add_library(cache cache.cpp)
 add_library(Expression Expr.cpp)
 add_library(Witness Witness.cpp)
 add_library(VerificationSession VerificationSession.cpp)
+add_library(PathExpression PathExpression.cpp)
 
 target_compile_definitions(
     rec_solver

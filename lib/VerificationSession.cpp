@@ -29,6 +29,16 @@ VerificationSession& VerificationSession::current() {
     return *active_session;
 }
 
+PathSymbol VerificationSession::intern_loop_path(
+    llvm::Loop* loop, const std::vector<PathDecisionEvent>& decisions) {
+    auto& alphabet = loop_path_alphabets[loop];
+    auto found = alphabet.find(decisions);
+    if (found != alphabet.end()) return found->second;
+    const PathSymbol symbol = next_path_symbol++;
+    alphabet.emplace(decisions, symbol);
+    return symbol;
+}
+
 void VerificationSession::clear_module_state() {
     instruction_cache.clear();
     function_summary_cache = SymbolTable<FunctionSummary>();
@@ -38,5 +48,13 @@ void VerificationSession::clear_module_state() {
     call_value_counters.clear();
     failed_loops.clear();
     memory_object_name_counters.clear();
+    loop_path_alphabets.clear();
+    nested_path_summary_cache.clear();
+    nested_path_summaries_built = 0;
+    next_path_symbol = 1;
+    path_expression_id = 1;
+    path_compressions = 0;
+    path_accelerations = 0;
+    path_affine_templates = 0;
     analysis_manager.clear_module_state();
 }

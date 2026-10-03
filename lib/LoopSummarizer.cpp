@@ -179,7 +179,11 @@ namespace ari_exe {
             auto func = call_inst->getCalledFunction();
             if (!func || !func->hasExactDefinition()) {
                 auto name = "ari_" + call_inst->getName().str() + "_unknown";
-                auto undef_func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
+                const z3::sort return_sort =
+                    call_inst->getType()->isIntegerTy(1)
+                        ? z3ctx.bool_sort() : z3ctx.int_sort();
+                auto undef_func = z3ctx.function(
+                    name.c_str(), z3ctx.int_sort(), return_sort);
                 auto new_state = std::make_shared<LoopState>(*state);
                 auto counter_it = new_state->unknown_call_counters.find(call_inst);
                 if (counter_it == new_state->unknown_call_counters.end()) {
@@ -190,6 +194,7 @@ namespace ari_exe {
                 auto result = undef_func(counter_it->second);
                 counter_it->second = counter_it->second + 1;
                 new_state->memory.put_temp(call_inst, result);
+                new_state->constrain_nondet_input(call_inst, Expression(result));
                 new_state->step_pc();
                 return {new_state};
             }
@@ -297,6 +302,8 @@ namespace ari_exe {
                 if (res == L_FEASIBLE) {
                     cur_state->status = State::RUNNING;
                     states.push(cur_state);
+                } else if (res == L_TESTUNKNOWN) {
+                    saw_unknown = true;
                 }
                 continue;
             } else if (cur_state->status == State::VERIFYING) {
