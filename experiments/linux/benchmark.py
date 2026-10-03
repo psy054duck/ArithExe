@@ -137,6 +137,11 @@ def main():
     if sys.platform != "linux" or args.timeout <= 0 or args.memory_mib <= 0:
         parser.error("Linux and positive resource limits required")
     config = json.loads(args.config.read_text())
+    for name in args.tools:
+        if name not in config:
+            raise RuntimeError("Tool is absent/held in this experiment configuration: " + name)
+        if "executable_sha256" in config[name] and sha(config[name]["executable"]) != config[name]["executable_sha256"]:
+            raise RuntimeError("Tool executable identity mismatch: " + name)
     dataset = Path(config["dataset"]).resolve()
     records = [r for r in json.loads((dataset / "transformations.json").read_text()) if r["status"] == "included"]
     records.sort(key=lambda r: r["task"])
@@ -221,6 +226,9 @@ def main():
                                                memlimit=args.memory_mib * 1024**2, workingDir=str(directory),
                                                environments={"newEnv": environment}, maxLogfileSize=16 * 1024**2,
                                                write_header=False)
+            if interrupted:
+                save(directory / "interrupted-measurement.json", measurement)
+                return 130  # unfinished tasks are retried on resume, not counted
             verdict, reason = classify(name, log.read_text(errors="replace"), measurement, modules.get(name), command)
             row = {k: record[k] for k in ["task", "component", "data_model", "integer_only", "changed", "original_expected_verdict"]}
             code = measurement["exitcode"]

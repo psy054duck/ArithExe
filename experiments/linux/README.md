@@ -32,9 +32,9 @@ optional `environment` mapping. ICRA additionally needs `loadpath`; VeriAbs and
 Automizer need `options` arrays. Never include credentials in this configuration.
 
 ```
-python benchmark.py --config /absolute/config.json --output /absolute/results/pilot --limit 4
-python benchmark.py --config /absolute/config.json --output /absolute/results/full
-python benchmark.py --config /absolute/config.json --output /absolute/results/full --resume
+python benchmark.py --config /absolute/config.json --output /absolute/results/pilot --tools arithexe icra automizer --limit 4
+python benchmark.py --config /absolute/config.json --output /absolute/results/full --tools arithexe icra automizer
+python benchmark.py --config /absolute/config.json --output /absolute/results/full --tools arithexe icra automizer --resume
 ```
 
 Keep the tool archives, checksums, dependency inventories, source revisions and

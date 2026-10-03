@@ -22,7 +22,7 @@ Version numbers indicate the version we use during the development.
 Other versions may also applicable.
 
 * Boost
-* LLVM 18.1.8
+* LLVM 20.1.8 (the current frontend uses LLVM's debug-variable records)
 * Z3 4.13.4.0
 * google test (can be download automatically by provided CMakeLists.txt)
 *  spdlog (also download by cmake automatically)

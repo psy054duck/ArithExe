@@ -17,13 +17,13 @@ config.mkdir(exist_ok=True)
     'set(Z3_VERSION_STRING "4.15.3")\n')
 PY
 cmake -S ArithExe -B ArithExe/build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-  -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm -DZ3_DIR="$experiment_dir/cmake-z3" \
+  -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm -DZ3_DIR="$experiment_dir/cmake-z3" \
   -DFETCHCONTENT_SOURCE_DIR_SPDLOG="$experiment_dir/cmake-sources/spdlog-src" \
   -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$experiment_dir/cmake-sources/googletest-src"
 cmake --build ArithExe/build -j1
 export ARITHEXE_SOLVER_PYTHON="$experiment_dir/venv/bin/python"
 export ARITHEXE_SOLVER_WORKER="$experiment_dir/ArithExe/build/solver_worker.py"
-export ARITHEXE_CLANG=/usr/bin/clang-18
+export ARITHEXE_CLANG=/usr/bin/clang-20
 ctest --test-dir ArithExe/build/test \
   -R 'PathExpression|RelaxedInteger|Phi|Nested|Nondet|Witness' \
   --output-on-failure --timeout 90
