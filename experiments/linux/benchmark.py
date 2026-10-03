@@ -29,6 +29,20 @@ def sha(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def prepare_cgroups():
+    # Ubuntu 26.04/systemd 259 delegates controllers but does not activate
+    # memory for DelegateSubgroup=manager. Enable it only in this experiment's
+    # explicitly delegated service, never in arbitrary host/user cgroups.
+    unified = next(line.split(":", 2)[2] for line in Path("/proc/self/cgroup").read_text().splitlines()
+                   if line.startswith("0::"))
+    current = Path("/sys/fs/cgroup") / unified.lstrip("/")
+    if current.name == "manager" and current.parent.name.startswith("path-expression-") and current.parent.name.endswith(".service"):
+        available = (current.parent / "cgroup.controllers").read_text().split()
+        if not {"cpu", "memory"}.issubset(available):
+            raise RuntimeError("CPU/memory controllers unavailable in delegated experiment service")
+        (current.parent / "cgroup.subtree_control").write_text("+cpu +memory")
+
+
 def save(path, value):
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, default=str) + "\n")
@@ -151,6 +165,7 @@ def main():
             if line:
                 rows.append(json.loads(line))
     done = {(r["tool"], r["task"]) for r in rows}
+    prepare_cgroups()
     executor = RunExecutor(use_namespaces=False)
     for controller in (executor.cgroups.MEMORY, executor.cgroups.CPU, executor.cgroups.FREEZE):
         if controller not in executor.cgroups:

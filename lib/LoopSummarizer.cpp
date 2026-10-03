@@ -353,8 +353,8 @@ namespace ari_exe {
 
     void
     LoopSummarizer::log_states(const loop_state_list& final_states, const loop_state_list& exit_states) {
-        spdlog::info("For loop {}, there are {} Final states", loop->getName(), final_states.size());
-        spdlog::info("For loop {}, there are {} exit states", loop->getName(), exit_states.size());
+        spdlog::info("For loop {}, there are {} Final states", loop->getName().str(), final_states.size());
+        spdlog::info("For loop {}, there are {} exit states", loop->getName().str(), exit_states.size());
         for (int i = 0; i < final_states.size(); i++) {
             auto state = final_states[i];
             std::string path = state->trace[0]->getName().str();

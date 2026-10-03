@@ -3,7 +3,8 @@
 The runner uses BenchExec 3.35's execution and tool-info APIs. Run it inside a
 systemd service delegated to the unprivileged experiment user, with `Delegate=yes`
 and `DelegateSubgroup=manager`. Do not run the tools as root. Linux cgroups must
-support CPU, memory and freezing; missing controls cause a setup failure, not a
+support CPU, memory and freezing; the runner activates CPU/memory only within its
+own explicitly delegated `path-expression-*.service`. Missing controls cause a setup failure, not a
 silently unbounded experiment.
 
 Use the same 619 processed sources, source hashes, final assertions, per-task
