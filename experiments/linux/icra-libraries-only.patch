@@ -1,0 +1,14 @@
+diff --git a/WALi-OpenNWA/SConstruct b/WALi-OpenNWA/SConstruct
+--- a/WALi-OpenNWA/SConstruct
++++ b/WALi-OpenNWA/SConstruct
+@@ -270,2 +270,3 @@
+     built = SConscript('Source/SConscript', variant_dir=os.path.join(BuildDir,'lib'), duplicate=0)
+-    built += SConscript('Source/bin/SConscript', variant_dir=os.path.join(BuildDir,'bin'), duplicate=0)
++    if 'icra-libs' not in COMMAND_LINE_TARGETS:
++        built += SConscript('Source/bin/SConscript', variant_dir=os.path.join(BuildDir,'bin'), duplicate=0)
+@@ -285,2 +286,5 @@
+     else:
++        if 'icra-libs' in COMMAND_LINE_TARGETS:
++            built += SConscript('AddOns/Domains/SConscript')
++            BaseEnv.Alias('icra-libs',built)
+         if 'addons' in COMMAND_LINE_TARGETS:

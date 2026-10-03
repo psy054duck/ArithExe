@@ -56,11 +56,14 @@ def main():
                                                   if p.is_file() and p.suffix in {".jar", ".so", ".64"}})
     config["automizer"]["archive_sha256"] = sha(package)
     config["icra"]["base_patch_sha256"] = sha(root / "archives/icra-linux-base.patch")
+    config["icra"]["library_target_patch_sha256"] = sha(root / "ArithExe/experiments/linux/icra-libraries-only.patch")
     config["icra"]["upstream_revision"] = "ee3fd360ee75490277dd3fd05d92e1548db983e4"
     snapshots = [root / "archives/arithexe-ready.tar.gz", root / "archives/icra-source.tar.gz",
                  root / "archives/icra-z3-generated.tar.gz", root / "archives/path-expression-linux-materials.tar.gz",
                  root / "archives/path-expression-build-updates.tar.gz",
-                 root / "archives/path-expression-llvm20-updates.tar.gz"]
+                 root / "archives/path-expression-llvm20-updates.tar.gz",
+                 root / "archives/path-expression-final-linux-updates.tar.gz",
+                 root / "archives/path-expression-linux-link-updates.tar.gz"]
     config["source_archive_sha256"] = {p.name: sha(p) for p in snapshots}
     (root / "configuration.json").write_text(json.dumps(config, indent=2) + "\n")
     subprocess.run([str(root / "venv/bin/pip"), "freeze"], stdout=(root / "logs/python-inventory.txt").open("w"), check=True)
