@@ -74,12 +74,12 @@ def classify(name, text, measurement, module=None, command=None):
     if name == "icra":
         result = classify_icra(text)
     elif name == "arithexe":
-        matches = re.findall(r"^(TRUE|FALSE(?:\([^\n]*\))?|UNKNOWN)\s*$", text, re.M)
+        matches = re.findall(r"^((?:TRUE|FALSE)(?:\([^\n]*\))?|UNKNOWN)\s*$", text, re.M)
         result = matches[-1] if matches else "UNKNOWN"
     else:
         run = BaseTool2.Run(command, code, BaseTool2.RunOutput(text.splitlines(True)), None)
         result = module.determine_result(run)
-    if result.lower() == "true":
+    if result.lower() == "true" or result.lower().startswith("true("):
         return "TRUE", result
     if result.lower().startswith("false"):
         return "FALSE", result
