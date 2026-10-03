@@ -22,6 +22,7 @@ import time
 from benchexec.runexecutor import RunExecutor
 from benchexec.tools.template import BaseTool2
 import benchexec
+from benchexec import systeminfo
 
 
 def sha(path):
@@ -105,7 +106,7 @@ def classify(name, text, measurement, module=None, command=None):
 def export(output, rows, total):
     fields = ["tool", "task", "component", "data_model", "integer_only", "changed",
               "original_expected_verdict", "verdict", "reason", "nominal_label_match",
-              "walltime", "cputime", "memory", "exit_value", "exit_signal", "log"]
+              "walltime", "cputime", "memory", "host_swap_detected", "exit_value", "exit_signal", "log"]
     temporary = output / "results.csv.tmp"
     with temporary.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
@@ -119,6 +120,7 @@ def export(output, rows, total):
         summary["tools"][name] = dict(completed=len(group), verdicts=dict(Counter(r["verdict"] for r in group)),
                                      nominal_label_matches=sum(r["nominal_label_match"] is True for r in group),
                                      nominal_label_mismatches=sum(r["nominal_label_match"] is False for r in group),
+                                     runs_with_host_swapping=sum(r.get("host_swap_detected", False) for r in group),
                                      wall_seconds=sum(r.get("walltime", 0) for r in group))
     save(output / "summary.json", summary)
 
@@ -222,13 +224,20 @@ def main():
                 task = BaseTool2.Task([str(source)], None, property_file, {"language": "C", "data_model": model})
                 limits = BaseTool2.ResourceLimits(cputime=None, cputime_hard=None, walltime=args.timeout,
                                                   memory=args.memory_mib * 1024**2, cpu_cores=None)
-                command = modules[name].cmdline(tool["executable"], list(tool["options"]), task, limits)
+                options = list(tool["options"])
+                if name == "automizer":
+                    data = directory / "eclipse-data"
+                    data.mkdir(exist_ok=True)
+                    options += ["--witness-dir", str(directory), "--data", str(data)]
+                command = modules[name].cmdline(tool["executable"], options, task, limits)
             save(directory / "command.json", dict(command=command, environment=environment, input_sha256=sha(source)))
             log = directory / "output.log"
+            swap_check = systeminfo.SwapCheck()
             measurement = executor.execute_run(command, str(log), walltimelimit=args.timeout,
                                                memlimit=args.memory_mib * 1024**2, workingDir=str(directory),
                                                environments={"newEnv": environment}, maxLogfileSize=16 * 1024**2,
                                                write_header=False)
+            measurement["host_swap_detected"] = swap_check.has_swapped()
             if interrupted:
                 save(directory / "interrupted-measurement.json", measurement)
                 return 130  # unfinished tasks are retried on resume, not counted
@@ -236,6 +245,7 @@ def main():
             row = {k: record[k] for k in ["task", "component", "data_model", "integer_only", "changed", "original_expected_verdict"]}
             code = measurement["exitcode"]
             row.update(tool=name, verdict=verdict, reason=reason, nominal_label_match=None,
+                       host_swap_detected=measurement["host_swap_detected"],
                        exit_value=code.value, exit_signal=code.signal, log=str(log.relative_to(output)))
             for field in ["walltime", "cputime", "memory"]:
                 row[field] = measurement.get(field, 0)

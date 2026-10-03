@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import zipfile
 
 
 def sha(path):
@@ -59,8 +60,11 @@ def main():
     config["icra"]["support_files_sha256"].update({str(p): sha(p) for p in (root / "icra/duet/lib").iterdir()
                                                   if p.is_file() and p.suffix in {".jar", ".so", ".64"}})
     config["automizer"]["archive_sha256"] = sha(package)
-    config["automizer"]["support_files_sha256"] = {str(p): sha(p)
-        for p in (root / "tools/UAutomizer-linux").rglob("*") if p.is_file()}
+    # Fingerprint distribution members, not generated Eclipse caches/witnesses.
+    with zipfile.ZipFile(package) as archive:
+        distribution = [root / "tools" / info.filename for info in archive.infolist()
+                        if not info.is_dir()]
+    config["automizer"]["support_files_sha256"] = {str(p): sha(p) for p in distribution}
     config["icra"]["base_patch_sha256"] = sha(root / "archives/icra-linux-base.patch")
     config["icra"]["library_target_patch_sha256"] = sha(root / "ArithExe/experiments/linux/icra-libraries-only.patch")
     config["icra"]["upstream_revision"] = "ee3fd360ee75490277dd3fd05d92e1548db983e4"
