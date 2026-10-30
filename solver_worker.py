@@ -85,7 +85,7 @@ def reexec_with_solver_python():
 
 
 try:
-    from solver import solve_str_to_smt2
+    from solver import solve_str_to_smt2, solve_coarse_str_to_smt2
 except ModuleNotFoundError as error:
     if error.name in {"z3", "fire", "sympy"}:
         reexec_with_solver_python()
@@ -112,20 +112,23 @@ def write_response(status, request_id, payload):
     sys.stdout.buffer.flush()
 
 
-def handle_solve(request_id, ind_var_size, recurrence_size):
+def handle_solve(request_id, ind_var_size, recurrence_size, coarse=False, degree=None):
     # The C++ side sends the induction variable for protocol stability. The
     # current solver API infers it from the recurrence text, matching solver.py.
     read_exact(ind_var_size)
     recurrence = read_exact(recurrence_size).decode("utf-8")
     try:
         with contextlib.redirect_stdout(sys.stderr):
-            smt2 = solve_str_to_smt2(recurrence)
+            smt2 = (solve_coarse_str_to_smt2(recurrence, degree=degree)
+                    if coarse else solve_str_to_smt2(recurrence))
         write_response("OK", request_id, smt2)
     except Exception:
         write_response("ERR", request_id, traceback.format_exc())
 
 
 def serve():
+    # COARSE carries an optional fifth field: the degree for this request.
+    # Legacy four-field clients use the environment/default degree instead.
     while True:
         line = sys.stdin.buffer.readline()
         if not line:
@@ -135,12 +138,15 @@ def serve():
             continue
         if parts[0] == "QUIT":
             break
-        if len(parts) != 4 or parts[0] != "SOLVE":
+        if (parts[0] not in {"SOLVE", "COARSE"} or
+                len(parts) not in ({4, 5} if parts[0] == "COARSE" else {4})):
             write_response("ERR", parts[1] if len(parts) > 1 else "0", "invalid request header")
             continue
-        _, request_id, ind_var_size, recurrence_size = parts
+        mode, request_id, ind_var_size, recurrence_size = parts[:4]
         try:
-            handle_solve(request_id, int(ind_var_size), int(recurrence_size))
+            handle_solve(request_id, int(ind_var_size), int(recurrence_size),
+                         coarse=mode == "COARSE",
+                         degree=int(parts[4]) if len(parts) == 5 else None)
         except Exception:
             write_response("ERR", request_id, traceback.format_exc())
 

@@ -144,7 +144,9 @@ namespace ari_exe {
             s.add(assumption.value());
         }
         s.add(fml);
-        return s.check() == z3::sat;
+        // Used to prune expression/call/summary cases. UNKNOWN cannot justify
+        // removing a potentially feasible execution; only UNSAT can.
+        return s.check() != z3::unsat;
     }
 
     bool is_equivalent(const z3::expr& f1, const z3::expr& f2) {
@@ -220,7 +222,7 @@ namespace ari_exe {
         auto eliminated_expr = z3::mk_or(to_or);
         auto elim_temp = z3::tactic(expr.ctx(), "qe");
         auto logic = Logic();
-        auto aux_vars = logic.collect_aux_vars(eliminated_expr);
+        auto aux_vars = logic.collect_aux_vars(eliminated_expr, expr);
         if (!aux_vars.empty()) {
             // If there are auxiliary variables, we need to eliminate them
             auto exits_expr = z3::exists(aux_vars, eliminated_expr);
@@ -232,7 +234,12 @@ namespace ari_exe {
                 qe_conditions.push_back(qe_res[j].as_expr());
             }
             eliminated_expr = z3::mk_or(qe_conditions).simplify();
-            assert(is_equivalent(eliminated_expr, expr));
+            // UNKNOWN is not evidence of inequivalence and must not abort
+            // verification. Retain the original formula unless certified.
+            z3::solver certificate(expr.ctx());
+            certificate.set("timeout", 3000u);
+            certificate.add(eliminated_expr != expr);
+            if (certificate.check() != z3::unsat) return expr;
         }
         return eliminated_expr.simplify();
     }
@@ -275,6 +282,11 @@ namespace ari_exe {
 
     void
     Logic::collect_vars_rec(const z3::expr& e, std::set<z3::expr, expr_compare>& vars) {
+        if (e.is_quantifier()) {
+            collect_vars_rec(e.body(), vars);
+            return;
+        }
+        if (!e.is_app()) return;
         if (e.is_const() && e.num_args() == 0 && e.decl().decl_kind() == Z3_OP_UNINTERPRETED) {
             vars.insert(e);
             return;
@@ -285,11 +297,15 @@ namespace ari_exe {
     }
 
     z3::expr_vector
-    Logic::collect_aux_vars(const z3::expr& e) {
+    Logic::collect_aux_vars(const z3::expr& e, const z3::expr& original) {
         auto vars = collect_vars(e);
+        auto original_vars = collect_vars(original);
         z3::expr_vector aux_vars(e.ctx());
         for (const auto& var : vars) {
-            if (var.to_string().find("!") != std::string::npos) {
+            // Z3 fresh program symbols also contain '!'. Only constants
+            // absent from the input are introduced by this tactic.
+            if (std::none_of(original_vars.begin(), original_vars.end(),
+                             [&](const auto& input) { return z3::eq(input, var); })) {
                 aux_vars.push_back(var);
             }
         }
@@ -309,17 +325,11 @@ namespace ari_exe {
         // replace all auxiliary variables with fresh variables
         // this is needed because the z3 solver does not generate models for
         // auxiliary variables, which are needed for to_cnf/to_dnf
-        auto vars = collect_vars(new_fml);
-        z3::expr_vector aux_vars(new_fml.ctx());
+        auto aux_vars = collect_aux_vars(new_fml, constraints);
         z3::expr_vector tmp_vars(new_fml.ctx());
-        int tmp_index = 0;
-        for (const auto& var : vars) {
-            if (var.to_string().find("!") != std::string::npos) {
-                aux_vars.push_back(var);
-                auto changed = "tmp_" + std::to_string(tmp_index++);
-                tmp_vars.push_back(z3ctx.int_const(changed.c_str()));
-            }
-        }
+        for (const auto& var : aux_vars)
+            tmp_vars.push_back(z3::expr(z3ctx, Z3_mk_fresh_const(
+                z3ctx, "ari_ite_aux", var.get_sort())));
         new_fml = new_fml.substitute(aux_vars, tmp_vars);
 
         z3::params p(z3ctx);

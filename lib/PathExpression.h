@@ -12,6 +12,13 @@ namespace ari_exe {
 using PathSymbol = std::uint32_t;
 using PathWord = std::vector<PathSymbol>;
 
+/** Exact compact prefix block. Empty symbolic_exponent denotes a concrete count. */
+struct PathPrefixBlock {
+    PathWord root;
+    std::uint64_t exponent = 1;
+    std::string symbolic_exponent;
+    auto operator<=>(const PathPrefixBlock&) const = default;
+};
 struct PathDecisionEvent {
     std::uintptr_t site = 0;
     std::uint32_t choice = 0;
@@ -31,6 +38,7 @@ struct PathSchemaCandidate {
     PathWord star;
     std::size_t observed_star_exponent = 0;
     std::size_t score = 0;
+    std::vector<PathPrefixBlock> certified_context;
 
     auto operator<=>(const PathSchemaCandidate&) const = default;
 };
@@ -55,6 +63,9 @@ compress_path_prefix(const PathWord& prefix, std::size_t max_root_length,
                      std::size_t evidence_threshold);
 
 std::string render_path_word(const PathWord& word);
+std::vector<PathSchemaCandidate> compress_full_path_prefix(
+    const std::vector<PathPrefixBlock>& prefix, std::size_t max_root_length,
+    std::size_t beam_width, std::size_t evidence_threshold);
 std::string render_path_schema(const PathSchemaCandidate& candidate);
 
 } // namespace ari_exe

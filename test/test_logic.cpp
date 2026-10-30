@@ -5,6 +5,50 @@
 
 using namespace ari_exe;
 
+TEST(ITE2PIECEWISE, PreservesOriginalFreshAndBangNamedConstants) {
+    z3::context c;
+    auto x = c.int_const("x!program"), y = c.int_const("y");
+    auto choice = z3::expr(c, Z3_mk_fresh_const(c, "program_choice", c.bool_sort()));
+    auto formula = z3::ite(choice, x, y) == 3 && x >= 0;
+    auto result = eliminate_ite(formula);
+    EXPECT_TRUE(is_equivalent(result, formula));
+    z3::solver solver(c);
+    solver.add(result && choice && x != 3);
+    EXPECT_EQ(solver.check(), z3::unsat);
+}
+
+TEST(ITE2PIECEWISE, AuxiliaryIdentificationUsesInputAstNotNames) {
+    z3::context c;
+    auto original = c.int_const("original!0");
+    auto introduced = c.int_const("plain_aux");
+    Logic logic;
+    auto auxiliaries = logic.collect_aux_vars(original == introduced, original >= 0);
+    ASSERT_EQ(auxiliaries.size(), 1u);
+    EXPECT_TRUE(z3::eq(auxiliaries[0], introduced));
+}
+
+TEST(ITE2PIECEWISE, PreservesFreeSymbolsInsideQuantifiers) {
+    z3::context c;
+    auto x = c.int_const("input!0"), t = c.int_const("t");
+    auto b = c.bool_const("choice!0");
+    auto formula = z3::forall(t, z3::ite(b, x, x + 1) >= t || t > 5);
+    EXPECT_TRUE(is_equivalent(eliminate_ite(formula), formula));
+}
+
+TEST(EQ_FINDING, InfersUniqueIntegerCountFromStrictBounds) {
+    z3::context c;
+    auto k = c.int_const("k"), n = c.int_const("n");
+    auto constraints = k >= 1 && k < n && k > n - 2;
+    z3::expr_vector variables(c);
+    variables.push_back(k);
+    LinearLogic logic;
+    auto values = logic.solve_vars(constraints, variables);
+    ASSERT_EQ(values.size(), 1u);
+    z3::solver solver(c);
+    solver.add(constraints && values[0] != n - 1);
+    EXPECT_EQ(solver.check(), z3::unsat);
+}
+
 TEST(EQ_FINDING, test_1) {
     auto z3_ctx = z3::context();
     z3::expr x = z3_ctx.int_const("x");

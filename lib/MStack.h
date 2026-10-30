@@ -71,6 +71,19 @@ namespace ari_exe {
                 return frames.size();
             }
 
+            // Saved call instructions, innermost caller first. A null saved
+            // site denotes an unknown continuation and prevents pruning.
+            std::vector<AInstruction*> return_sites() const {
+                std::vector<AInstruction*> sites;
+                if (frames.size() <= 1) return sites;
+                auto snapshot = frames;
+                while (snapshot.size() > 1) {
+                    sites.push_back(snapshot.top().prev_pc);
+                    snapshot.pop();
+                }
+                return sites;
+            }
+
             MemoryObjectPtr allocate(llvm::Value* value, z3::expr_vector dims);
 
             Expression load(const MemoryAddress_ty& addr);

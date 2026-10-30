@@ -24,6 +24,7 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Support/SHA256.h"
 
@@ -664,7 +665,7 @@ void write_metadata(std::ostream& out, const WitnessOptions& options,
         << "      version: " << yaml_quote(options.producer_version) << "\n"
         << "      configuration: "
         << yaml_quote(options.integer_relaxed_32bit
-                          ? "integer-relaxed-all-widths" : "svcomp") << "\n"
+                          ? "summary-integer-relaxed-fixed-width-execution" : "svcomp") << "\n"
         << "    task:\n"
         << "      input_files:\n"
         << "        - " << yaml_quote(options.input_file) << "\n"
@@ -727,6 +728,30 @@ bool WitnessWriter::write(VeriResult result, const llvm::Module& module,
             targets.emplace_back(violation_instruction, *location);
         }
     }
+    if (targets.empty() && result == HOLD) {
+        // All executable error calls may have been removed by constant CFG
+        // cleanup. These source coordinates were recorded before optimizing;
+        // use them only for correctness witnesses, never as failure targets.
+        if (const auto* saved = module.getNamedMetadata("arithexe.error.locations")) {
+            std::set<std::pair<unsigned, unsigned>> seen;
+            for (const auto* record : saved->operands()) {
+                if (record->getNumOperands() != 3) continue;
+                const auto* file = llvm::dyn_cast_or_null<llvm::MDString>(record->getOperand(0));
+                const auto* line = llvm::mdconst::dyn_extract_or_null<llvm::ConstantInt>(record->getOperand(1));
+                const auto* column = llvm::mdconst::dyn_extract_or_null<llvm::ConstantInt>(record->getOperand(2));
+                if (!file || !line || !column || line->isZero()) continue;
+                const std::filesystem::path actual(file->getString().str());
+                const std::filesystem::path expected(options.input_file);
+                if (!actual.empty() && actual != expected &&
+                    actual.filename() != expected.filename()) continue;
+                const auto coordinates = std::pair{
+                    static_cast<unsigned>(line->getZExtValue()),
+                    static_cast<unsigned>(column->getZExtValue())};
+                if (seen.insert(coordinates).second)
+                    targets.emplace_back(nullptr, SourceLocation{coordinates.first, coordinates.second});
+            }
+        }
+    }
     if (targets.empty()) {
         error_message = "cannot find a source-level error location in " +
                         options.input_file;
@@ -767,7 +792,7 @@ bool WitnessWriter::write(VeriResult result, const llvm::Module& module,
         return false;
     }
     if (options.integer_relaxed_32bit) {
-        output << "# Experimental witness: all-width integer-relaxed analysis.\n"
+        output << "# Experimental witness: integer-relaxed summaries with fixed-width ordinary execution.\n"
                << "# Arithmetic bounds and comparison normalization were skipped.\n"
                << "# Not independently certified under fixed-width C semantics.\n";
     }

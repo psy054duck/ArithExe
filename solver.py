@@ -39,6 +39,7 @@ def env_optional_int(name):
 
 def solver_options():
     return dict(
+        periodic_strategy=os.environ.get("ARITHEXE_PERIODIC_STRATEGY", "compression"),
         enable_bounded_cfinite=env_flag("ARITHEXE_ENABLE_BOUNDED_CFINITE"),
         poly_expr_strategy=os.environ.get("ARITHEXE_POLY_EXPR_STRATEGY", "auto"),
         poly_expr_order=env_int("ARITHEXE_POLY_EXPR_ORDER", 1),
@@ -46,6 +47,7 @@ def solver_options():
     )
 
 def closed_form_to_smt2(closed):
+    from rec_solver.core.utils import restore_exact_rationals
     solver = z3.Solver()
     closed_dict = closed.as_dict()
     # apps = reduce(set.union, [k.atoms(AppliedUndef) | v.atoms(AppliedUndef) for k, v in closed_dict.items()])
@@ -67,8 +69,48 @@ def closed_form_to_smt2(closed):
     # new_closed_dict = {k.subs(remove_func_mapping, simultaneous=True): v.subs(remove_func_mapping, simultaneous=True) for k, v in closed_dict.items()}
     new_closed_dict = {z3.substitute(k, remove_func_mapping): z3.substitute(v, remove_func_mapping) for k, v in closed_dict.items()}
     for k, e in new_closed_dict.items():
+        # Preserve the legacy representation for consumers without a rational
+        # base/step certificate. Certified accelerators consume the separate
+        # exact mathematical candidate, never reinterpret a C division.
         solver.add(k == e)
+        exact = restore_exact_rationals(e)
+        if not z3.eq(exact, e):
+            marker = z3.Function("ari_recurrence_exact", z3.RealSort(), z3.RealSort())
+            solver.add(marker(k) == exact)
     return solver.to_smt2()
 
 def solve_str_to_smt2(recurrence):
     return closed_form_to_smt2(solve_str(recurrence, **solver_options()))
+
+def solve_coarse_str_to_smt2(recurrence, degree=None):
+    """Synthesize observables for the union-star, never a guessed branch word.
+
+    Polynomial-expression synthesis uses *all* transition maps, independently
+    of their guards. The caller must certify the resulting base/step relation.
+    Keep this request separate from the ordinary solver and its cache.
+    """
+    from rec_solver.rec_parser import parse_str
+    from rec_solver.core.recurrence import LoopRecurrence
+    from rec_solver.core.poly_expr import poly_expr_solving
+    from rec_solver.core.closed_form import ExprClosedForm
+
+    rec = parse_str(recurrence)
+    if not isinstance(rec, LoopRecurrence):
+        raise ValueError("coarse summaries require a scalar loop recurrence")
+    # The CLI's legacy default is general/order-4, which is unnecessarily
+    # expensive for the fallback. Give the bounded coarse search its own
+    # knobs so it remains useful under a short verification budget.
+    strategy = os.environ.get("ARITHEXE_COARSE_POLY_EXPR_STRATEGY", "auto")
+    order = env_int("ARITHEXE_COARSE_POLY_EXPR_ORDER", 1)
+    # One synthesis degree per request. The execution engine retries degree 3
+    # only when the degree-2 summary cannot discharge the property.
+    if degree is None:
+        degree = env_optional_int("ARITHEXE_COARSE_POLY_EXPR_DEGREE") or 2
+    if degree < 1:
+        raise ValueError("coarse polynomial degree must be positive")
+    closed = {}
+    result = poly_expr_solving(rec, degree, strategy=strategy, order=order)
+    for lhs, rhs in result.as_dict().items():
+        if not z3.is_true(z3.simplify(lhs == rhs)):
+            closed[lhs] = rhs
+    return closed_form_to_smt2(ExprClosedForm(closed, rec.ind_var))

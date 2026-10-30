@@ -5,6 +5,14 @@
 
 using namespace ari_exe;
 
+bool State::uses_relaxed_arithmetic() const {
+    return summary_arithmetic && session.uses_integer_relaxation();
+}
+
+bool State::ignores_integer_width(unsigned width) const {
+    return uses_relaxed_arithmetic() && width > 1;
+}
+
 void
 State::append_path_condition(const Expression& _path_condition) {
     auto normalize_bool = [](const z3::expr& expr) {
@@ -76,15 +84,14 @@ State::execute_phi_bundle() {
     step_pc(AInstruction::create(&*block->getFirstNonPHIOrDbg()));
 }
 
-void
+bool
 State::constrain_nondet_input(llvm::CallInst* call,
                              const Expression& value) {
-    if (!session.uses_integer_relaxation() ||
-        !call->getType()->isIntegerTy() || call->getType()->isIntegerTy(1))
-        return;
+    if (!call->getType()->isIntegerTy() || call->getType()->isIntegerTy(1))
+        return false;
     auto* callee = llvm::dyn_cast<llvm::Function>(
         call->getCalledOperand()->stripPointerCasts());
-    if (!callee) return;
+    if (!callee) return false;
     const auto name = callee->getName();
     const unsigned width = call->getType()->getIntegerBitWidth();
     // LLVM integer types are signless. The API determines signedness; the
@@ -125,11 +132,12 @@ State::constrain_nondet_input(llvm::CallInst* call,
         }
     } else {
         // An arbitrary external integer call has no known signedness/API.
-        return;
+        return false;
     }
     // These are linear Int bounds only: no normalization, mod, or bitvectors.
     // Bypass LoopState's branch-only path-condition bookkeeping here.
     State::append_path_condition(Expression(domain.simplify()));
+    return true;
 }
 
 void
@@ -205,6 +213,10 @@ LoopState::append_path_condition(const Expression& _path_condition) {
     } else if (auto select = dyn_cast_or_null<llvm::SelectInst>(inst)) {
         path_condition_in_loop = path_condition_in_loop && normalize_bool(_path_condition.as_expr());
     } else {
-        assert(false && "Unsupported instruction type");
+        // Calls and scalar instructions can add noundef/definedness guards
+        // while collecting a loop (not only branches/selects). Retain them
+        // rather than aborting on, for example, a declared assertion call.
+        path_condition_in_loop = path_condition_in_loop &&
+                                 normalize_bool(_path_condition.as_expr());
     }
 }

@@ -33,6 +33,17 @@
 namespace ari_exe {
     class State;
     class FunctionSummary;
+    bool is_pure_scalar_helper(llvm::Function* function);
+    struct ScalarStateTransformer {
+        std::vector<llvm::GlobalVariable*> globals;
+        z3::expr_vector parameters, updates;
+        std::optional<z3::expr> result;
+        explicit ScalarStateTransformer(z3::context& ctx) : parameters(ctx), updates(ctx) {}
+    };
+    bool is_scalar_state_helper(llvm::Function* function);
+    std::shared_ptr<ScalarStateTransformer> summarize_scalar_state_helper(llvm::Function* function, z3::context& ctx);
+    std::map<llvm::GlobalVariable*, llvm::PHINode*> scalar_global_loop_bindings(llvm::Loop* loop);
+    std::optional<FunctionSummary> summarize_pure_scalar_helper(llvm::Function* function, z3::context& context);
     // A tiny SE engine to symbolic execute a recursion
     // to get recurrence for the function
     class RecExecution {

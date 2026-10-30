@@ -29,6 +29,7 @@ def main():
               "arithexe": {"executable": str(root / "ArithExe/build/arith_exe"),
                            "environment": {"ARITHEXE_SOLVER_PYTHON": str(root / "venv/bin/python"),
                                            "ARITHEXE_SOLVER_WORKER": str(root / "ArithExe/build/solver_worker.py"),
+                                           "ARITHEXE_COARSE_LEMMA_FILE": str(root / "ArithExe/build/lemma.smt2"),
                                            "ARITHEXE_CLANG": "/usr/bin/clang-20",
                                            "ARITHEXE_FORCE_PATH_EXPRESSIONS": "1",
                                            "ARITHEXE_PATH_MAX_ROOT": "6", "ARITHEXE_PATH_BEAM": "4",
@@ -46,7 +47,7 @@ def main():
             raise RuntimeError("Missing executable: " + str(executable))
         config[name]["executable_sha256"] = sha(executable)
     config["arithexe"]["support_files_sha256"] = {
-        str(path): sha(path) for path in [root / "ArithExe/build/solver.py", root / "ArithExe/build/solver_worker.py"]
+        str(path): sha(path) for path in [root / "ArithExe/build/solver.py", root / "ArithExe/build/solver_worker.py", root / "ArithExe/build/lemma.smt2"]
     }
     config["arithexe"]["source_revision"] = subprocess.check_output(
         ["git", "-C", str(root / "ArithExe"), "rev-parse", "HEAD"], text=True).strip()

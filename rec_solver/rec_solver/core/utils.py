@@ -96,7 +96,7 @@ def simpliy_solver(e):
 def to_sympy(s_z3, is_integer=True):
     # s = str(z3.simplify(s_z3, eq2ineq=True))
     s = str(z3.simplify(s_z3)).replace('\n', ' ')
-    expr = sp.parse_expr(s, local_dict={'If': ite2piecewise}, evaluate=False, transformations=(standard_transformations + (convert_equals_signs,)))
+    expr = sp.parse_expr(s, local_dict={'If': ite2piecewise, 'ToReal': lambda x: x}, evaluate=False, transformations=(standard_transformations + (convert_equals_signs,)))
     if expr is True or expr is False:
         return sp.sympify(expr)
     symbols = expr.free_symbols
@@ -274,7 +274,7 @@ def num2z3(expr):
         res = 1
         for arg in reversed(expr.args):
             if arg.is_rational:
-                res = (res*num2z3(arg.numerator))/num2z3(arg.denominator)
+                res = res * z3.RealVal(str(arg))
             else:
                 res = res * num2z3(arg)
         return z3.simplify(res)
@@ -285,6 +285,45 @@ def num2z3(expr):
         return z3.Sqrt(to_z3(expr.args[0]))
     raise Exception('Conversion for "%s" has not been implemented yet: %s' % (type(expr), expr))
     
+
+def rational_product(product, coefficient):
+    numerator, denominator = int(coefficient.p), int(coefficient.q)
+    return z3.simplify(product * numerator / denominator)
+
+def restore_exact_rationals(expr):
+    """Recover rational coefficients in synthesized mathematical closed forms.
+
+    Only the worker's generated output passes here, never C instructions.
+    C++ independently certifies the exact base/step recurrence before using
+    these coefficients as equalities for accelerated integer state values.
+    Explicit floor/ToInt and remainder operators retain their semantics.
+    """
+    if not z3.is_app(expr) or expr.num_args() == 0:
+        return expr
+    args = [restore_exact_rationals(a) for a in expr.children()]
+    kind = expr.decl().kind()
+    if kind == z3.Z3_OP_IDIV and z3.is_int_value(args[1]) and args[1].as_long() > 0:
+        return args[0] * z3.RatVal(1, args[1].as_long())
+    if kind == z3.Z3_OP_TO_REAL:
+        return args[0] if z3.is_real(args[0]) else z3.ToReal(args[0])
+    if kind == z3.Z3_OP_ADD:
+        return sum(args)
+    if kind == z3.Z3_OP_MUL:
+        result = args[0]
+        for a in args[1:]: result *= a
+        return result
+    if kind == z3.Z3_OP_SUB:
+        result = args[0]
+        for a in args[1:]: result -= a
+        return result
+    if kind == z3.Z3_OP_UMINUS: return -args[0]
+    if kind == z3.Z3_OP_ITE: return z3.If(*args)
+    if kind == z3.Z3_OP_EQ: return args[0] == args[1]
+    if kind == z3.Z3_OP_LE: return args[0] <= args[1]
+    if kind == z3.Z3_OP_LT: return args[0] < args[1]
+    if kind == z3.Z3_OP_GE: return args[0] >= args[1]
+    if kind == z3.Z3_OP_GT: return args[0] > args[1]
+    return expr.decl()(*args)
 
 def to_z3(sp_expr, sort='int'):
     self = sp.factor(sp_expr)
@@ -306,10 +345,7 @@ def to_z3(sp_expr, sort='int'):
         res = 1
         for arg in reversed(self.args):
             if arg.is_number and not arg.is_Integer:
-                try:
-                    res = (res*arg.numerator())/arg.denominator()
-                except:
-                    res = (res*arg.numerator)/arg.denominator
+                res = rational_product(res, arg) if arg.is_Rational else res * num2z3(arg)
             else:
                 res = res * to_z3(arg, sort)
         return z3.simplify(res)
@@ -348,8 +384,7 @@ def to_z3(sp_expr, sort='int'):
         elif sort == 'bool':
             res = z3.Bool(str(self))
     elif isinstance(self, sp.Rational):
-        # return z3.RatVal(self.numerator, self.denominator)
-        res = z3.IntVal(self.numerator) / z3.IntVal(self.denominator)
+        res = z3.RatVal(int(self.p), int(self.q))
     elif isinstance(self, sp.ITE):
         res = z3.If(to_z3(self.args[0]), to_z3(self.args[1]), to_z3(self.args[2]))
     elif isinstance(self, sp.Pow):

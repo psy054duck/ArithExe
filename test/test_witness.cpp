@@ -38,6 +38,28 @@ size_t count_occurrences(const std::string& text, const std::string& needle) {
 
 class WitnessTest : public ::testing::Test {};
 
+TEST_F(WitnessTest, WritesTargetsRemovedByConstantCFGCleanup) {
+    const std::string source = benchmark_path("property_pruning/true_dead_error.c");
+    const std::string output = "test-dead-error-witness.yml";
+    Engine engine(source);
+    ASSERT_EQ(engine.verify(), HOLD);
+    ASSERT_GT(engine.property_pruned_state_count(), 0u);
+    auto* error = engine.get_module()->getFunction("reach_error");
+    ASSERT_NE(error, nullptr);
+    ASSERT_TRUE(error->use_empty());
+    WitnessOptions options;
+    options.input_file = source;
+    options.output_path = output;
+    WitnessWriter writer(options);
+    ASSERT_TRUE(writer.write(HOLD, *engine.get_module(), nullptr, {},
+                             engine.get_loop_certificates())) << writer.error();
+    const auto text = read_file(output);
+    EXPECT_NE(text.find("type: \"location_invariant\""), std::string::npos);
+    EXPECT_NE(text.find("line: 7"), std::string::npos);
+    EXPECT_NE(text.find("value: \"0\""), std::string::npos);
+    std::filesystem::remove(output);
+}
+
 TEST_F(WitnessTest, WritesCorrectnessWitnessForLoopProof) {
     const std::string source = benchmark_path("loops/true_3.c");
     const std::string output = "test-loop-witness.yml";
@@ -88,7 +110,7 @@ TEST_F(WitnessTest, WritesMarkedIntegerRelaxedCorrectnessWitness) {
         << writer.error();
 
     const std::string witness = read_file(output);
-    EXPECT_NE(witness.find("configuration: \"integer-relaxed-all-widths\""),
+    EXPECT_NE(witness.find("configuration: \"summary-integer-relaxed-fixed-width-execution\""),
               std::string::npos);
     EXPECT_NE(witness.find("# Not independently certified under fixed-width C semantics."),
               std::string::npos);
@@ -115,7 +137,7 @@ TEST_F(WitnessTest, WritesNestedAccelerationWitnessInBothProfiles) {
         const std::string witness = read_file(options.output_path);
         EXPECT_NE(witness.find("entry_type: \"invariant_set\""), std::string::npos);
         EXPECT_NE(witness.find("configuration: \"" + std::string(
-                      relaxed ? "integer-relaxed-all-widths" : "svcomp") + "\""),
+                      relaxed ? "summary-integer-relaxed-fixed-width-execution" : "svcomp") + "\""),
                   std::string::npos);
         std::filesystem::remove(options.output_path);
     }
@@ -123,7 +145,7 @@ TEST_F(WitnessTest, WritesNestedAccelerationWitnessInBothProfiles) {
 
 TEST_F(WitnessTest, WritesMarkedIntegerRelaxedViolationWitness) {
     const std::string source =
-        benchmark_path("path_expression/true_unsigned_wrap_profile.c");
+        benchmark_path("loop_free/false_ordinary_unsigned_double.c");
     const std::string output = "test-integer-relaxed-violation-witness.yml";
     Engine engine(source);
     engine.get_session().set_ignore_32bit_constraints(true);
@@ -140,7 +162,7 @@ TEST_F(WitnessTest, WritesMarkedIntegerRelaxedViolationWitness) {
         << writer.error();
 
     const std::string witness = read_file(output);
-    EXPECT_NE(witness.find("configuration: \"integer-relaxed-all-widths\""),
+    EXPECT_NE(witness.find("configuration: \"summary-integer-relaxed-fixed-width-execution\""),
               std::string::npos);
     EXPECT_NE(witness.find("entry_type: \"violation_sequence\""),
               std::string::npos);

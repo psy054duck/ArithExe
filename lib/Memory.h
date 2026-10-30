@@ -110,6 +110,10 @@ namespace ari_exe {
                 return m_stack.size();
             }
 
+            std::vector<AInstruction*> return_sites() const {
+                return m_stack.return_sites();
+            }
+
             /**
              * @brief get all arrays in the memory.
              */

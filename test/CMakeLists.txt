@@ -2,6 +2,7 @@
 file(COPY ${CMAKE_SOURCE_DIR}/rec_solver DESTINATION ${CMAKE_BINARY_DIR}/test)
 file(COPY ${CMAKE_SOURCE_DIR}/solver.py DESTINATION ${CMAKE_BINARY_DIR}/test)
 file(COPY ${CMAKE_SOURCE_DIR}/solver_worker.py DESTINATION ${CMAKE_BINARY_DIR}/test)
+configure_file(${CMAKE_SOURCE_DIR}/lemma.smt2 ${CMAKE_BINARY_DIR}/test/lemma.smt2 COPYONLY)
 
 ### Gtest
 include(FetchContent)
@@ -21,6 +22,9 @@ enable_testing()
 add_executable(
   test_engine
   test_engine.cpp
+  test_property_reachability.cpp
+  test_unobserved_globals.cpp
+  test_rational_query.cpp
 )
 
 add_executable(

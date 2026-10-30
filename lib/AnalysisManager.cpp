@@ -1,5 +1,6 @@
 #include "AnalysisManager.h"
 #include "common.h"
+#include "UnobservedGlobals.h"
 #include <spdlog/spdlog.h>
 
 #include <cstdlib>
@@ -7,6 +8,8 @@
 #include <string>
 
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 
 using namespace ari_exe;
 
@@ -44,6 +47,53 @@ void AnalysisManager::clear_module_state() {
 }
 
 namespace {
+// Deliberately narrower than SimplifyCFG: it must not rebuild switches or
+// introduce new speculative/select forms unsupported by the executor.
+struct ConstantCFGCleanupPass : llvm::PassInfoMixin<ConstantCFGCleanupPass> {
+    llvm::PreservedAnalyses run(llvm::Function& function,
+                               llvm::FunctionAnalysisManager&) {
+        bool changed = false;
+        bool round_changed;
+        do {
+            round_changed = false;
+            for (auto& block : function)
+                round_changed |= llvm::ConstantFoldTerminator(&block, true);
+            round_changed |= llvm::removeUnreachableBlocks(function);
+            changed |= round_changed;
+        } while (round_changed);
+        return changed ? llvm::PreservedAnalyses::none()
+                       : llvm::PreservedAnalyses::all();
+    }
+};
+
+void preserve_error_locations(llvm::Module& module) {
+    // Correctness witnesses still need source targets after optimizations
+    // delete every dead error call. Store coordinates, never erased IR refs.
+    for (const auto& function : module) {
+        for (const auto& block : function) {
+            for (const auto& instruction : block) {
+                const auto* call = llvm::dyn_cast<llvm::CallBase>(&instruction);
+                const auto* callee = call ? call->getCalledFunction() : nullptr;
+                if (!callee) continue;
+                const auto name = callee->getName();
+                if (!name.contains("reach_error") && name != "__VERIFIER_error" &&
+                    name != "__assert_fail" && name != "__assert_rtn") continue;
+                const auto& location = instruction.getDebugLoc();
+                if (!location || !location.getLine()) continue;
+                auto& context = module.getContext();
+                auto coordinate = [&](unsigned value) {
+                    return llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                        llvm::Type::getInt32Ty(context), value));
+                };
+                module.getOrInsertNamedMetadata("arithexe.error.locations")->addOperand(
+                    llvm::MDNode::get(context, {
+                        llvm::MDString::get(context, location->getFilename()),
+                        coordinate(location.getLine()), coordinate(location.getCol())}));
+            }
+        }
+    }
+}
+
 std::string diagnostic_to_string(const llvm::SMDiagnostic& diagnostic) {
     std::string message;
     llvm::raw_string_ostream out(message);
@@ -78,6 +128,7 @@ std::unique_ptr<llvm::Module>
 AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
     auto ir_content = generateLLVMIR(c_filename);
     auto mod = parseLLVMIR(ir_content, context);
+    preserve_error_locations(*mod);
     clear_module_state();
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
@@ -114,6 +165,16 @@ AnalysisManager::get_module(const std::string& c_filename, z3::context& z3ctx) {
     // MPM.addPass(createModuleToFunctionPassAdaptor(RegToMemPass()));
     // MPM.addPass(createModuleToFunctionPassAdaptor(MemorySSAPrinterPass(output_fd, true)));
     // MPM.addPass(createModuleToFunctionPassAdaptor(MemorySSAWrapperPass()));
+
+    // SCCP/GVN/InstCombine can create constant edges after the earlier CFG
+    // pass. Remove those dead paths, then restore the loop form expected by
+    // all acceleration routes before acquiring/caching any analyses.
+    MPM.addPass(createModuleToFunctionPassAdaptor(ConstantCFGCleanupPass()));
+    MPM.addPass(UnobservedGlobalStorePass());
+    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::DCEPass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LoopSimplifyPass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::LCSSAPass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(llvm::InstructionNamerPass()));
 
     MPM.run(*mod, MAM);
     auto &fam = MAM.getResult<llvm::FunctionAnalysisManagerModuleProxy>(*mod).getManager();

@@ -3,6 +3,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -22,6 +23,7 @@ namespace ari_exe {
 class AInstruction;
 class RecurrenceSolverWorker;
 struct NestedPathSummary;
+struct ScalarStateTransformer;
 
 class VerificationSession {
   public:
@@ -48,8 +50,9 @@ class VerificationSession {
 
     static VerificationSession& current();
 
-    // Experimental IR-level relaxation, not a proof of fixed-width C semantics.
-    // Configure before starting execution; do not mix cached semantic profiles.
+    // Experimental summary-only IR relaxation, not a fixed-width C proof.
+    // Ordinary execution always retains machine-width semantics. Configure
+    // before starting execution; do not mix cached summary profiles.
     void set_ignore_bitwidth_constraints(bool enabled) {
         ignore_bitwidth_constraints_enabled = enabled;
     }
@@ -74,6 +77,8 @@ class VerificationSession {
     SymbolTable<FunctionSummary>& function_summaries() {
         return function_summary_cache;
     }
+    SymbolTable<FunctionSummary>& mathematical_helper_summaries() { return mathematical_helper_cache; }
+    std::map<llvm::Function*, std::shared_ptr<ScalarStateTransformer>>& state_transformer_summaries() { return state_transformer_cache; }
 
     SymbolTable<LoopSummary>& loop_summaries() {
         return loop_summary_cache;
@@ -82,6 +87,15 @@ class VerificationSession {
     Cache& function_cache() { return cached_function_values; }
 
     RecurrenceSolverWorker& recurrence_solver_worker();
+
+    // Trusted arithmetic lemmas are scoped to these queries, never precise
+    // execution. Retry without quantifiers on UNKNOWN within the same budget.
+    z3::check_result check_coarse_query(z3::solver& solver, unsigned timeout_ms);
+    std::uint64_t coarse_lemma_query_count() const { return coarse_lemma_queries; }
+    std::uint64_t coarse_lemma_retry_count() const { return coarse_lemma_retries; }
+    unsigned coarse_lemma_count() const {
+        return coarse_lemmas ? coarse_lemmas->size() : 0;
+    }
 
     int next_call_value_id(llvm::Value* value) {
         return call_value_counters[value]++;
@@ -120,6 +134,29 @@ class VerificationSession {
         return path_affine_templates;
     }
 
+    void note_coarse_summary_attempt(unsigned degree = 0) {
+        ++coarse_summary_attempts;
+        if (degree) ++coarse_degree_attempts[degree];
+    }
+    std::uint64_t coarse_degree_attempt_count(unsigned degree) const {
+        const auto found = coarse_degree_attempts.find(degree);
+        return found == coarse_degree_attempts.end() ? 0 : found->second;
+    }
+    void note_coarse_summary() { ++coarse_summaries; }
+    std::uint64_t coarse_summary_attempt_count() const {
+        return coarse_summary_attempts;
+    }
+    std::uint64_t coarse_summary_count() const { return coarse_summaries; }
+    void note_coarse_refinement() { ++coarse_refinements; }
+    std::uint64_t coarse_refinement_count() const { return coarse_refinements; }
+
+    void note_residue_attempt() { ++residue_attempts; }
+    void note_residue_query() { ++residue_queries; }
+    void note_residue_proof() { ++residue_proofs; }
+    std::uint64_t residue_attempt_count() const { return residue_attempts; }
+    std::uint64_t residue_query_count() const { return residue_queries; }
+    std::uint64_t residue_proof_count() const { return residue_proofs; }
+
     std::map<llvm::Loop*, std::shared_ptr<NestedPathSummary>>&
     nested_path_summaries() { return nested_path_summary_cache; }
     void note_nested_path_summary() { ++nested_path_summaries_built; }
@@ -137,9 +174,14 @@ class VerificationSession {
     std::map<llvm::Instruction*, std::shared_ptr<AInstruction>>
         instruction_cache;
     SymbolTable<FunctionSummary> function_summary_cache;
+    SymbolTable<FunctionSummary> mathematical_helper_cache;
+    std::map<llvm::Function*, std::shared_ptr<ScalarStateTransformer>> state_transformer_cache;
     SymbolTable<LoopSummary> loop_summary_cache;
     Cache cached_function_values;
     std::shared_ptr<RecurrenceSolverWorker> solver_worker;
+    std::optional<z3::expr_vector> coarse_lemmas;
+    std::uint64_t coarse_lemma_queries = 0;
+    std::uint64_t coarse_lemma_retries = 0;
     std::map<llvm::Value*, int> call_value_counters;
     std::set<llvm::Loop*> failed_loops;
     std::map<std::string, unsigned> memory_object_name_counters;
@@ -151,6 +193,11 @@ class VerificationSession {
     std::uint64_t path_compressions = 0;
     std::uint64_t path_accelerations = 0;
     std::uint64_t path_affine_templates = 0;
+    std::uint64_t coarse_summary_attempts = 0;
+    std::uint64_t coarse_summaries = 0;
+    std::uint64_t coarse_refinements = 0;
+    std::uint64_t residue_attempts = 0, residue_queries = 0, residue_proofs = 0;
+    std::map<unsigned, std::uint64_t> coarse_degree_attempts;
     std::map<llvm::Loop*, std::shared_ptr<NestedPathSummary>>
         nested_path_summary_cache;
     std::uint64_t nested_path_summaries_built = 0;

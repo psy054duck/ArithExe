@@ -200,8 +200,8 @@ int main(int argc, char* argv[]) {
         spdlog::debug("Verbose logging enabled");
     }
     if (ignore_bitwidth_constraints) {
-        spdlog::warn("Experimental integer relaxation: skipping all integer bit-width "
-                     "arithmetic bounds and comparison normalization. "
+        spdlog::warn("Experimental summary-only integer relaxation: ordinary execution "
+                     "retains fixed-width arithmetic; acceleration probes skip width constraints. "
                      "Results do not establish fixed-width C correctness; "
                      "generated witnesses are marked integer-relaxed.");
     }

@@ -165,9 +165,13 @@ namespace ari_exe {
                 stop();
             }
 
-            std::string solve(const std::string& recurrence, const std::string& ind_var) {
+            std::string solve(const std::string& recurrence, const std::string& ind_var,
+                              bool coarse = false, unsigned coarse_degree = 2) {
                 std::lock_guard<std::mutex> guard(mu);
-                std::string cache_key = make_cache_key(recurrence, ind_var);
+                std::string cache_key = make_cache_key(recurrence, ind_var) +
+                                        (coarse ? "\nmode=coarse\nrequest_degree=" +
+                                                      std::to_string(coarse_degree)
+                                                : "\nmode=precise");
                 auto cached = cache.find(cache_key);
                 if (cached != cache.end()) {
                     return cached->second;
@@ -177,7 +181,7 @@ namespace ari_exe {
                 for (int attempt = 0; attempt < 2; attempt++) {
                     try {
                         ensure_started();
-                        std::string smt2 = send_solve_request(recurrence, ind_var);
+                        std::string smt2 = send_solve_request(recurrence, ind_var, coarse, coarse_degree);
                         cache.insert_or_assign(std::move(cache_key), smt2);
                         return smt2;
                     } catch (const SolverRequestError&) {
@@ -213,6 +217,9 @@ namespace ari_exe {
                     << "strategy=" << env_string("ARITHEXE_POLY_EXPR_STRATEGY") << '\n'
                     << "order=" << env_string("ARITHEXE_POLY_EXPR_ORDER") << '\n'
                     << "degree=" << env_string("ARITHEXE_POLY_EXPR_DEGREE") << '\n'
+                    << "coarse_strategy=" << env_string("ARITHEXE_COARSE_POLY_EXPR_STRATEGY") << '\n'
+                    << "coarse_order=" << env_string("ARITHEXE_COARSE_POLY_EXPR_ORDER") << '\n'
+                    << "coarse_degree=" << env_string("ARITHEXE_COARSE_POLY_EXPR_DEGREE") << '\n'
                     << recurrence;
                 return key.str();
             }
@@ -406,12 +413,16 @@ namespace ari_exe {
                 out << payload;
             }
 
-            std::string send_solve_request(const std::string& recurrence, const std::string& ind_var) {
+            std::string send_solve_request(const std::string& recurrence, const std::string& ind_var,
+                                          bool coarse, unsigned coarse_degree) {
                 std::string request_id = std::to_string(next_request_id++);
                 int timeout_ms = request_timeout_ms();
-                std::string header = "SOLVE " + request_id + " " +
+                if (coarse) timeout_ms = std::min(timeout_ms,
+                    std::max(1, env_int("ARITHEXE_COARSE_TIMEOUT_MS", 3000)));
+                std::string header = std::string(coarse ? "COARSE " : "SOLVE ") + request_id + " " +
                                      std::to_string(ind_var.size()) + " " +
-                                     std::to_string(recurrence.size()) + "\n";
+                                     std::to_string(recurrence.size()) +
+                                     (coarse ? " " + std::to_string(coarse_degree) : "") + "\n";
                 trace_payload(request_id, "_request.rec", recurrence);
                 write_all(child_stdin, header, timeout_ms);
                 write_all(child_stdin, ind_var, timeout_ms);
@@ -605,17 +616,22 @@ void rec_solver::set_eqs(rec_ty& eqs) {
     }
 }
 
-bool rec_solver::solve() {
+bool rec_solver::solve(bool coarse, unsigned coarse_degree) {
     try {
         std::string smt2 =
             VerificationSession::current().recurrence_solver_worker().solve(
-                rec2string(), ind_var.to_string());
+                rec2string(), ind_var.to_string(), coarse, coarse_degree);
         smt2_to_z3(smt2);
         for (auto& [lhs, rhs] : res) {
             (void)lhs;
             rhs = rhs.substitute(recurrence_parameters,
                                  recurrence_parameter_values)
                       .simplify();
+        }
+        for (auto& [lhs, rhs] : exact_res) {
+            (void)lhs;
+            rhs = rhs.substitute(recurrence_parameters,
+                                 recurrence_parameter_values).simplify();
         }
         return true;
     } catch (const std::exception& e) {
@@ -690,6 +706,12 @@ void rec_solver::expr_solve(z3::expr e) {
 
 closed_form_ty rec_solver::get_res() {
     return res;
+}
+
+closed_form_ty rec_solver::get_exact_res() {
+    auto result = res;
+    for (const auto& [lhs, rhs] : exact_res) result.insert_or_assign(lhs, rhs);
+    return result;
 }
 
 void rec_solver::add_initial_values(z3::expr_vector k, z3::expr_vector v) {
@@ -958,11 +980,21 @@ void rec_solver::smt2_to_z3(const std::string& smt2) {
         assert(kind == Z3_OP_EQ);
         z3::expr k = args[0].simplify();
         z3::expr v = args[1].simplify();
+        bool exact = k.is_app() && k.decl().decl_kind() == Z3_OP_UNINTERPRETED &&
+            k.decl().name().str() == "ari_recurrence_exact" && k.num_args() == 1;
+        if (exact) k = k.arg(0);
+        if (k.is_app() && k.decl().decl_kind() == Z3_OP_TO_REAL)
+            k = k.arg(0);
         if (k.is_numeral()) {
             k = args[1];
             v = args[0];
         }
-        res.insert_or_assign(k, v.simplify());
+        // Keep the LLVM-facing representation integer-sorted. Precise
+        // acceleration certifies the exact rational expression and binds an
+        // integer state value to it; this cast is not a C integer division.
+        if (k.is_int() && v.is_real())
+            v = z3::expr(z3ctx, Z3_mk_real2int(z3ctx, v));
+        (exact ? exact_res : res).insert_or_assign(k, v.simplify());
     }
 }
 

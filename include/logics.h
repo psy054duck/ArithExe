@@ -69,6 +69,7 @@ namespace ari_exe {
     /**
      * @brief check if the fml is feasible
      */
+    // Conservative feasibility: true for SAT or UNKNOWN; false only for UNSAT.
     bool is_feasible(const z3::expr& fml, std::optional<z3::expr> assumption = std::nullopt);
 
     /**
@@ -163,7 +164,7 @@ namespace ari_exe {
             /**
              * @brief get all auxiliary variables introduced by z3
              */
-            z3::expr_vector collect_aux_vars(const z3::expr& e);
+            z3::expr_vector collect_aux_vars(const z3::expr& e, const z3::expr& original);
 
         private:
             void atoms_rec(const z3::expr& t, std::set<std::string>& visited, z3::expr_vector& atms);

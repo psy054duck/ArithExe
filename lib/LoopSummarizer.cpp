@@ -1,8 +1,13 @@
 #include <spdlog/spdlog.h>
 #include "LoopSummarizer.h"
+#include "FunctionSummarizer.h"
 
 
 namespace ari_exe {
+    static bool paper_periodic_mode() {
+        const char* mode = std::getenv("ARITHEXE_PERIODIC_STRATEGY");
+        return mode && std::string(mode) == "oopsla23";
+    }
     static unsigned expression_size(const z3::expr& expression) {
         unsigned size = 1;
         if (!expression.is_app()) return size;
@@ -160,8 +165,15 @@ namespace ari_exe {
             z3ctx.bool_val(true), z3ctx.bool_val(true), {},
             State::RUNNING));
         initial_state->summarizing_loop = loop;
+        initial_state->summary_arithmetic = true;
 
         put_header_phis_in_initial_state(initial_state);
+        if (initial_state->uses_relaxed_arithmetic()) {
+            for (const auto& [global, phi] : scalar_global_loop_bindings(loop)) {
+                auto pointer = initial_state->memory.get_object(global);
+                if (pointer) initial_state->memory.store(pointer->get_ptr_value(), initial_state->evaluate(phi));
+            }
+        }
         symbolize_stores(initial_state);
         for (auto call_inst : get_unknown_calls(loop)) {
             auto name = get_z3_name(call_inst->getName().str()) + "_call_count";
@@ -177,7 +189,9 @@ namespace ari_exe {
         loop_state_list new_states;
         if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(pc->inst)) {
             auto func = call_inst->getCalledFunction();
-            if (!func || !func->hasExactDefinition()) {
+            if ((!func || !func->hasExactDefinition()) &&
+                !(func && func->getName().ends_with("assert") &&
+                  call_inst->arg_size() == 1)) {
                 auto name = "ari_" + call_inst->getName().str() + "_unknown";
                 const z3::sort return_sort =
                     call_inst->getType()->isIntegerTy(1)
@@ -199,6 +213,15 @@ namespace ari_exe {
                 return {new_state};
             }
         } else if (auto load_inst = llvm::dyn_cast_or_null<llvm::LoadInst>(pc->inst)) {
+            if (state->uses_relaxed_arithmetic()) {
+                auto* global = llvm::dyn_cast<llvm::GlobalVariable>(load_inst->getPointerOperand());
+                if (global && scalar_global_loop_bindings(loop).contains(global)) {
+                    auto next = std::make_shared<LoopState>(*state);
+                    next->memory.put_temp(load_inst, next->memory.get_object_pointed_by(global)->read());
+                    next->step_pc();
+                    return {next};
+                }
+            }
             // if the instruction is a load, we need to get the value from memory
             auto& DI = AnalysisManager::get_instance()->get_DI(load_inst->getFunction());
             bool not_affected = true;
@@ -252,6 +275,17 @@ namespace ari_exe {
         }
 
         for (auto next_state : pc->execute(state)) {
+            // Declared assertions execute in summarizing mode, recording an
+            // obligation rather than entering VERIFYING. Keep these for the
+            // legacy recurrence proof as well as precise transition guards.
+            // Guard each obligation by the path that reaches its call.
+            for (std::size_t i = state->summary_invariants.size();
+                 i < next_state->summary_invariants.size(); ++i) {
+                const auto& assertion = next_state->summary_invariants[i];
+                v_conditions.emplace_back(z3::implies(
+                    state->path_condition_in_loop.as_expr(),
+                    assertion.defined() && assertion.as_expr()));
+            }
             auto next_loop_state = std::make_shared<LoopState>(LoopState(*next_state));
             new_states.push_back(next_loop_state);
         }
@@ -283,6 +317,22 @@ namespace ari_exe {
             // llvm::errs() << *cur_state->pc->inst << "\n";
             // llvm::errs() << cur_state->memory.to_string() << "\n";
             states.pop();
+            // A branch/select can step directly to the latch terminator or
+            // an exit while its complete guard still awaits a feasibility
+            // check. Never collect that state before checking the guard:
+            // correlated selects otherwise contribute impossible body maps.
+            if (cur_state->status == State::TESTING) {
+                auto res = test(cur_state);
+                if (res == L_FEASIBLE) {
+                    cur_state->status = State::RUNNING;
+                    states.push(cur_state);
+                } else if (res == L_TESTUNKNOWN) {
+                    // Callers reject incomplete enumeration; UNKNOWN is not
+                    // evidence that this transition is infeasible.
+                    saw_unknown = true;
+                }
+                continue;
+            }
             if (back_edge_taken(cur_state)) {
                 continue;
             }
@@ -297,17 +347,9 @@ namespace ari_exe {
             if (cur_state->status == State::TERMINATED) {
                 final_states.push_back(cur_state);
                 continue;
-            } else if (cur_state->status == State::TESTING) {
-                auto res = test(cur_state);
-                if (res == L_FEASIBLE) {
-                    cur_state->status = State::RUNNING;
-                    states.push(cur_state);
-                } else if (res == L_TESTUNKNOWN) {
-                    saw_unknown = true;
-                }
-                continue;
             } else if (cur_state->status == State::VERIFYING) {
                 v_conditions.push_back(cur_state->verification_condition);
+                cur_state->summary_invariants.push_back(cur_state->verification_condition);
                 // cur_state->append_path_condition(cur_state->verification_condition);
                 // auto res = test(cur_state);
                 states.push(cur_state);
@@ -315,6 +357,7 @@ namespace ari_exe {
                 //     spdlog::error("The annotated loop invariant is not valid");
                 // }
                 cur_state->status = State::RUNNING;
+                continue; // Do not execute this queued continuation twice.
             }
             auto new_states = step(cur_state);
             for (auto& new_state : new_states) states.push(new_state);
@@ -336,12 +379,40 @@ namespace ari_exe {
 
     void
     LoopSummarizer::summarize() {
-        auto [final_states, exit_states, v_conditions] = get_final_and_exit_states();
+        if (paper_periodic_mode() && !loop->getExitBlock()) {
+            spdlog::info("[oopsla23] Rejecting loop without a unique exit block");
+            return;
+        }
+        if (paper_periodic_mode() && !get_unknown_calls().empty()) {
+            // The published recurrence solver requires deterministic updates.
+            // Fresh values per invocation cannot be treated as fixed parameters.
+            spdlog::info("[oopsla23] Rejecting loop with unknown per-iteration calls");
+            return;
+        }
+        if (paper_periodic_mode()) {
+            for (auto* block : loop->blocks()) {
+                for (auto& instruction : *block) {
+                    if (llvm::isa<llvm::StoreInst>(instruction)) {
+                        // This baseline handles SSA scalar recurrences only;
+                        // never silently preserve potentially modified memory.
+                        spdlog::info("[oopsla23] Rejecting loop with memory stores");
+                        return;
+                    }
+                }
+            }
+        }
+        auto execution = get_final_and_exit_states();
+        if (!execution) {
+            spdlog::debug("Cannot summarize loop {}: path feasibility is unknown",
+                          loop->getHeader()->getName().str());
+            return;
+        }
+        auto& [final_states, exit_states, v_conditions] = *execution;
         log_states(final_states, exit_states);
 
         summarize_scalar(final_states, exit_states);
 
-        if (summary.has_value()) {//  && !summary.value().is_over_approximated()) {
+        if (summary.has_value() && !paper_periodic_mode()) {
             summarize_array(final_states, exit_states);
         }
         if (summary.has_value()) { 
@@ -376,14 +447,18 @@ namespace ari_exe {
         }
     }
 
-    std::tuple<loop_state_list, loop_state_list, std::vector<Expression>>
+    std::optional<std::tuple<loop_state_list, loop_state_list, std::vector<Expression>>>
     LoopSummarizer::get_final_and_exit_states() {
         LoopExecution executor(loop, parent_state);
         auto execution_res = executor.run();
+        // The legacy summarizer must also reject incomplete enumeration;
+        // dropping an UNKNOWN path could turn an under-approximation into
+        // an alleged proof. Path acceleration performs the same check.
+        if (executor.had_unknown_result()) return std::nullopt;
         auto final_states = execution_res.first;
         auto exit_states = execution_res.second;
 
-        return {final_states, exit_states, executor.get_v_conditions()};
+        return std::make_tuple(final_states, exit_states, executor.get_v_conditions());
     }
 
     VeriResult
@@ -473,6 +548,12 @@ namespace ari_exe {
         }
         //---------------------------- End of Collecting Parameters ----------------
 
+        if (paper_periodic_mode() && (closed.empty() || is_approximate)) {
+            spdlog::info("[oopsla23] Rejecting incomplete recurrence solution");
+            summary.reset();
+            return;
+        }
+
         spdlog::info("Closed-form solutions are computed successfully:");
         if (is_approximate) {
             spdlog::info("This is an over-approximation");
@@ -485,7 +566,9 @@ namespace ari_exe {
         z3::expr_vector exit_values(rec_s.z3ctx);
         decltype(closed) over_closed;
         auto loop_guard = get_loop_guard_condition(exit_states);
-        auto loop_guard_vars = Logic().collect_vars(loop_guard);
+        auto loop_guard_vars = paper_periodic_mode()
+            ? std::set<z3::expr, expr_compare>{}
+            : Logic().collect_vars(loop_guard);
         std::vector<z3::expr> modified_values_expr;
         for (auto& m_value : modified_values) {
             auto name = get_z3_name(m_value->getName().str());
@@ -517,7 +600,8 @@ namespace ari_exe {
             }
             return false;
         };
-        if (std::includes(params_str.begin(), params_str.end(),
+        if (!paper_periodic_mode() &&
+            std::includes(params_str.begin(), params_str.end(),
                           iteration_related_vars.begin(),
                           iteration_related_vars.end()) &&
             !contains_modulo(N_constraints, contains_modulo)) {
@@ -565,6 +649,13 @@ namespace ari_exe {
         } else {
             z3::expr summary_constraints =
                 N_opt.has_value() ? z3ctx.bool_val(true) : N_constraints;
+            if (paper_periodic_mode() && N_opt.has_value()) {
+                // Count inference must not discard the domain/exit certificate.
+                z3::expr_vector count_src(z3ctx), count_dst(z3ctx);
+                count_src.push_back(N);
+                count_dst.push_back(*N_opt);
+                summary_constraints = N_constraints.substitute(count_src, count_dst);
+            }
             summary = LoopSummary(
                 params, exit_values, params_values, summary_constraints,
                 modified_values,
@@ -886,7 +977,8 @@ namespace ari_exe {
         z3::context& z3ctx = manager->get_z3ctx();
         for (auto& phi : header->phis()) {
             auto name = get_z3_name(phi.getName().str());
-            auto z3_value = z3ctx.int_const(name.c_str());
+            auto z3_value = phi.getType()->isIntegerTy(1)
+                ? z3ctx.bool_const(name.c_str()) : z3ctx.int_const(name.c_str());
             memory.put_temp(&phi, z3_value);
         }
     }
@@ -1053,7 +1145,6 @@ namespace ari_exe {
         auto loop_guard = get_loop_guard_condition(exit_states);
         spdlog::info("Loop guard condition: {}", loop_guard.to_string());
         auto logic = Logic();
-        auto vars_in_guard = logic.collect_vars(loop_guard);
         auto loop_guard_closed_form = loop_guard.substitute(params, values);
         spdlog::info("Loop guard condition (closed-form): {}", loop_guard_closed_form.to_string());
         auto manager = AnalysisManager::get_instance();
@@ -1071,6 +1162,18 @@ namespace ari_exe {
         constraints = constraints && parent_state->get_path_condition().as_expr();
         constraints = constraints.substitute(params, values);
 
+        if (paper_periodic_mode()) {
+            // Simplify the first-exit condition without inventing a count or
+            // dropping its domain. Retain the original formula on tactic failure.
+            try {
+                z3::goal goal(z3ctx);
+                goal.add(constraints);
+                auto bounded_qe = z3::try_for(z3::tactic(z3ctx, "qe"), 1000);
+                return {apply_result2expr(bounded_qe(goal)), N};
+            } catch (const z3::exception&) {
+                return {constraints, N};
+            }
+        }
         if (contains_modulo(constraints)) {
             return {constraints, N};
         }

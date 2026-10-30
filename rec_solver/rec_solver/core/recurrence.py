@@ -396,6 +396,9 @@ class LoopRecurrence:
         # all_funcs_next = [func.subs({self.ind_var: self.ind_var + 1}) for func in all_funcs]
         all_funcs_next = [z3.simplify(z3.substitute(func, (self.ind_var, self.ind_var + 1))) for func in all_funcs]
         for trans in transitions:
+            # Consumers simplify f(n+1) before dictionary lookup. Store the
+            # same canonical AST: f(n+1) and f(1+n) are not structural keys.
+            trans = {z3.simplify(k): v for k, v in trans.items()}
             need_padding = set(all_funcs_next) - {z3.simplify(k) for k in trans.keys()}
             # identity_trans = {k: k.subs({self.ind_var: self.ind_var - 1}) for k in need_padding}
             identity_trans = {z3.simplify(k): z3.simplify(z3.substitute(k, (self.ind_var, self.ind_var - 1))) for k in need_padding}

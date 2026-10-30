@@ -22,7 +22,12 @@ def solve_ultimately_periodic_symbolic(
     bnd=100,
     precondition=z3.BoolVal(True),
     enable_bounded_cfinite=True,
+    pattern_strategy="compression",
 ):
+    if pattern_strategy not in ("compression", "oopsla23"):
+        raise ValueError('Unknown periodic pattern strategy: ' + pattern_strategy)
+    from .paper_periodic import solve_initial, symbolic_template
+    initial_solver = solve_initial if pattern_strategy == "oopsla23" else _solve_ultimately_periodic_initial
     z3_solver = z3.Solver()
     z3_solver.add(precondition)
     acc_condition = z3.BoolVal(True)
@@ -32,12 +37,17 @@ def solve_ultimately_periodic_symbolic(
     constraints = []
     closed_forms = []
     if rec.is_all_initialized():
-        return solve_ultimately_periodic_initial(
+        return initial_solver(
             rec,
             bnd,
             enable_bounded_cfinite=enable_bounded_cfinite,
-        )
-    while z3_solver.check(acc_condition) != z3.unsat:
+        )[0]
+    while True:
+        status = z3_solver.check(acc_condition)
+        if status == z3.unsat:
+            break
+        if status != z3.sat:
+            raise UnsolvableError('Initial-region coverage query returned unknown')
         # print(acc_condition)
         i += 1
         model = z3_solver.model()
@@ -47,10 +57,12 @@ def solve_ultimately_periodic_symbolic(
         initialized_rec = rec.subs(cur_val)
         # initialized_rec.pprint()
         # print(initialized_rec.conditions)
-        _, index_seq = _solve_ultimately_periodic_initial(initialized_rec)
+        _, index_seq = initial_solver(initialized_rec, bnd, enable_bounded_cfinite=enable_bounded_cfinite)
         qs = [z3.Int('q%d' % i) for i in range(len(index_seq) - 1)]
         # qs = sp.symbols('q:%d' % (len(index_seq) - 1), integer=True)
         index_seq_temp = [(s[0], q) for s, q in zip(index_seq, qs)] + [index_seq[-1]]
+        if pattern_strategy == "oopsla23":
+            index_seq_temp, qs = symbolic_template(index_seq)
         can_sol = _compute_solution_by_index_seq(
             rec,
             index_seq_temp,
@@ -68,7 +80,12 @@ def solve_ultimately_periodic_symbolic(
         logger.debug('In the %dth iteration: the set up index sequence template is %s' % (i, index_seq_temp))
         logger.debug('In the %dth iteration: the closed-form solution is\n%s' % (i, can_sol))
         logger.debug('In the %dth iteration: the q\'s are %s' % (i, qs))
-        q_linear = utils.solve_piecewise_sol(constraint, qs, sort=z3.Int, precondition=precondition)
+        if pattern_strategy == "oopsla23" and not qs:
+            from types import SimpleNamespace
+            q_linear = SimpleNamespace(conditions=[z3.BoolVal(True)], expressions=[{}],
+                                       to_piecewise=lambda: {})
+        else:
+            q_linear = utils.solve_piecewise_sol(constraint, qs, sort=z3.Int, precondition=precondition)
         # print(constraint)
         logger.debug('In the %dth iteration: the q\'s solutions are %s' % (i, q_linear.to_piecewise()))
         for q_constraint, q_sol in zip(q_linear.conditions, q_linear.expressions):
@@ -79,6 +96,8 @@ def solve_ultimately_periodic_symbolic(
             constraints.append(my_simplify(constraint_no_kq, assumption=precondition))
             acc_condition = z3.And(acc_condition, z3.Not(constraint_no_kq))
             closed_forms.append(can_sol.simple_subs(q_sol))
+        if pattern_strategy == "oopsla23" and z3_solver.check(acc_condition, *[p == v for p, v in cur_val.items()]) != z3.unsat:
+            raise UnsolvableError('Generalized periodic template does not cover its sample')
             # closed_forms[-1].pprint()
         # exit(0)
     res = SymbolicClosedForm(constraints, closed_forms, rec.ind_var)
@@ -138,7 +157,7 @@ def _solve_ultimately_periodic_initial(rec: LoopRecurrence, bnd=100, enable_boun
 
 def verify(rec: Recurrence, candidate_sol: PiecewiseClosedForm, pattern: list):
     conditions = rec.conditions
-    start = sum([cnt for _, cnt in pattern[:-1]])
+    start = sum(len(word)*cnt for word, cnt in pattern[:-1])
     last_closed_form = candidate_sol.closed_forms[-1]
     assert(isinstance(last_closed_form, PeriodicClosedForm))
     period = last_closed_form.period
@@ -165,7 +184,10 @@ def verify(rec: Recurrence, candidate_sol: PiecewiseClosedForm, pattern: list):
         # if not k_range.is_subset(cond_range):
         solver.add(k_range)
         solver.add(z3.Not(cond))
-        if solver.check() == z3.sat:
+        status = solver.check()
+        if status == z3.unknown:
+            raise UnsolvableError('Periodic guard validation returned unknown')
+        if status == z3.sat:
             cur_smallest = _smallest_violation(k_range, cond, k)
             cur_smallest = z3.simplify(cur_smallest*period + r).as_long()
             if smallest is None:
@@ -305,5 +327,5 @@ def _set_up_constraints(rec: LoopRecurrence, closed_form: PiecewiseClosedForm, i
             cur_constraint = z3.substitute(cur_constraint, (ind_var, k))
             constraint = z3.And(constraint, cur_constraint)
         # acc += acc + q
-        acc += q
+        acc += len(seq)*q
     return constraint, ks

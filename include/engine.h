@@ -52,6 +52,7 @@
 #include "VerificationSession.h"
 #include "state.h"
 #include "FunctionSummarizer.h"
+#include "PropertyReachability.h"
 
 #include <vector>
 #include <queue>
@@ -137,6 +138,10 @@ namespace ari_exe {
                 return function_certificates;
             }
 
+            std::size_t property_pruned_state_count() const {
+                return property_pruned_states;
+            }
+
             bool has_issue() const { return issue_recorded; }
 
             VerifierIssueKind get_issue_kind() const { return issue_kind; }
@@ -159,6 +164,17 @@ namespace ari_exe {
 
             void record_issue(VerifierIssueKind kind,
                               const std::string& message);
+
+            // Transactional proof of a whole continuation from loop entry.
+            // Inconclusive approximate reasoning cannot alter exact results.
+            bool prove_coarse_independently(const state_ptr& jump);
+            unsigned configure_query_timeout(bool accelerated = false);
+    z3::check_result check_precise_query(unsigned timeout_ms, bool normalize_rationals = false);
+            bool coarse_proof_active = false;
+
+            bool can_prune_property_irrelevant(const state_ptr& state) const;
+            PropertyReachability property_reachability;
+            std::size_t property_pruned_states = 0;
 
             /**
              * @brief check if the state just reach a loop

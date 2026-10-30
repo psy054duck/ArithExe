@@ -30,6 +30,13 @@ A configuration JSON provides an absolute `dataset` path and enabled tool record
 named `arithexe`, `icra`, `automizer`, each with `executable` and an
 optional `environment` mapping. ICRA additionally needs `loadpath`; VeriAbs and
 Automizer need `options` arrays. Never include credentials in this configuration.
+ICRA also accepts an `options` array; omission preserves the baseline
+`["-cra-split-loops"]`. For the separate restricted path-refinement comparison,
+use `["-cra-split-loops", "-cra-refine"]`, not `-cra-prsd` (which selects a
+different recurrence domain). `prepare-icra-refinement.py` checks the original
+ICRA fingerprints and the retained integer-only dataset, then exclusively
+creates a new configuration. Use an isolated copy of the runner and a new
+output directory/service; do not modify or resume the baseline run.
 VeriAbs is held pending permission for this modified dataset; `configure.py`
 deliberately omits its executable. Do not add it to the run until permission is
 resolved.
@@ -48,9 +55,42 @@ Separate output directories retain witnesses, prepared sources, commands, logs
 and raw BenchExec measurements. Full output is capped at approximately 16 MiB
 per task; BenchExec retains the start and end of truncated logs.
 
+Every run exports `peak_memory_bytes` and `peak_memory_mib` (the original
+`memory` field is retained in bytes). This is the BenchExec cgroup peak for the
+entire process tree, including charged cache, not peak RSS or Java heap usage.
+Missing measurements are null and explicitly flagged, never substituted with
+zero. Each tool's summary includes the minimum, median, nearest-rank p95 and
+maximum peak memory, both for all runs and for proved-TRUE runs. The completion
+marker also states whether all memory measurements are available. Do not pool
+timeout/OOM peaks with successful-run peaks when comparing proof efficiency.
+
 Original verdicts are **provenance only**, because internal assertions were
 removed and tools' arithmetic models differ. Nominal label matches are not
 validated correct predictions. No witness validation is claimed by this runner.
+
+The separate `svcomp2026-single-assertions` dataset splits the 605 retained
+integer programs into 1,038 one-assertion tasks. Configure its absolute path
+as `dataset` for a new experiment/output directory. The runner journals
+`parent_task`, `parent_assertion_count`, and `assertion_index`, and suppresses
+nominal label-match scoring when `expected_verdict_valid_for_split` is false.
+A parent's verdict must not be treated as ground truth for each of its checks.
+Do not modify or resume an existing 605-task experiment with this dataset.
+
+To compare ICRA switches separately, use tool configuration keys `icra_split`
+with `options: ["-cra-split-loops"]` and `icra_refine` with
+`options: ["-cra-refine"]`. Both use the ICRA command builder and result
+classifier, but their commands, journals, and result directories stay separate.
+Select `--tools arithexe icra_split icra_refine automizer`. This is distinct
+from the earlier combined `-cra-split-loops -cra-refine` experiment.
+
+For the memory-recording rerun, `prepare-memory-rerun.py --base-results
+/absolute/finished/results --run-dir /absolute/new/run` exclusively creates a
+new configuration containing only `icra_split`, `icra_refine`, and `automizer`.
+It requires a finished, fingerprint-verified baseline and preserves its tool
+options, environments, dataset, and limits. Copy the runner to this new run
+directory, validate a pilot, then use the timeout and memory limits recorded in
+`preparation.json` for the full run. Never overwrite or resume the historical
+experiment with the new runner.
 
 ## Prepared Ubuntu environment
 
@@ -92,3 +132,10 @@ Check `results/full/summary.json`, `logs/full.log`, and
 `systemctl status path-expression-benchmark-full`. A successful full run writes
 `results/full/completed.json` after all 1,857 jobs and final fingerprint checks.
 After interruption, use a new service name and the same command with `--resume`.
+# Component-only reruns
+
+Pass `--components nla-digbench nla-digbench-scaling --tools arithexe` to
+rerun the retained integer-only NLA tasks. Use a new output directory for each
+source snapshot; do not resume or overwrite results from a different build.
+`prepare-arithexe-rerun.py` fingerprints an isolated rebuilt source archive and
+inherits the previous run's settings, explicitly enabling coarse fallback.

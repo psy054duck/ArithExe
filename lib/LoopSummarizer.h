@@ -285,9 +285,10 @@ namespace ari_exe {
 
             /**
              * @brief get final and exit states
-             * @return (final_states, exit_states)
+             * @return (final_states, exit_states, obligations), or no result
+             *         when feasibility checks leave enumeration incomplete
              */
-            std::tuple<loop_state_list, loop_state_list, std::vector<Expression>> get_final_and_exit_states();
+            std::optional<std::tuple<loop_state_list, loop_state_list, std::vector<Expression>>> get_final_and_exit_states();
 
             VeriResult prove_invariants(const std::vector<Expression>& v_conditions);
 

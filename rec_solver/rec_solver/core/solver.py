@@ -1,4 +1,5 @@
 import z3
+import os
 
 from ..rec_parser import parse_str
 from .recurrence import LoopRecurrence, MultiRecurrence
@@ -6,7 +7,8 @@ from .multivariate import solve_multivariate_rec
 from .ultimately_periodic import solve_ultimately_periodic_symbolic
 from .poly_expr import poly_expr_solving
 from .bounded_cfinite import can_attempt_bounded_cfinite_map, solve_bounded_cfinite_map
-from .solvable_polynomial import is_solvable_map
+from .solvable_polynomial import is_solvable_map, solve_solvable_map
+from .closed_form import ExprClosedForm
 
 
 def _closed_form_has_content(closed_form):
@@ -43,6 +45,12 @@ def _direct_function_closed_form_is_inductive(rec, closed_form):
         return True
 
     solver = z3.Solver()
+    # UNKNOWN/timeouts reject the candidate; never accept an unchecked map.
+    try:
+        timeout = int(os.environ.get('ARITHEXE_RECURRENCE_CERT_TIMEOUT_MS', '3000'))
+    except ValueError:
+        timeout = 3000
+    solver.set(timeout=max(1, timeout))
     for app, expr in func_closed.items():
         initial_app = app.decl()(z3.IntVal(0))
         if initial_app not in rec.initial:
@@ -91,14 +99,35 @@ def solve_str(
     poly_expr_strategy="auto",
     poly_expr_order=1,
     poly_expr_degree=None,
+    periodic_strategy="compression",
 ):
     rec = parse_str(s)
     if isinstance(rec, LoopRecurrence):
+        if periodic_strategy == "oopsla23":
+            # Isolate the published periodic route: no direct/coarse fallback.
+            result = solve_ultimately_periodic_symbolic(
+                rec, enable_bounded_cfinite=False, pattern_strategy="oopsla23")
+            if not _direct_function_closed_form_is_inductive(rec, result):
+                raise ValueError('OOPSLA23 solution failed initial/transition certification')
+            return result
+        if periodic_strategy != "compression":
+            raise ValueError('Unknown periodic strategy: ' + periodic_strategy)
         solvable = False
         try:
             solvable = is_solvable_map(rec)
         except:
             pass
+        if solvable and len(rec.transitions) == 1:
+            # No branch-pattern sampling/QE is needed for an unconditional
+            # solvable map. Work on a copy: layer solving substitutes in place.
+            try:
+                direct_rec = rec.copy_rec_with_diff_initial(dict(rec.initial))
+                result = ExprClosedForm(solve_solvable_map(direct_rec), rec.ind_var)
+                if _closed_form_has_content(result):
+                    return result
+            except Exception:
+                # Preserve the existing general fallback on unsupported maps.
+                pass
         if enable_bounded_cfinite and not solvable and can_attempt_bounded_cfinite_map(rec, require_nonlinear=True):
             try:
                 res = solve_bounded_cfinite_map(rec)

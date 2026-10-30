@@ -3,6 +3,7 @@
 #include "RelaxedIntegerSemantics.h"
 #include "PathAccelerator.h"
 #include "VerificationSession.h"
+#include "QuantifiedQuery.h"
 #include <spdlog/spdlog.h>
 
 #include "z3++.h"
@@ -122,6 +123,51 @@ bool force_path_expression_mode() {
     return value && std::string(value) == "1";
 }
 
+std::size_t precise_trial_iterations() {
+    // Enough evidence for the longest configured periodic suffix. Zero is an
+    // explicit eager-coarse ablation, not the default scheduling policy.
+    const auto default_budget =
+        positive_environment_size("ARITHEXE_PATH_MAX_ROOT", 4) *
+        positive_environment_size("ARITHEXE_PATH_EVIDENCE", 2);
+    const char* raw = std::getenv("ARITHEXE_PRECISE_TRIAL_ITERATIONS");
+    if (!raw || !*raw || *raw == '-') return default_budget;
+    char* end = nullptr;
+    const auto parsed = std::strtoull(raw, &end, 10);
+    return end && !*end ? parsed : default_budget;
+}
+
+state_ptr try_independent_coarse(llvm::Loop* loop, const state_ptr& state) {
+    if (state->coarse_refining) return nullptr;
+    // One coarse language covers the entire loop nest, not separate inner
+    // summaries followed by unbounded unfolding of their parent.
+    if (loop->getParentLoop()) return nullptr;
+    const char* enabled = std::getenv("ARITHEXE_COARSE_FALLBACK");
+    if (enabled && std::string(enabled) == "0") return nullptr;
+    // Start at the incoming preheader edge, before any observed path, exact
+    // first-break relation, or coverage complement has been added.
+    if (state->trace.empty() || loop->contains(state->trace.back())) return nullptr;
+    // Inside a proof transaction, later loops use that transaction's degree.
+    // If the continuation cannot be proved, the outer entry retries it at 3.
+    const auto degrees = state->coarse_fallback_state && state->coarse_degree
+        ? std::vector<unsigned>{state->coarse_degree}
+        : PathExpressionAccelerator::coarse_degrees();
+    for (const unsigned degree : degrees) {
+        state->session.note_coarse_summary_attempt(degree);
+        try {
+            if (auto jump = PathExpressionAccelerator::accelerate_coarse(loop, state, degree)) {
+                return jump;
+            }
+        } catch (const std::exception& error) {
+            // Synthesis failure is an optimization failure; retain the entry.
+            spdlog::debug("[coarse-path] loop {} degree {} synthesis failed: {}",
+                          loop->getHeader()->getName().str(), degree, error.what());
+        }
+    }
+    spdlog::debug("[coarse-path] loop {} continuing ordinary execution",
+                  loop->getHeader()->getName().str());
+    return nullptr;
+}
+
 bool is_first_header_phi(const llvm::PHINode* phi, const llvm::Loop* loop) {
     const llvm::BasicBlock* header = loop ? loop->getHeader() : nullptr;
     return header && !header->phis().empty() &&
@@ -155,7 +201,8 @@ record_completed_loop_path(const state_ptr& state, llvm::Loop* loop,
     if (!state->trace.empty() && !loop->contains(state->trace.back())) {
         // A nested loop's next invocation is a new trace, not another
         // iteration of its previous invocation.
-        history = LoopPathExpressionState{};
+        if (!state->preserve_loop_entry_history) history = LoopPathExpressionState{};
+        state->preserve_loop_entry_history = false;
     }
     if (!history.decision_cursor_initialized) {
         history.decision_cursor = state->path_decisions.size();
@@ -184,9 +231,10 @@ record_completed_loop_path(const state_ptr& state, llvm::Loop* loop,
     const PathSymbol symbol =
         state->session.intern_loop_path(loop, decisions);
     history.append(symbol);
+    ++history.observed_iterations;
     state->session.note_path_compression();
-    history.candidates = compress_path_prefix(
-        history.concrete_frontier(),
+    history.candidates = compress_full_path_prefix(
+        history.compression_prefix(),
         positive_environment_size("ARITHEXE_PATH_MAX_ROOT", 4),
         positive_environment_size("ARITHEXE_PATH_BEAM", 4),
         positive_environment_size("ARITHEXE_PATH_EVIDENCE", 2));
@@ -287,9 +335,9 @@ Expression map_integer_unary(const Expression& operand,
 }
 
 Expression canonicalize_signed(const Expression& operand, unsigned width,
-                               const z3::expr& assumptions) {
-    if (width == 1 ||
-        VerificationSession::current().ignores_integer_width(width)) {
+                               const z3::expr& assumptions,
+                               const state_ptr& state) {
+    if (width == 1 || state->ignores_integer_width(width)) {
         return operand;
     }
 
@@ -337,7 +385,21 @@ bool has_canonical_signed_representation(const llvm::Value* value) {
                 llvm::isa<llvm::TruncInst>(current) ||
                 llvm::isa<llvm::ICmpInst>(current);
             if (const auto* call = llvm::dyn_cast<llvm::CallBase>(current)) {
-                canonical = call->getType()->isIntegerTy();
+                const auto* callee = llvm::dyn_cast<llvm::Function>(
+                    call->getCalledOperand()->stripPointerCasts());
+                // Recognized nondeterministic APIs retain their source domain:
+                // unsigned inputs may use positive values above signed_max.
+                const auto name = callee ? callee->getName() : llvm::StringRef();
+                const bool unsigned_input = name == "__VERIFIER_nondet_uchar" ||
+                    name == "__VERIFIER_nondet_ushort" ||
+                    name == "__VERIFIER_nondet_uint" ||
+                    name == "__VERIFIER_nondet_ulong" ||
+                    name == "__VERIFIER_nondet_ulonglong";
+                const bool ambiguous_char = name == "__VERIFIER_nondet_char" &&
+                    !(call->hasRetAttr(llvm::Attribute::SExt) ||
+                      callee->hasRetAttribute(llvm::Attribute::SExt));
+                canonical = call->getType()->isIntegerTy() &&
+                    !unsigned_input && !ambiguous_char;
             } else if (const auto* binary =
                            llvm::dyn_cast<llvm::BinaryOperator>(current)) {
                 switch (binary->getOpcode()) {
@@ -403,7 +465,7 @@ bool has_canonical_signed_representation(const llvm::Value* value) {
 z3::expr signed_value(const z3::expr& value, const llvm::Value* llvm_value,
                       unsigned width, const state_ptr& state) {
     z3::expr integer = integer_semantics::as_int(value);
-    if (state->session.ignores_integer_width(width) ||
+    if (state->ignores_integer_width(width) ||
         has_canonical_signed_representation(llvm_value) ||
         ari_exe::implies(state->get_path_condition().as_expr(),
                          integer_semantics::in_signed_range(integer,
@@ -416,7 +478,7 @@ z3::expr signed_value(const z3::expr& value, const llvm::Value* llvm_value,
 z3::expr unsigned_value(const z3::expr& value, unsigned width,
                         const state_ptr& state) {
     z3::expr integer = integer_semantics::as_int(value);
-    if (state->session.ignores_integer_width(width)) return integer;
+    if (state->ignores_integer_width(width)) return integer;
     return ari_exe::implies(
                state->get_path_condition().as_expr(),
                integer_semantics::in_unsigned_range(integer, width))
@@ -581,7 +643,7 @@ AInstructionBinary::execute(state_ptr state) {
         op0_value, op1_value,
         [&](const z3::expr& lhs, const z3::expr& rhs) {
             using namespace integer_semantics;
-            if (state->session.uses_integer_relaxation()) {
+            if (state->uses_relaxed_arithmetic()) {
                 return relaxed_integer_binary(lhs, rhs, opcode, width, exact);
             }
             z3::expr lhs_bv(z3ctx);
@@ -813,7 +875,7 @@ AInstructionICmp::execute(state_ptr state) {
             using namespace integer_semantics;
             z3::expr value(z3ctx);
             if (pred == llvm::ICmpInst::ICMP_EQ) {
-                value = state->session.ignores_integer_width(width) ||
+                value = state->ignores_integer_width(width) ||
                                 (has_canonical_signed_representation(op0) &&
                                  has_canonical_signed_representation(op1))
                             ? lhs == rhs
@@ -823,7 +885,7 @@ AInstructionICmp::execute(state_ptr state) {
                                   0
                             : lhs == rhs;
             } else if (pred == llvm::ICmpInst::ICMP_NE) {
-                value = state->session.ignores_integer_width(width) ||
+                value = state->ignores_integer_width(width) ||
                                 (has_canonical_signed_representation(op0) &&
                                  has_canonical_signed_representation(op1))
                             ? lhs != rhs
@@ -925,7 +987,9 @@ AInstructionCall::execute(state_ptr state) {
         return {execute_assert(call_state)};
     } else if (called_func &&
                (called_func->getName().find("reach_error") != std::string::npos ||
-                called_func->getName() == "__VERIFIER_error")) {
+                called_func->getName() == "__VERIFIER_error" ||
+                called_func->getName() == "__assert_fail" ||
+                called_func->getName() == "__assert_rtn")) {
         return {execute_reach_error(call_state)};
     } else if (called_func && called_func->getName().find("assume") != std::string::npos) {
         // assume function, add the condition to the path condition
@@ -954,13 +1018,55 @@ AInstructionCall::execute(state_ptr state) {
 
 state_ptr
 AInstructionCall::execute_normal(state_ptr state) {
-    auto try_cache = execute_cache(state);
-    if (try_cache) return try_cache;
-
     auto call_inst = dyn_cast<llvm::CallInst>(inst);
     auto called_func = resolve_called_function(call_inst);
+    // Concrete fixed-width results are not mathematical probe summaries.
+    // A global-state helper cannot be memoized by scalar arguments alone.
+    if (!state->uses_relaxed_arithmetic() && !is_scalar_state_helper(called_func)) {
+        auto try_cache = execute_cache(state);
+        if (try_cache) return try_cache;
+    }
 
     // check if the function is recursive and not yet summarized
+    if (state->uses_relaxed_arithmetic() && is_scalar_state_helper(called_func)) {
+        auto& cache = state->session.state_transformer_summaries();
+        auto found = cache.find(called_func);
+        auto transformer = found == cache.end()
+            ? summarize_scalar_state_helper(called_func, state->z3ctx) : found->second;
+        if (transformer) {
+            cache.insert_or_assign(called_func, transformer);
+            z3::expr_vector actual(state->z3ctx);
+            bool valid = true;
+            auto defined = state->z3ctx.bool_val(true);
+            for (const auto& arg : call_inst->args()) {
+                auto value = state->evaluate(arg.get());
+                actual.push_back(value.as_expr());
+                defined = defined && value.defined();
+            }
+            for (auto* global : transformer->globals) {
+                auto object = state->memory.get_object_pointed_by(global);
+                if (!object || !object->is_scalar()) { valid = false; break; }
+                actual.push_back(object->read().as_expr());
+                defined = defined && object->read().defined();
+            }
+            if (valid) {
+                auto next = clone_state_preserving_type(state);
+                next->append_path_condition(defined);
+                for (unsigned i = 0; i < transformer->globals.size(); ++i) {
+                    auto update = transformer->updates[i];
+                    update = update.substitute(transformer->parameters, actual).simplify();
+                    auto pointer = next->memory.get_object(transformer->globals[i]);
+                    next->memory.store(pointer->get_ptr_value(), Expression(update));
+                }
+                if (transformer->result) {
+                    auto value = *transformer->result;
+                    next->memory.put_temp(call_inst, value.substitute(transformer->parameters, actual).simplify());
+                }
+                next->step_pc();
+                return next;
+            }
+        }
+    }
     auto ret_type = called_func->getReturnType();
     auto& session = state->session;
     auto& function_summaries = session.function_summaries();
@@ -977,6 +1083,19 @@ AInstructionCall::execute_normal(state_ptr state) {
     }
 
     auto summary = function_summaries.get_value(called_func);
+    if (state->uses_relaxed_arithmetic() && is_pure_scalar_helper(called_func)) {
+        auto& helpers = session.mathematical_helper_summaries();
+        auto precise = helpers.get_value(called_func);
+        if (!precise) {
+            try {
+                precise = summarize_pure_scalar_helper(called_func, state->z3ctx);
+            } catch (const std::exception& error) {
+                spdlog::debug("[function-summary] helper {} unavailable: {}", called_func->getName().str(), error.what());
+            }
+            if (precise) helpers.insert_or_assign(called_func, *precise);
+        }
+        if (precise) summary = precise;
+    }
     auto& z3ctx = state->z3ctx;
 
     state_ptr new_state = clone_state_preserving_type(state);
@@ -1097,6 +1216,14 @@ AInstructionCall::execute_normal(state_ptr state) {
             new_state->memory.put_temp(param, target_obj->get_ptr_value());
         } else {
             auto arg_value = state->evaluate(arg);
+            // Formal LLVM arguments use canonical signed bit-pattern values,
+            // including when a source unsigned input uses its positive domain.
+            // Do not introduce width operations into internal summary probes.
+            if (!state->summary_arithmetic && param->getType()->isIntegerTy()) {
+                arg_value = canonicalize_signed(
+                    arg_value, param->getType()->getIntegerBitWidth(),
+                    state->get_path_condition().as_expr(), state);
+            }
             // new_state->memory.allocate(param, obj->read());
             new_state->memory.put_temp(param, arg_value);
         }
@@ -1235,12 +1362,13 @@ AInstructionCall::execute_unknown(state_ptr state) {
         called_func->getName().starts_with("__VERIFIER_nondet_")) {
         new_state->nondet_calls.emplace_back(call_inst, result.as_expr());
     }
-    new_state->constrain_nondet_input(call_inst, result);
+    const bool input_domain_applied =
+        new_state->constrain_nondet_input(call_inst, result);
     // new_state->write(inst, result);
     if (called_func &&
         called_func->getName().starts_with("__VERIFIER_nondet_") &&
         ret_type->isIntegerTy() &&
-        !state->session.uses_integer_relaxation()) {
+        !state->uses_relaxed_arithmetic() && !input_domain_applied) {
         const unsigned width = ret_type->getIntegerBitWidth();
 
         const char* signed_min = nullptr;
@@ -1325,7 +1453,7 @@ AInstructionCall::execute_malloc(state_ptr state) {
 
             Expression candidate =
                 state->evaluate(multiply->getOperand(1 - constant_index));
-            element_count = state->session.uses_integer_relaxation()
+            element_count = state->uses_relaxed_arithmetic()
                 ? integer_semantics::as_int(candidate.as_expr())
                 : (integer_semantics::as_unsigned(candidate.as_expr(),
                                                 size_width) %
@@ -1337,7 +1465,7 @@ AInstructionCall::execute_malloc(state_ptr state) {
     }
     dims.push_back(element_count);
     auto new_state = std::make_shared<State>(*state);
-    if (state->session.uses_integer_relaxation()) {
+    if (state->uses_relaxed_arithmetic()) {
         new_state->append_path_condition(Expression(size_bytes_expr.defined()));
         new_state->append_path_condition(Expression(
             integer_semantics::as_int(size_bytes_expr.as_expr()) >= 0));
@@ -1504,6 +1632,11 @@ AInstructionReturn::execute(state_ptr state) {
     auto call_inst = dyn_cast<llvm::CallInst>(new_state->pc->inst);
     if (ret_value) {
         auto ret_expr = state->evaluate(ret_value);
+        if (!state->summary_arithmetic && ret_value->getType()->isIntegerTy()) {
+            ret_expr = canonicalize_signed(
+                ret_expr, ret_value->getType()->getIntegerBitWidth(),
+                state->get_path_condition().as_expr(), state);
+        }
 
         // go back to the called site
         assert(call_inst);
@@ -1517,8 +1650,10 @@ AInstructionReturn::execute(state_ptr state) {
 
 void
 AInstructionReturn::cache_func_value(state_ptr state, const Expression& result) {
+    if (state->uses_relaxed_arithmetic()) return;
     auto& cache_instance = state->session.function_cache();
     auto& top_frame = state->memory.top_frame();
+    if (is_scalar_state_helper(top_frame.func)) return;
     param_list_ty args;
 
     auto model = state->get_model();
@@ -1543,7 +1678,7 @@ AInstructionZExt::execute(state_ptr state) {
     const unsigned source_width = op->getType()->getIntegerBitWidth();
     Expression result = map_integer_unary(
         op_value, [&](const z3::expr& value) {
-            if (state->session.uses_integer_relaxation()) {
+            if (state->uses_relaxed_arithmetic()) {
                 return integer_semantics::as_int(value);
             }
             return integer_semantics::as_unsigned(value, source_width);
@@ -1563,7 +1698,13 @@ AInstructionSExt::execute(state_ptr state) {
     auto op = sext_inst->getOperand(0);
     auto op_value = state->evaluate(op);
     const unsigned source_width = op->getType()->getIntegerBitWidth();
-    if (state->session.uses_integer_relaxation()) {
+    const char* periodic_mode = std::getenv("ARITHEXE_PERIODIC_STRATEGY");
+    auto* containing_loop = AnalysisManager::get_instance()->get_LI(
+        sext_inst->getFunction()).getLoopFor(sext_inst->getParent());
+    const bool preserve_input_cast = periodic_mode &&
+        std::string(periodic_mode) == "oopsla23" && containing_loop &&
+        containing_loop->isLoopInvariant(op);
+    if (state->uses_relaxed_arithmetic() && !preserve_input_cast) {
         Expression result = map_integer_unary(
             op_value, [&](const z3::expr& value) {
                 z3::expr integer = integer_semantics::as_int(value);
@@ -1605,21 +1746,94 @@ AInstructionSExt::execute(state_ptr state) {
 std::vector<state_ptr>
 AInstructionPhi::execute(state_ptr state) {
     auto phi_inst = dyn_cast<llvm::PHINode>(inst);
+    if (state->coarse_replay_loop) {
+        // Boundary replay must not launch another summary or exact jump. Its
+        // enclosing transaction checks assertions and stops at certified cuts.
+        auto next = std::make_shared<State>(*state);
+        next->execute_phi_bundle();
+        return {next};
+    }
     auto manager = AnalysisManager::get_instance();
     auto& LI = manager->get_LI(phi_inst->getFunction());
     auto loop = LI.getLoopFor(phi_inst->getParent());
+
+    // Published periodic-sampling ablation: never enter the online path-schema
+    // accelerator or the independent coarse route, even in integer relaxation.
+    const char* periodic_strategy = std::getenv("ARITHEXE_PERIODIC_STRATEGY");
+    if (periodic_strategy && std::string(periodic_strategy) == "oopsla23") {
+        if (loop && is_first_header_phi(phi_inst, loop) &&
+            !state->is_summarizing() && !state->session.loop_summary_failed(loop)) {
+            auto summaries = execute_if_summarizable(state);
+            if (!summaries.empty()) return summaries;
+            state->session.mark_loop_summary_failed(loop);
+        }
+        auto next = std::make_shared<State>(*state);
+        next->execute_phi_bundle();
+        return {next};
+    }
+
+    record_completed_loop_path(state, loop, phi_inst);
+
+    const bool proposed_header = loop && is_first_header_phi(phi_inst, loop) &&
+        (force_path_expression_mode() || state->session.uses_integer_relaxation());
+    // An existing coarse transaction stays on its independent route. Zero
+    // explicitly restores eager coarse scheduling for controlled ablations.
+    if (proposed_header &&
+        ((state->coarse_fallback_state && state->coarse_degree != 0) ||
+         !precise_trial_iterations())) {
+        if (auto coarse = try_independent_coarse(loop, state)) return {coarse};
+    }
 
     // Compose exact child exits before attempting a whole-loop legacy
     // recurrence. Eager entry summarization also includes the zero-trip case.
     if (loop && is_first_header_phi(phi_inst, loop) &&
         (loop->getParentLoop() || !loop->getSubLoops().empty()) &&
         !state->trace.empty() && !loop->contains(state->trace.back())) {
-        if (auto jump = PathExpressionAccelerator::accelerate_nested(loop, state)) {
-            return {jump};
+        if (auto jumps = PathExpressionAccelerator::accelerate_nested(loop, state);
+            !jumps.empty()) {
+            return jumps;
         }
     }
 
-    record_completed_loop_path(state, loop, phi_inst);
+    if (proposed_header && !state->is_summarizing()) {
+        const bool entry = !state->trace.empty() &&
+                           !loop->contains(state->trace.back());
+        auto& history = state->loop_path_expressions[loop];
+        if (entry && !state->coarse_refining && !loop->getParentLoop() &&
+            !state->coarse_fallback_state && precise_trial_iterations()) {
+            auto rejection = PathExpressionAccelerator::precise_rejection_reason(loop);
+            if (rejection) {
+                // A control-only body oracle prevents exact single-map trials,
+                // but a finite-exit safety proof may need only the exit guard.
+                // This independent transaction rolls back on any inconclusive
+                // result; it cannot report an over-approximate counterexample.
+                if (*rejection == "call" && !history.safety_attempted) {
+                    history.safety_attempted = true;
+                    try {
+                        if (auto safety = PathExpressionAccelerator::accelerate_exit_guard(loop, state)) {
+                            safety->safety_resume_state = std::make_shared<State>(*state);
+                            return {safety};
+                        }
+                    } catch (const std::exception& error) {
+                        spdlog::debug("[safety-exit] optional summary unavailable: {}", error.what());
+                    }
+                }
+                spdlog::debug("[path-expr] loop {} precise trial rejected: {}; "
+                              "trying independent coarse fallback",
+                              loop->getHeader()->getName().str(), *rejection);
+                history.coarse_attempted = true;
+                if (auto coarse = try_independent_coarse(loop, state)) return {coarse};
+            } else {
+                // Copy before installing the pointer, so no snapshot can
+                // own itself. Re-entry resets this history independently.
+                history.coarse_entry = std::make_shared<State>(*state);
+                spdlog::debug("[path-expr] loop {} deferring coarse reasoning "
+                              "for up to {} observed iterations of precise trials",
+                              loop->getHeader()->getName().str(),
+                              precise_trial_iterations());
+            }
+        }
+    }
 
     // The legacy recurrence route does not distinguish successive Boolean
     // oracle values in its exit relation. Use the sequence-aware accelerator
@@ -1656,6 +1870,22 @@ AInstructionPhi::execute(state_ptr state) {
                     continue;
                 }
 
+                // A quantifier-free certified coverage region needs no lossy
+                // safety shortcut. Preserve affine sequential-loop relations.
+                if (query_has_quantifier(acceleration->covered) &&
+                    !history->second.safety_attempted && history->second.coarse_entry) {
+                    history->second.safety_attempted = true;
+                    try {
+                        if (auto safety = PathExpressionAccelerator::accelerate_exit_guard(
+                                loop, history->second.coarse_entry)) {
+                            safety->safety_resume_state = std::make_shared<State>(*state);
+                            spdlog::debug("[safety-exit] trying independent safety proof before residual coverage");
+                            return {safety};
+                        }
+                    } catch (const std::exception& error) {
+                        spdlog::debug("[safety-exit] optional summary unavailable: {}", error.what());
+                    }
+                }
                 state_list successors{acceleration->jump};
                 state_ptr residual = std::make_shared<State>(*state);
                 residual->append_path_condition(!acceleration->covered);
@@ -1665,8 +1895,13 @@ AInstructionPhi::execute(state_ptr state) {
                 residual_solver.set(residual_parameters);
                 residual_solver.add(
                     residual->get_path_condition().as_expr());
-                const z3::check_result residual_result =
+                z3::check_result residual_result =
                     residual_solver.check();
+                if (residual_result == z3::unknown) {
+                    residual_result = quantified_unsat_fallback(residual_solver, 3000u);
+                    spdlog::debug("[quantified-query] residual simplify/qe/smt fallback: {}",
+                                  residual_result == z3::unsat ? "unsat" : "inconclusive");
+                }
                 spdlog::debug(
                     "[path-expr] loop {} residual feasibility after jump: {}",
                     loop->getHeader()->getName().str(),
@@ -1675,11 +1910,29 @@ AInstructionPhi::execute(state_ptr state) {
                         : (residual_result == z3::unsat ? "unsat"
                                                         : "unknown"));
                 if (residual_result != z3::unsat) {
+                    // Exact coverage partitions only exact execution. Coarse
+                    // reasoning has its own entry-rooted proof context.
                     residual->execute_phi_bundle();
                     successors.push_back(residual);
                 }
                 return successors;
             }
+        }
+    }
+
+    if (proposed_header && !state->coarse_refining) {
+        auto& history = state->loop_path_expressions[loop];
+        if (history.coarse_entry && !history.coarse_attempted &&
+            history.observed_iterations >= precise_trial_iterations()) {
+            auto entry = history.coarse_entry;
+            history.coarse_attempted = true;
+            history.coarse_entry.reset();
+            spdlog::debug("[path-expr] loop {} precise trial window exhausted "
+                          "after {} iterations; trying coarse reasoning from "
+                          "the unchanged entry",
+                          loop->getHeader()->getName().str(),
+                          history.observed_iterations);
+            if (auto coarse = try_independent_coarse(loop, entry)) return {coarse};
         }
     }
 
@@ -1884,7 +2137,10 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
             }
         }
         auto arrays_ptr = state->memory.get_arrays();
-        for (int i = 0; i < arrays_ptr.size(); i++) {
+        const char* summary_strategy = std::getenv("ARITHEXE_PERIODIC_STRATEGY");
+        const bool scalar_paper_summary = summary_strategy &&
+            std::string(summary_strategy) == "oopsla23";
+        for (int i = 0; !scalar_paper_summary && i < arrays_ptr.size(); i++) {
             // for each array, we need to get the signature
             auto array_ptr = arrays_ptr[i];
             args.push_back(array_ptr->get_signature());
@@ -2115,7 +2371,7 @@ AInstructionStore::execute(state_ptr state) {
         !has_canonical_signed_representation(value)) {
         value_expr = canonicalize_signed(
             value_expr, value->getType()->getIntegerBitWidth(),
-            new_state->get_path_condition().as_expr());
+            new_state->get_path_condition().as_expr(), state);
     }
     pointed_obj->write(offset, value_expr);
 
@@ -2175,7 +2431,7 @@ AInstructionTrunc::execute(state_ptr state) {
     const unsigned target_width = trunc_inst->getType()->getIntegerBitWidth();
     Expression result = map_integer_unary(
         op_value, [&](const z3::expr& value) {
-            if (state->session.uses_integer_relaxation()) {
+            if (state->uses_relaxed_arithmetic()) {
                 z3::expr integer = integer_semantics::as_int(value);
                 return target_width == 1 ? integer % 2 != 0 : integer;
             }

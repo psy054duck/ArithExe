@@ -2,6 +2,7 @@
 #define PATH_ACCELERATOR_H
 
 #include <optional>
+#include <string>
 
 #include "PathExpression.h"
 #include "state.h"
@@ -14,8 +15,8 @@ namespace ari_exe {
 
 /**
  * A certified first-break jump or a stable-path arbitrary-finite exit jump.
- * `covered` is existentially closed over the fresh repetition count and is
- * used by the caller to preserve the exact ordinary residual.
+ * `covered` projects the repetition count existentially, or substitutes a
+ * certified functional count, and preserves the exact ordinary residual.
  */
 struct PathAcceleration {
     state_ptr jump;
@@ -28,6 +29,8 @@ struct PathAcceleration {
  * of every skipped assertion and child summary.
  */
 struct NestedPathSummary {
+    // A complete summary is a union of guarded exits, never an ITE update map.
+    std::vector<std::shared_ptr<NestedPathSummary>> cases;
     std::vector<llvm::Value*> inputs;
     z3::expr_vector parameters;
     std::vector<llvm::Value*> outputs;
@@ -44,14 +47,38 @@ struct NestedPathSummary {
 
 class PathExpressionAccelerator {
   public:
+    /** Certified over-approximate union-star with guarded boundary replay.
+     * No exact word is recorded. Multiple exits and internal assertions are
+     * checked in one independent transaction before an entry is discharged.
+     * Null leaves precise execution intact. Called at the preheader edge in
+     * an independent proof attempt, never on an exact coverage complement.
+     * Starts only at an outermost loop; nested scalar CFG edges become
+     * nondeterministic maps in the same union-star, including copies/resets.
+     */
+    static state_ptr accelerate_coarse(llvm::Loop* loop,
+                                       const state_ptr& state, unsigned degree = 2);
+
+    /** Independent safety over-approximation of finite exits: havoc scalar
+     * header coordinates and retain the actual exit guard. Does not prove
+     * termination. Restricted to side-effect-free, nonnested loops with no
+     * internal obligations and a single header exit. Null preserves execution.
+     */
+    static state_ptr accelerate_exit_guard(llvm::Loop* loop, const state_ptr& entry);
+
+    /** Default proof ladder; an explicit environment degree pins one level. */
+    static std::vector<unsigned> coarse_degrees();
+
     /** Select sequence-aware execution instead of the legacy summarizer. */
     static bool has_nondeterministic_header_control(llvm::Loop* loop);
+
+    /** Cheap precise-profile check before waiting for trace evidence. */
+    static std::optional<std::string> precise_rejection_reason(llvm::Loop* loop);
 
     /** Complete bottom-up exit jump; null means ordinary execution is needed.
      * Used at a loop entry, not at an observed backedge. Unsupported children,
      * nonfunctional counters, or unproved domains never filter out a path.
      */
-    static state_ptr accelerate_nested(llvm::Loop* loop,
+    static std::vector<state_ptr> accelerate_nested(llvm::Loop* loop,
                                        const state_ptr& state);
 
     static std::optional<PathAcceleration>

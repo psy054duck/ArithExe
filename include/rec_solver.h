@@ -33,6 +33,7 @@ namespace ari_exe {
         private:
             rec_ty rec_eqs;
             closed_form_ty res;
+            closed_form_ty exact_res;
             z3::expr ind_var;
             // initial_ty initial_values;
             z3::expr_vector initial_values_k;
@@ -53,6 +54,7 @@ namespace ari_exe {
             void add_initial_values(z3::expr_vector k, z3::expr_vector v);
             void set_ind_var(z3::expr var);
             closed_form_ty get_res();
+            closed_form_ty get_exact_res();
             void expr_solve(z3::expr);
             void apply_initial_values();
             void print_recs();
@@ -67,7 +69,10 @@ namespace ari_exe {
             std::string z3_infix(z3::expr e);
             void smt2_to_z3(const std::string& smt2);
             void print_res();
-            bool solve();
+            // Coarse mode bypasses path-sensitive solvers and synthesizes
+            // common polynomial C-finite observables over all transitions.
+            // One explicit degree per request; property retries live in Engine.
+            bool solve(bool coarse = false, unsigned coarse_degree = 2);
             // std::pair<std::vector<z3::expr>, std::vector<z3::expr>> rec_solver::parse_expr_(z3::expr e);
             z3::expr hoist_ite(z3::expr e);
             z3::expr get_ind_var() const { return ind_var; }

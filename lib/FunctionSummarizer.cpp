@@ -1,8 +1,175 @@
 #include "FunctionSummarizer.h"
 #include "IntegerSemantics.h"
+#include <functional>
+#include <llvm/IR/CFG.h>
 #include <spdlog/spdlog.h>
 
 using namespace ari_exe;
+
+bool ari_exe::is_scalar_state_helper(llvm::Function* f) {
+    if (!f || f->isDeclaration() || f->size() != 1 ||
+        (!f->getReturnType()->isVoidTy() &&
+         (!f->getReturnType()->isIntegerTy() || f->getReturnType()->isIntegerTy(1)))) return false;
+    for (auto& arg : f->args())
+        if (!arg.getType()->isIntegerTy() || arg.getType()->isIntegerTy(1)) return false;
+    bool memory = false;
+    unsigned budget = 256;
+    for (auto& inst : f->getEntryBlock()) {
+        if (inst.isDebugOrPseudoInst()) continue;
+        if (!budget--) return false;
+        for (const auto& operand : inst.operands())
+            if (llvm::isa<llvm::UndefValue, llvm::PoisonValue>(operand.get()) ||
+                (llvm::isa<llvm::Constant>(operand.get()) &&
+                 !llvm::isa<llvm::ConstantInt, llvm::GlobalVariable>(operand.get()))) return false;
+        llvm::Value* pointer = nullptr;
+        llvm::Type* type = nullptr;
+        if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst)) {
+            if (load->isVolatile() || load->isAtomic()) return false;
+            pointer = load->getPointerOperand(); type = load->getType();
+        } else if (auto* store = llvm::dyn_cast<llvm::StoreInst>(&inst)) {
+            if (store->isVolatile() || store->isAtomic()) return false;
+            pointer = store->getPointerOperand(); type = store->getValueOperand()->getType();
+        } else if (auto* bin = llvm::dyn_cast<llvm::BinaryOperator>(&inst)) {
+            if (!bin->getType()->isIntegerTy() || bin->getType()->isIntegerTy(1) ||
+                (bin->getOpcode() != llvm::Instruction::Add &&
+                 bin->getOpcode() != llvm::Instruction::Sub &&
+                 bin->getOpcode() != llvm::Instruction::Mul)) return false;
+        } else if (!llvm::isa<llvm::ReturnInst>(inst)) return false;
+        if (pointer) {
+            auto* global = llvm::dyn_cast<llvm::GlobalVariable>(pointer);
+            if (!global || global->isConstant() || !global->hasInitializer() ||
+                !llvm::isa<llvm::ConstantInt>(global->getInitializer()) ||
+                !type->isIntegerTy() || type->isIntegerTy(1) || global->getValueType() != type)
+                return false;
+            memory = true;
+        }
+    }
+    return memory;
+}
+
+std::shared_ptr<ScalarStateTransformer> ari_exe::summarize_scalar_state_helper(
+    llvm::Function* f, z3::context& ctx) {
+    if (!is_scalar_state_helper(f)) return nullptr;
+    auto summary = std::make_shared<ScalarStateTransformer>(ctx);
+    std::map<llvm::Value*, z3::expr> values;
+    std::map<llvm::GlobalVariable*, z3::expr> globals;
+    for (auto& arg : f->args()) {
+        auto parameter = ctx.int_const(("ari_state_arg_" + std::to_string(arg.getArgNo())).c_str());
+        summary->parameters.push_back(parameter); values.emplace(&arg, parameter);
+    }
+    for (auto& inst : f->getEntryBlock()) {
+        llvm::Value* pointer = nullptr;
+        if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst)) pointer = load->getPointerOperand();
+        if (auto* store = llvm::dyn_cast<llvm::StoreInst>(&inst)) pointer = store->getPointerOperand();
+        if (auto* global = llvm::dyn_cast_or_null<llvm::GlobalVariable>(pointer);
+            global && !globals.contains(global)) {
+            auto parameter = ctx.int_const(("ari_state_global_" + global->getName().str()).c_str());
+            summary->globals.push_back(global); summary->parameters.push_back(parameter);
+            globals.emplace(global, parameter);
+        }
+    }
+    auto evaluate = [&](llvm::Value* value) {
+        if (auto* constant = llvm::dyn_cast<llvm::ConstantInt>(value)) {
+            llvm::SmallString<64> decimal;
+            constant->getValue().toString(decimal, 10, true);
+            return ctx.int_val(decimal.c_str());
+        }
+        return values.at(value);
+    };
+    for (auto& inst : f->getEntryBlock()) {
+        if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst))
+            values.emplace(load, globals.at(llvm::cast<llvm::GlobalVariable>(load->getPointerOperand())));
+        else if (auto* store = llvm::dyn_cast<llvm::StoreInst>(&inst))
+            globals.insert_or_assign(llvm::cast<llvm::GlobalVariable>(store->getPointerOperand()), evaluate(store->getValueOperand()));
+        else if (auto* bin = llvm::dyn_cast<llvm::BinaryOperator>(&inst)) {
+            auto a = evaluate(bin->getOperand(0)), b = evaluate(bin->getOperand(1));
+            values.emplace(bin, (bin->getOpcode() == llvm::Instruction::Add ? a + b :
+                bin->getOpcode() == llvm::Instruction::Sub ? a - b : a * b).simplify());
+        } else if (auto* ret = llvm::dyn_cast<llvm::ReturnInst>(&inst); ret && ret->getReturnValue())
+            summary->result = evaluate(ret->getReturnValue());
+    }
+    for (auto* global : summary->globals) summary->updates.push_back(globals.at(global).simplify());
+    spdlog::debug("[function-summary] precise scalar state transformer {}: {}", f->getName().str(), summary->updates.to_string());
+    return summary;
+}
+
+std::map<llvm::GlobalVariable*, llvm::PHINode*> ari_exe::scalar_global_loop_bindings(llvm::Loop* loop) {
+    std::map<llvm::GlobalVariable*, llvm::PHINode*> bindings;
+    auto* latch = loop->getLoopLatch();
+    if (!latch) return bindings;
+    for (auto& phi : loop->getHeader()->phis()) {
+        auto* load = llvm::dyn_cast_or_null<llvm::LoadInst>(phi.getIncomingValueForBlock(latch));
+        if (!load || load->isVolatile() || load->isAtomic() || load->getParent() != latch ||
+            load->getNextNonDebugInstruction() != latch->getTerminator()) continue;
+        auto* global = llvm::dyn_cast<llvm::GlobalVariable>(load->getPointerOperand());
+        if (global && global->getValueType()->isIntegerTy() && !global->getValueType()->isIntegerTy(1))
+            bindings.emplace(global, &phi);
+    }
+    return bindings;
+}
+
+bool ari_exe::is_pure_scalar_helper(llvm::Function* function) {
+    std::set<llvm::Function*> active;
+    unsigned budget = 256;
+    std::function<bool(llvm::Function*)> visit = [&](llvm::Function* f) {
+        if (!f || f->isDeclaration() || !f->getReturnType()->isIntegerTy() ||
+            f->getReturnType()->isIntegerTy(1) || !active.insert(f).second) return false;
+        for (const auto& arg : f->args())
+            if (!arg.getType()->isIntegerTy() || arg.getType()->isIntegerTy(1)) return false;
+        std::set<llvm::BasicBlock*> visiting, done;
+        std::function<bool(llvm::BasicBlock*)> block = [&](llvm::BasicBlock* b) {
+            if (done.contains(b)) return true;
+            if (!visiting.insert(b).second) return false;
+            for (auto& inst : *b) {
+                if (!budget--) return false;
+                for (const auto& operand : inst.operands())
+                    if (llvm::isa<llvm::UndefValue>(operand.get()) ||
+                        llvm::isa<llvm::PoisonValue>(operand.get())) return false;
+                if (auto* call = llvm::dyn_cast<llvm::CallInst>(&inst)) {
+                    if (!visit(call->getCalledFunction())) return false;
+                } else if (auto* cast = llvm::dyn_cast<llvm::CastInst>(&inst)) {
+                    if (!cast->getSrcTy()->isIntegerTy() || !cast->getDestTy()->isIntegerTy()) return false;
+                } else if (auto* bin = llvm::dyn_cast<llvm::BinaryOperator>(&inst)) {
+                    if (bin->getOpcode() != llvm::Instruction::Add &&
+                        bin->getOpcode() != llvm::Instruction::Sub &&
+                        bin->getOpcode() != llvm::Instruction::Mul) return false;
+                } else if (!llvm::isa<llvm::PHINode, llvm::ICmpInst, llvm::SelectInst,
+                                     llvm::ReturnInst, llvm::BranchInst, llvm::CastInst>(&inst)) return false;
+            }
+            for (auto* next : llvm::successors(b)) if (!block(next)) return false;
+            visiting.erase(b); done.insert(b); return true;
+        };
+        bool result = block(&f->getEntryBlock());
+        active.erase(f);
+        return result;
+    };
+    return visit(function);
+}
+
+std::optional<FunctionSummary> ari_exe::summarize_pure_scalar_helper(
+    llvm::Function* function, z3::context& context) {
+    if (!is_pure_scalar_helper(function)) return std::nullopt;
+    RecExecution execution(context, function);
+    auto initial = execution.build_initial_state();
+    z3::expr_vector parameters(context);
+    for (auto& arg : function->args()) parameters.push_back(initial->evaluate(&arg).as_expr());
+    auto returns = execution.run(true);
+    z3::expr covered = context.bool_val(false), value = context.int_val(0);
+    for (const auto& state : returns) {
+        auto* ret = llvm::dyn_cast<llvm::ReturnInst>(state->pc->inst);
+        if (!ret || !ret->getReturnValue()) return std::nullopt;
+        auto result = state->evaluate(ret->getReturnValue());
+        auto guard = state->get_path_condition().as_expr() && result.defined();
+        covered = covered || guard;
+        value = z3::ite(guard, result.as_expr(), value);
+    }
+    z3::solver certificate(context);
+    certificate.set("timeout", 3000u);
+    certificate.add(!covered);
+    if (certificate.check() != z3::unsat) return std::nullopt;
+    spdlog::debug("[function-summary] precise scalar helper {}: {}", function->getName().str(), value.simplify().to_string());
+    return FunctionSummary(parameters, value.simplify());
+}
 
 RecExecution::RecExecution(z3::context& z3ctx, llvm::Function* F): z3ctx(z3ctx), F(F), solver(z3ctx) {
     auto initial_state = build_initial_state();
@@ -64,6 +231,7 @@ RecExecution::build_initial_state() {
     auto initial_state = std::make_shared<RecState>(State(
         VerificationSession::current(), z3ctx, AInstruction::create(pc),
         nullptr, memory, initial_condition, {}));
+    initial_state->summary_arithmetic = true;
     return initial_state;
 }
 
@@ -89,7 +257,7 @@ RecExecution::step(state_ptr state, bool unfold) {
         }
     } else if (auto bin_inst = llvm::dyn_cast_or_null<llvm::BinaryOperator>(pc->inst)) {
         auto op = bin_inst->getOpcode();
-        if (!state->session.uses_integer_relaxation() &&
+        if (!state->uses_relaxed_arithmetic() &&
             (op == llvm::Instruction::UDiv || op == llvm::Instruction::SDiv)) {
             auto op1 = state->evaluate(bin_inst->getOperand(0));
             auto op2 = state->evaluate(bin_inst->getOperand(1));

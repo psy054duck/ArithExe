@@ -26,6 +26,7 @@ class RelaxedIntegerOperations : public ::testing::Test {
     llvm::LLVMContext llvm_context;
     llvm::Module module{"integer-relaxation-tests", llvm_context};
     z3::context& ctx = session.analyses().get_z3ctx();
+    bool summary_arithmetic = true;
 
     void SetUp() override { session.set_ignore_bitwidth_constraints(true); }
     void TearDown() override { session.clear_module_state(); }
@@ -65,21 +66,24 @@ class RelaxedIntegerOperations : public ::testing::Test {
                                             nullptr, memory,
                                             Expression(ctx.bool_val(true)),
                                             trace_ty{});
+        // These operation tests exercise internal summary probes. The same
+        // session option no longer relaxes ordinary execution states.
+        state->summary_arithmetic = summary_arithmetic;
         auto states = instruction->execute(state);
         if (states.size() != 1) throw std::runtime_error("expected one successor");
         return states.front()->evaluate(operation);
     }
 
     Expression binary(unsigned opcode, unsigned width, z3::expr lhs,
-                      z3::expr rhs, bool exact = false) {
+                      z3::expr rhs, bool exact = false, bool nowrap = true) {
         auto* type = llvm::IntegerType::get(llvm_context, width);
         auto* f = function(width, type, 2);
         auto* block = llvm::BasicBlock::Create(llvm_context, "entry", f);
         auto* operation = llvm::BinaryOperator::Create(
             static_cast<llvm::Instruction::BinaryOps>(opcode), f->getArg(0),
             f->getArg(1), "result", block);
-        if (opcode == llvm::Instruction::Add || opcode == llvm::Instruction::Sub ||
-            opcode == llvm::Instruction::Mul || opcode == llvm::Instruction::Shl) {
+        if (nowrap && (opcode == llvm::Instruction::Add || opcode == llvm::Instruction::Sub ||
+            opcode == llvm::Instruction::Mul || opcode == llvm::Instruction::Shl)) {
             operation->setHasNoSignedWrap(true);
             operation->setHasNoUnsignedWrap(true);
         }
@@ -121,6 +125,46 @@ TEST_F(RelaxedIntegerOperations, AllBinaryOperationsAvoidMachineWidthEncoding) {
             }
         }
     }
+}
+
+TEST_F(RelaxedIntegerOperations, OrdinaryExecutionDoesNotInheritSummaryBypass) {
+    summary_arithmetic = false;
+    EXPECT_TRUE(session.uses_integer_relaxation());
+    auto wrapped = cast(llvm::Instruction::Trunc, 32, 8, ctx.int_val(510));
+    EXPECT_EQ(wrapped.as_expr().simplify().get_numeral_int(), -2);
+    auto widened = cast(llvm::Instruction::ZExt, 8, 32, ctx.int_val(-2));
+    EXPECT_EQ(widened.as_expr().simplify().to_string(), "254");
+    auto signed_extension = cast(llvm::Instruction::SExt, 8, 32, ctx.int_val(-1));
+    EXPECT_EQ(signed_extension.as_expr().simplify().get_numeral_int(), -1);
+    auto overflow = binary(llvm::Instruction::Add, 8, ctx.int_val(127), ctx.int_val(1));
+    EXPECT_TRUE(overflow.defined().simplify().is_false());
+    // A symbolic shift is supported by ordinary fixed-width execution even
+    // though it is outside the polynomial summary's constant-shift profile.
+    auto shift = binary(llvm::Instruction::LShr, 32, ctx.int_const("bits"),
+                        ctx.int_const("shift"), false, false);
+    EXPECT_TRUE(has_bitvector(shift.as_expr()));
+    z3::solver invalid(ctx);
+    invalid.add(shift.defined() && ctx.int_const("shift") == 32);
+    EXPECT_EQ(invalid.check(), z3::unsat);
+}
+
+TEST_F(RelaxedIntegerOperations, SummaryScopeSurvivesCopiesButNotOrdinaryStates) {
+    auto* f = function(32, llvm::Type::getInt32Ty(llvm_context), 0);
+    auto* b = llvm::BasicBlock::Create(llvm_context, "entry", f);
+    auto* ret = llvm::ReturnInst::Create(llvm_context, llvm::ConstantInt::get(
+        llvm::Type::getInt32Ty(llvm_context), 0), b);
+    State ordinary(session, ctx, AInstruction::create(ret), nullptr, Memory{},
+                   Expression(ctx.bool_val(true)), {});
+    EXPECT_FALSE(ordinary.uses_relaxed_arithmetic());
+    ordinary.summary_arithmetic = true;
+    State probe(ordinary);
+    EXPECT_TRUE(probe.uses_relaxed_arithmetic());
+    EXPECT_FALSE(probe.ignores_integer_width(1));
+    EXPECT_TRUE(probe.ignores_integer_width(128));
+    ordinary.summary_arithmetic = false;
+    State replay(ordinary);
+    EXPECT_FALSE(replay.uses_relaxed_arithmetic());
+    EXPECT_TRUE(probe.uses_relaxed_arithmetic());
 }
 
 TEST_F(RelaxedIntegerOperations, WideIntegerConstantsDoNotRequireHostWidthConversion) {

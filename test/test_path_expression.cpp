@@ -26,6 +26,35 @@ TEST(PathExpressionCompression, PrimitiveWordRecognition) {
     EXPECT_FALSE(is_primitive_path_word({1, 2, 1, 2}));
 }
 
+TEST(PathExpressionCompression, PeriodSpansCertifiedPhaseBoundary) {
+    const std::vector<PathPrefixBlock> prefix{
+        {{1}, 1, {}}, {{1}, 1, {}}, {{2, 2}, 1, {}}};
+    const auto candidates = compress_full_path_prefix(prefix, 4, 4, 2);
+    ASSERT_FALSE(candidates.empty());
+    EXPECT_EQ(candidates.front().star, (PathWord{1, 1, 2, 2}));
+    EXPECT_EQ(with_star_evidence(candidates.front()), (PathWord{1, 1, 2, 2}));
+}
+
+TEST(PathExpressionCompression, SymbolicPrefixIsPreserved) {
+    const std::vector<PathPrefixBlock> prefix{
+        {{1}, 0, "n"}, {{2, 1}, 1, {}}};
+    const auto candidates = compress_full_path_prefix(prefix, 4, 4, 2);
+    ASSERT_FALSE(candidates.empty());
+    EXPECT_EQ(candidates.front().star, (PathWord{2, 1}));
+    EXPECT_EQ(candidates.front().certified_context,
+              (std::vector<PathPrefixBlock>{{{1}, 0, "n"}}));
+    EXPECT_EQ(render_path_schema(candidates.front()), "(p1)^{n} (p2.p1)^*");
+}
+
+TEST(PathExpressionCompression, HugeCertifiedPrefixIsNotDiscarded) {
+    const std::vector<PathPrefixBlock> prefix{
+        {{1}, UINT64_MAX, {}}, {{2, 2}, 1, {}}};
+    const auto candidates = compress_full_path_prefix(prefix, 4, 4, 2);
+    ASSERT_FALSE(candidates.empty());
+    EXPECT_EQ(candidates.front().certified_context,
+              (std::vector<PathPrefixBlock>{{{1}, UINT64_MAX, {}}}));
+    EXPECT_EQ(candidates.front().star, (PathWord{2}));
+}
 TEST(PathExpressionCompression, EvidenceAlwaysRoundTrips) {
     const PathWord prefix{1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1};
     const auto candidates = compress_path_prefix(prefix, 4, 16, 2);

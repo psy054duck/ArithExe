@@ -194,6 +194,64 @@ compress_path_prefix(const PathWord& prefix, std::size_t max_root_length,
     return candidates;
 }
 
+std::vector<PathSchemaCandidate> compress_full_path_prefix(
+    const std::vector<PathPrefixBlock>& prefix, std::size_t max_root_length,
+    std::size_t beam_width, std::size_t evidence_threshold) {
+    // Consume the entire exact prefix. Unresolved powers stay in Q; concrete
+    // blocks are recompressed together, including accelerated phase boundaries.
+    // A materialization budget controls DP work, not the retained history.
+    constexpr std::size_t materialization_budget = 512;
+    std::vector<PathPrefixBlock> context;
+    PathWord concrete;
+    auto flush = [&] {
+        if (!concrete.empty()) {
+            auto factors = backtrack(factor_table(concrete, max_root_length),
+                                     concrete.size());
+            for (const auto& factor : factors)
+                context.push_back({factor.root, factor.exponent, {}});
+            concrete.clear();
+        }
+    };
+    if (!max_root_length || !beam_width) return {};
+    for (const auto& block : prefix) {
+        if (block.root.empty() ||
+            (block.symbolic_exponent.empty() && block.exponent == 0)) continue;
+        if (!block.symbolic_exponent.empty() ||
+            block.exponent > materialization_budget / block.root.size()) {
+            flush();
+            context.push_back(block);
+        } else {
+            const auto size = block.exponent * block.root.size();
+            if (concrete.size() + size > materialization_budget) flush();
+            for (std::uint64_t i = 0; i < block.exponent; ++i)
+                concrete.insert(concrete.end(), block.root.begin(), block.root.end());
+        }
+    }
+    auto candidates = compress_path_prefix(concrete, max_root_length,
+                                          beam_width, evidence_threshold);
+    if (evidence_threshold > 1) {
+        auto early = compress_path_prefix(concrete, max_root_length,
+                                          beam_width, 1);
+        candidates.insert(candidates.end(), early.begin(), early.end());
+        std::sort(candidates.begin(), candidates.end(), CandidateOrder{});
+        candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                         candidates.end());
+        if (candidates.size() > beam_width) candidates.resize(beam_width);
+    }
+    for (auto& candidate : candidates) candidate.certified_context = context;
+    if (candidates.empty() && !context.empty()) {
+        const auto& last = context.back();
+        if (last.root.size() <= max_root_length &&
+            is_primitive_path_word(last.root)) {
+            PathSchemaCandidate candidate;
+            candidate.star = last.root;
+            candidate.certified_context = context;
+            candidates.push_back(std::move(candidate));
+        }
+    }
+    return candidates;
+}
+
 std::string render_path_word(const PathWord& word) {
     std::ostringstream out;
     for (std::size_t i = 0; i < word.size(); ++i) {
@@ -206,6 +264,13 @@ std::string render_path_word(const PathWord& word) {
 std::string render_path_schema(const PathSchemaCandidate& candidate) {
     std::ostringstream out;
     bool first = true;
+    for (const auto& block : candidate.certified_context) {
+        if (!first) out << ' ';
+        out << '(' << render_path_word(block.root) << ")^";
+        if (block.symbolic_exponent.empty()) out << block.exponent;
+        else out << '{' << block.symbolic_exponent << '}';
+        first = false;
+    }
     for (const ConcretePathPower& power : candidate.closed_prefix) {
         if (!first) out << ' ';
         out << '(' << render_path_word(power.root) << ")^" << power.exponent;
