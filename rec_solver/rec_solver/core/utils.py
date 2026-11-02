@@ -1,5 +1,8 @@
 import sympy as sp
 from functools import reduce
+from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 import networkx as nx
 import numpy as np
 from sympy.core.function import UndefinedFunction
@@ -7,6 +10,7 @@ from sympy.parsing.sympy_parser import parse_expr, standard_transformations, con
 import z3
 from itertools import product
 from .logic_simplification import DNFConverter, equals, to_dnf, literal2canonical, merge_cases, my_simplify
+from .logic_simplification import get_vars as collect_free_vars
 
 z3.set_option(max_depth=99999999)
 # z3.set_option(timeout=5)
@@ -93,7 +97,42 @@ def simpliy_solver(e):
     simplified_e_z3 = collapse_goal(cases)
     return to_sympy(simplified_e_z3)
 
+_conversion_cache = ContextVar("sympy_conversion_cache", default=None)
+
+
+@contextmanager
+def conversion_cache(maxsize=2048):
+    """Share bounded immutable conversions only within one solving request."""
+    if maxsize <= 0:
+        raise ValueError("conversion cache size must be positive")
+    if _conversion_cache.get() is not None:
+        yield
+        return
+    token = _conversion_cache.set((OrderedDict(), maxsize))
+    try:
+        yield
+    finally:
+        _conversion_cache.reset(token)
+
+
 def to_sympy(s_z3, is_integer=True):
+    scope = _conversion_cache.get()
+    if scope is None:
+        return _to_sympy_uncached(s_z3, is_integer)
+    cache, maxsize = scope
+    # Retain the context and AST, rather than recyclable numeric AST IDs.
+    key = (s_z3.ctx, s_z3, is_integer)
+    if key in cache:
+        cache.move_to_end(key)
+        return cache[key]
+    result = _to_sympy_uncached(s_z3, is_integer)
+    cache[key] = result
+    if len(cache) > maxsize:
+        cache.popitem(last=False)
+    return result
+
+
+def _to_sympy_uncached(s_z3, is_integer=True):
     # s = str(z3.simplify(s_z3, eq2ineq=True))
     s = str(z3.simplify(s_z3)).replace('\n', ' ')
     expr = sp.parse_expr(s, local_dict={'If': ite2piecewise}, evaluate=False, transformations=(standard_transformations + (convert_equals_signs,)))
@@ -214,7 +253,7 @@ def compress_seq(seq):
         if cnt == 1 and len(last_but_one) <= len(last) and last_but_one == last[len(last) - len(last_but_one):]:
             # left rotate the last component by len(last_but_one) elements
             compressed = compressed[:-2]
-            compressed.append((last[len(last) - len(last_but_one):] + last[:len(last_but_one)], 1))
+            compressed.append((last[-len(last_but_one):] + last[:-len(last_but_one)], 1))
     return compressed
 
 def _compress_seq(seq, cur_compressed, best_compressed):
@@ -360,12 +399,9 @@ def to_z3(sp_expr, sort='int'):
     elif isinstance(self, sp.Abs):
         res = z3.Abs(to_z3(self.args[0]), sort)
     elif isinstance(self, sp.Sum):
-        s = z3.Function('Sum', z3.IntSort(), z3.IntSort(), z3.IntSort(), z3.IntSort(), z3.IntSort())
-        # expr, (idx, start, end) = self.args
-        expr, *l = self.args
-        res = to_z3(expr, sort)
-        for idx, start, end in l:
-            res = s(res, to_z3(idx, sort), to_z3(start, sort), to_z3(end, sort))
+        raise ValueError("finite sums require a certified aggregate context")
+    elif isinstance(self, sp.Product):
+        raise ValueError("finite products require a certified aggregate context")
     elif self is sp.true:
         res = z3.BoolVal(True)
     elif self is sp.false:
@@ -682,16 +718,7 @@ def gen_template_linear(vars, k, sort=z3.Real):
 def get_vars(f: z3.ExprRef):
     '''f: a formula in z3
        ret: set of all variables in f'''
-    r = set()
-    def collect(f):
-      if z3.is_const(f): 
-          if f.decl().kind() == z3.Z3_OP_UNINTERPRETED:
-              r.add(f)
-      else:
-          for c in f.children():
-              collect(c)
-    collect(f)
-    return r
+    return collect_free_vars(f)
 ################################################################################################
 
 def get_all_atoms(constraint):

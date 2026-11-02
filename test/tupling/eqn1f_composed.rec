@@ -1,0 +1,9 @@
+if (Or(n <= 0, i < 0)) {
+    array(i,n) = initial(i);
+} else if (And(i == n, n <= 0)) {
+    array(i,n) = array(n-1,n-1) + previous(n-1);
+} else if (i == n) {
+    array(i,n) = array(n-1,n-1) + 20*n - 18;
+} else {
+    array(i,n) = array(i,n-1);
+}

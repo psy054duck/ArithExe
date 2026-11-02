@@ -200,6 +200,12 @@ Memory::get_object_pointed_by(llvm::Value* value) const {
         auto addr = m_obj->get_ptr_value();
         return get_object(addr);
     }
+    // Outside the allocating frame, stack lookup finds the allocation itself,
+    // not that frame's temporary pointer wrapper. Summaries still name it by
+    // its allocation instruction.
+    if (m_obj && m_obj->is_array() && llvm::isa<llvm::AllocaInst>(value)) {
+        return m_obj;
+    }
     return nullptr;
 }
 

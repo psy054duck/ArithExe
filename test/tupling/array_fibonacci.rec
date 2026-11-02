@@ -1,0 +1,7 @@
+if (t <= 0) {
+    A(k,t) = k;
+} else if (k == t+1) {
+    A(k,t) = A(k-1,t-1) + A(k-2,t-1);
+} else {
+    A(k,t) = A(k,t-1);
+}

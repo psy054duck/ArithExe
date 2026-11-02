@@ -7,6 +7,7 @@
 
 #include <utility>
 #include <map>
+#include <algorithm>
 #include "rec_solver.h"
 
 namespace ari_exe {
@@ -15,7 +16,11 @@ namespace ari_exe {
      * @brief Store the summary of the Loop
      */
     class LoopSummary {
+        private:
+            bool exact_feasibility = true;
         public:
+            bool has_exact_feasibility() const { return exact_feasibility; }
+            void set_exact_feasibility(bool exact) { exact_feasibility = exact; }
             LoopSummary() = delete;
             
             /**
@@ -56,6 +61,13 @@ namespace ari_exe {
                 invariant_results.push_back(result);
             }
 
+            void add_obligation(const z3::expr& condition) {
+                obligations.push_back(condition);
+            }
+            const std::vector<z3::expr>& get_obligations() const {
+                return obligations;
+            }
+
             /**
              * @brief get modified values by the loop
              */
@@ -77,15 +89,31 @@ namespace ari_exe {
                 modified_values.push_back(value);
             }
 
+            void add_preserved_value(llvm::Value* value) {
+                preserved_values.push_back(value);
+            }
+
+            bool preserves_value(llvm::Value* value) const {
+                return std::find(preserved_values.begin(), preserved_values.end(),
+                                 value) != preserved_values.end();
+            }
+
             /**
              * @brief get the number of iterations of the loop
              */
             std::optional<z3::expr> get_N() const { return N; }
 
+            bool has_functional_iteration_count() const { return functional_iteration_count; }
+            void set_functional_iteration_count(bool functional) {
+                functional_iteration_count = functional;
+            }
+
             /**
              * @brief add new closed-form solution to the loop summary
              */
             void add_closed_form(const z3::expr& param, const z3::expr& closed_form);
+
+            void add_auxiliary_closed_form(const z3::expr& param, const z3::expr& closed_form);
 
             /**
              * @brief check if the loop summary is over-approximated
@@ -98,6 +126,10 @@ namespace ari_exe {
             void set_over_approximated(bool over_approx) { is_over_approx = over_approx; }
 
             z3::expr get_constraints() const { return constraints; }
+
+            void add_constraints(const z3::expr& condition) {
+                constraints = constraints && condition;
+            }
 
             const z3::expr_vector& get_params() const { return params; }
 
@@ -129,6 +161,10 @@ namespace ari_exe {
              */
             std::vector<llvm::Value*> modified_values;
 
+            // Ordered summary slots can include arrays whose full memory
+            // objects must be preserved, including their definedness metadata.
+            std::vector<llvm::Value*> preserved_values;
+
         
             /**
              * @brief The exact summary of the loop, which is exit value
@@ -143,6 +179,10 @@ namespace ari_exe {
              */
             z3::expr_vector summary_closed_form;
 
+            // Solver-only counters must not occupy ordered LLVM update slots.
+            z3::expr_vector auxiliary_params;
+            z3::expr_vector auxiliary_closed_forms;
+
             /**
              * constraints of this loop, which may contains constraints on the number of iterations
              * should be included in the path condition of parent state's
@@ -153,6 +193,7 @@ namespace ari_exe {
              * @brief the number of iterations of the loop
              */
             std::optional<z3::expr> N;
+            bool functional_iteration_count = true;
 
             /**
              * @brief indicates whether the loop is over-approximated or not.
@@ -160,6 +201,7 @@ namespace ari_exe {
             bool is_over_approx;
             
             std::vector<VeriResult> invariant_results;
+            std::vector<z3::expr> obligations;
     };
 }
 #endif

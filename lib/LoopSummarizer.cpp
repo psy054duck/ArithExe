@@ -1,8 +1,169 @@
 #include <spdlog/spdlog.h>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include "LoopSummarizer.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "EntryArray.h"
+#include "ArrayGuard.h"
+#include "VerificationSession.h"
 
 
 namespace ari_exe {
+    static bool contains_assumption(llvm::Loop* loop) {
+        std::vector<llvm::Function*> pending;
+        std::set<llvm::Function*> visited;
+        for (auto* block : loop->blocks()) {
+            for (auto& instruction : *block) {
+                auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                if (call) {
+                    if (auto* callee = llvm::dyn_cast<llvm::Function>(
+                            call->getCalledOperand()->stripPointerCasts())) pending.push_back(callee);
+                }
+            }
+        }
+        while (!pending.empty()) {
+            auto* function = pending.back(); pending.pop_back();
+            if (!visited.insert(function).second) continue;
+            if (function->getName().contains("assume")) return true;
+            if (function->isDeclaration()) continue;
+            for (auto& instruction : llvm::instructions(function)) {
+                auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                if (call) {
+                    if (auto* callee = llvm::dyn_cast<llvm::Function>(
+                            call->getCalledOperand()->stripPointerCasts())) pending.push_back(callee);
+                }
+            }
+        }
+        return false;
+    }
+
+    static z3::expr arithmetic_conjuncts(const z3::expr& domain) {
+        std::map<unsigned, bool> arithmetic_cache;
+        unsigned budget = 4096;
+        const auto arithmetic = [&](const z3::expr& term, const auto& self) -> bool {
+            auto found = arithmetic_cache.find(term.id());
+            if (found != arithmetic_cache.end()) return found->second;
+            if (!budget) return false;
+            --budget;
+            bool result = term.is_app() &&
+                (term.num_args() == 0 || term.decl().decl_kind() != Z3_OP_UNINTERPRETED);
+            if (result) {
+                for (const auto& arg : term.args()) {
+                    if (!self(arg, self)) { result = false; break; }
+                }
+            }
+            arithmetic_cache.emplace(term.id(), result);
+            return result;
+        };
+        z3::expr_vector conjuncts(domain.ctx());
+        std::vector<z3::expr> pending{domain};
+        std::set<unsigned> visited;
+        while (!pending.empty() && visited.size() < 4096) {
+            auto term = pending.back(); pending.pop_back();
+            if (!visited.insert(term.id()).second) continue;
+            if (term.is_and()) {
+                for (const auto& arg : term.args()) pending.push_back(arg);
+            } else if (arithmetic(term, arithmetic)) {
+                conjuncts.push_back(term);
+            }
+        }
+        return z3::mk_and(conjuncts);
+    }
+
+    static bool is_uninterpreted_loop_call(const llvm::CallInst* call) {
+        const auto* function = llvm::dyn_cast<llvm::Function>(
+            call->getCalledOperand()->stripPointerCasts());
+        if (!function) return true;
+        const auto name = function->getName();
+        // These calls already have instruction-level verification semantics.
+        if (name.ends_with("assert") || name.contains("assume") ||
+            name.contains("reach_error") || name == "__VERIFIER_error" ||
+            name == "__assert_fail") return false;
+        return !function->hasExactDefinition();
+    }
+
+    static std::optional<z3::expr> compose_strided_rows(
+        const z3::expr& signature, const z3::expr& iteration,
+        const z3::expr& count, const z3::expr& stride,
+        const z3::expr& domain, const std::vector<z3::expr>& guards,
+        const std::vector<z3::expr>& updates) {
+        if (signature.num_args()!=1 || guards.empty() || guards.size()>8 ||
+            guards.size()!=updates.size()) return std::nullopt;
+        auto& ctx=signature.ctx();
+        z3::solver positive(ctx);
+        positive.set("timeout",100u);
+        positive.add(domain && stride<=0);
+        if (positive.check()!=z3::unsat) return std::nullopt;
+        const z3::expr row(ctx,Z3_mk_fresh_const(ctx,"summary_row",ctx.int_sort()));
+        const z3::expr col(ctx,Z3_mk_fresh_const(ctx,"summary_col",ctx.int_sort()));
+        const auto index=signature.arg(0), flat=row*stride+col;
+        auto replace=[&](z3::expr e, const z3::expr& from, const z3::expr& to) {
+            z3::expr_vector a(ctx),b(ctx); a.push_back(from);b.push_back(to);
+            return e.substitute(a,b).simplify();
+        };
+        const auto entry=replace(signature,index,flat);
+        const auto valid=replace(domain,index,flat)&&col>=0&&col<stride;
+        auto point=entry;
+        auto covered=ctx.bool_val(false);
+        for (unsigned c=0;c<guards.size();++c) {
+            const auto guard=replace(replace(guards[c],index,flat),iteration,row+1);
+            const auto value=replace(replace(updates[c],index,flat),iteration,row+1);
+            point=z3::ite(guard,value,point);
+            covered=covered||guards[c];
+        }
+        point=restrict_to_domain(point,valid&&row>=0&&row<count).simplify();
+        const auto candidate=z3::ite(row>=0&&row<iteration,point,entry);
+        const auto active=iteration>=1&&iteration<=count;
+        unsigned obligation=0;
+        auto certify=[&](const z3::expr& premise, const z3::expr& conclusion) {
+            z3::solver checker(ctx);
+            checker.set("timeout",750u);
+            checker.add(valid&&premise&&!conclusion);
+            const auto result=checker.check();
+            if (result!=z3::unsat) {
+                if (const auto* directory=std::getenv("ARITHEXE_SOLVER_TRACE_DIR")) {
+                    std::filesystem::create_directories(directory);
+                    std::ofstream output(std::filesystem::path(directory)/
+                        ("row_"+std::to_string(row.id())+"_"+
+                         std::to_string(obligation)+".smt2"));
+                    output<<checker.to_smt2();
+                }
+            }
+            ++obligation;
+            return result==z3::unsat;
+        };
+        if (!certify(ctx.bool_val(true),replace(candidate,iteration,ctx.int_val(0))==entry) ||
+            !certify(active,replace(covered,index,flat))) return std::nullopt;
+        const auto prior=replace(candidate,iteration,iteration-1);
+        for (unsigned c=0;c<updates.size();++c) {
+            auto update=replace(updates[c],index,flat);
+            const auto reads=get_app_of(update,signature.decl());
+            z3::expr_vector values(ctx);
+            for (const auto& read:reads) {
+                // Cross-cell feedback needs a different composition rule.
+                if (!z3::eq(read,entry)) return std::nullopt;
+                values.push_back(prior);
+            }
+            update=update.substitute(reads,values).simplify();
+            if (!certify(active&&replace(guards[c],index,flat),candidate==update))
+                return std::nullopt;
+        }
+        auto result=replace(candidate,entry,signature);
+        result=replace(result,row,index/stride);
+        result=replace(result,col,index%stride);
+        spdlog::info("[array-region] certified parametric row composition");
+        return result.simplify();
+    }
+
+    LoopSummarizer::LoopSummarizer(llvm::Loop* loop, state_ptr parent_state)
+        : loop(loop), rec_s(parent_state->z3ctx),
+          iteration_parameter(parent_state->z3ctx.int_const(
+              (get_z3_name(loop->getHeader()->getParent()->getName().str() + "_" +
+                           loop->getHeader()->getName().str()) + "_exit_count_" +
+               std::to_string(parent_state->session.next_call_value_id(loop->getHeader()))).c_str())),
+          parent_state(parent_state) {}
+
     static unsigned expression_size(const z3::expr& expression) {
         unsigned size = 1;
         if (!expression.is_app()) return size;
@@ -105,8 +266,7 @@ namespace ari_exe {
         for (auto& block : loop->blocks()) {
             for (auto& inst : *block) {
                 if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(&inst)) {
-                    auto func = call_inst->getCalledFunction();
-                    if (!func || !func->hasExactDefinition()) {
+                    if (is_uninterpreted_loop_call(call_inst)) {
                         calls.push_back(call_inst);
                     }
                 }
@@ -162,6 +322,34 @@ namespace ari_exe {
         initial_state->summarizing_loop = loop;
 
         put_header_phis_in_initial_state(initial_state);
+        // Establish simple inductive bounds before child-loop summaries are
+        // computed, rather than only when preparing the parent's recurrence.
+        for (auto& phi : loop->getHeader()->phis()) {
+            if (!phi.getType()->isIntegerTy() || phi.getType()->isIntegerTy(1) ||
+                !parent_state->session.uses_integer_relaxation()) continue;
+            bool inductive = true, initialized = false;
+            for (unsigned i=0; i<phi.getNumIncomingValues(); ++i) {
+                const auto incoming = phi.getIncomingValue(i);
+                if (!loop->contains(phi.getIncomingBlock(i))) {
+                    z3::solver check(z3ctx);
+                    check.set("timeout",100u);
+                    check.add(parent_state->get_path_condition().as_expr());
+                    check.add(parent_state->evaluate(incoming).as_expr()<0);
+                    if (check.check()!=z3::unsat) { inductive=false; break; }
+                    initialized=true;
+                } else {
+                    auto* add=llvm::dyn_cast<llvm::BinaryOperator>(incoming);
+                    auto* step=add ? llvm::dyn_cast<llvm::ConstantInt>(add->getOperand(1)) : nullptr;
+                    if (!add || add->getOpcode()!=llvm::Instruction::Add ||
+                        add->getOperand(0)!=&phi || !step || step->isNegative()) {
+                        inductive=false; break;
+                    }
+                }
+            }
+            if (inductive && initialized)
+                initial_state->State::append_path_condition(
+                    Expression(initial_state->evaluate(&phi).as_expr()>=0));
+        }
         symbolize_stores(initial_state);
         for (auto call_inst : get_unknown_calls(loop)) {
             auto name = get_z3_name(call_inst->getName().str()) + "_call_count";
@@ -170,14 +358,21 @@ namespace ari_exe {
         return initial_state;
     }
 
+    void
+    LoopExecution::record_assertion(const loop_state_ptr& state,
+                                    const Expression& assertion) {
+        v_conditions.emplace_back(z3::implies(
+            state->get_path_condition().as_expr() && assertion.defined(),
+            assertion.as_expr()));
+    }
+
     loop_state_list
     LoopExecution::step(loop_state_ptr state) {
         auto pc = state->pc;
         auto& z3ctx = state->z3ctx;
         loop_state_list new_states;
         if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(pc->inst)) {
-            auto func = call_inst->getCalledFunction();
-            if (!func || !func->hasExactDefinition()) {
+            if (is_uninterpreted_loop_call(call_inst)) {
                 auto name = "ari_" + call_inst->getName().str() + "_unknown";
                 const z3::sort return_sort =
                     call_inst->getType()->isIntegerTy(1)
@@ -200,16 +395,25 @@ namespace ari_exe {
             }
         } else if (auto load_inst = llvm::dyn_cast_or_null<llvm::LoadInst>(pc->inst)) {
             // if the instruction is a load, we need to get the value from memory
-            auto& DI = AnalysisManager::get_instance()->get_DI(load_inst->getFunction());
             bool not_affected = true;
-            for (auto store_inst : stores) {
-                if (auto dep = DI.depends(store_inst, load_inst, true)) {
-                    if (dep->isFlow() && !dep->isLoopIndependent()) {
-                        // this write will be read by the load instruction in later iterations
-                        not_affected = false;
-                        break;
+            if (state->session.uses_integer_relaxation()) {
+                auto [it, inserted] = entry_reads.try_emplace(load_inst, false);
+                if (inserted) {
+                    it->second = reads_entry_array(loop, load_inst, parent_state);
+                    spdlog::info("[poly-entry] load {} in {}: {}", load_inst->getName().str(),
+                                 loop->getHeader()->getName().str(),
+                                 it->second ? "entry snapshot proved" : "may depend on loop writes");
+                }
+                not_affected = it->second;
+            } else {
+                auto& DI = AnalysisManager::get_instance()->get_DI(load_inst->getFunction());
+                for (auto store_inst : stores) {
+                    if (auto dep = DI.depends(store_inst, load_inst, true)) {
+                        if (dep->isFlow() && !dep->isLoopIndependent()) {
+                            not_affected = false;
+                            break;
+                        }
                     }
-                    // if there is a flow dependence, we need to get the value from memory
                 }
             }
             if (not_affected) {
@@ -236,7 +440,10 @@ namespace ari_exe {
                         simplify_boolean_condition(load_conditions[i], path);
                     if (!is_feasible(condition, path)) continue;
                     restricted_conditions.push_back(condition);
-                    restricted_expressions.push_back(load_expressions[i]);
+                    // Inline only the part of an earlier array summary that
+                    // can be read on this iteration's execution path.
+                    restricted_expressions.push_back(restrict_to_domain(
+                        load_expressions[i], path && condition));
                     restricted_definitions.push_back(load_definitions[i]);
                 }
                 assert(!restricted_conditions.empty() &&
@@ -253,6 +460,16 @@ namespace ari_exe {
 
         for (auto next_state : pc->execute(state)) {
             auto next_loop_state = std::make_shared<LoopState>(LoopState(*next_state));
+            for (const auto& condition : next_loop_state->summary_obligations) {
+                v_conditions.emplace_back(condition);
+            }
+            next_loop_state->summary_obligations.clear();
+            // The instruction interface records obligations while summarizing
+            // instead of switching to the ordinary VERIFYING execution state.
+            for (const Expression& assertion : next_loop_state->summary_invariants) {
+                record_assertion(next_loop_state, assertion);
+            }
+            next_loop_state->summary_invariants.clear();
             new_states.push_back(next_loop_state);
         }
         return new_states;
@@ -283,6 +500,16 @@ namespace ari_exe {
             // llvm::errs() << *cur_state->pc->inst << "\n";
             // llvm::errs() << cur_state->memory.to_string() << "\n";
             states.pop();
+            if (cur_state->status == State::UNKNOWN || cur_state->is_over_approx) {
+                saw_unknown = true;
+                continue;
+            }
+            if (cur_state->status == State::REACH_ERROR) {
+                // Do not summarize only the normal-completion paths and lose
+                // an earlier error. Fall back to ordinary execution instead.
+                saw_unknown = true;
+                continue;
+            }
             if (back_edge_taken(cur_state)) {
                 continue;
             }
@@ -307,7 +534,7 @@ namespace ari_exe {
                 }
                 continue;
             } else if (cur_state->status == State::VERIFYING) {
-                v_conditions.push_back(cur_state->verification_condition);
+                record_assertion(cur_state, cur_state->verification_condition);
                 // cur_state->append_path_condition(cur_state->verification_condition);
                 // auto res = test(cur_state);
                 states.push(cur_state);
@@ -337,6 +564,7 @@ namespace ari_exe {
     void
     LoopSummarizer::summarize() {
         auto [final_states, exit_states, v_conditions] = get_final_and_exit_states();
+        if (incomplete_execution || final_states.empty() || exit_states.empty()) return;
         log_states(final_states, exit_states);
 
         summarize_scalar(final_states, exit_states);
@@ -345,8 +573,21 @@ namespace ari_exe {
             summarize_array(final_states, exit_states);
         }
         if (summary.has_value()) { 
-            auto correct = prove_invariants(v_conditions);
+            const bool assumptions = contains_assumption(loop);
+            bool complete = true;
+            auto feasible = parent_state->z3ctx.bool_val(true);
+            if (!summary->is_over_approximated() &&
+                (assumptions || !get_unknown_calls().empty())) {
+                feasible = iteration_feasibility(final_states, assumptions, complete);
+            }
+            auto correct = prove_invariants(v_conditions,
+                assumptions ? feasible : parent_state->z3ctx.bool_val(true),
+                !assumptions || complete);
             summary->add_invariant_result(correct);
+            summary->set_exact_feasibility(!assumptions || complete);
+            // Completion assumptions constrain the exit state, not assertions
+            // that may fail before a later iteration aborts.
+            retain_input_constraints(feasible);
         }
         spdlog::info("finish summarization");
     }
@@ -380,6 +621,7 @@ namespace ari_exe {
     LoopSummarizer::get_final_and_exit_states() {
         LoopExecution executor(loop, parent_state);
         auto execution_res = executor.run();
+        incomplete_execution = executor.had_unknown_result();
         auto final_states = execution_res.first;
         auto exit_states = execution_res.second;
 
@@ -387,31 +629,165 @@ namespace ari_exe {
     }
 
     VeriResult
-    LoopSummarizer::prove_invariants(const std::vector<Expression>& v_conditions) {
+    LoopSummarizer::prove_invariants(const std::vector<Expression>& v_conditions,
+                                    const z3::expr& feasible, bool complete) {
         spdlog::info("Proving invariants");
         auto manager = AnalysisManager::get_instance();
         auto& z3ctx = manager->get_z3ctx();
         auto n = manager->get_ind_var();
-        auto N = manager->get_loop_N();
+        auto N = iteration_parameter;
         auto N_value = summary->get_N();
         for (auto& v_condition : v_conditions) {
             z3::solver solver(z3ctx);
-            z3::expr premise = 0 <= n;
-            if (N_value.has_value()) premise = premise && n < *N_value;
+            z3::expr premise = 0 <= n &&
+                parent_state->get_path_condition().as_expr() &&
+                summary->get_constraints();
+            // A body assertion may fail on the partial iteration that exits
+            // before the next backedge. Its recorded path still contains the
+            // header guard, so ordinary zero-trip exits remain vacuous.
+            if (N_value.has_value()) premise = premise && n <= *N_value;
+            if (!feasible.is_true()) {
+                const z3::expr prior(z3ctx, Z3_mk_fresh_const(
+                    z3ctx, "completed_iteration", z3ctx.int_sort()));
+                z3::expr_vector from(z3ctx), to(z3ctx);
+                from.push_back(n); to.push_back(prior);
+                auto condition = feasible;
+                // Only completed iterations precede this assertion. An
+                // assumption later in this or a future iteration cannot help.
+                premise = premise && z3::forall(prior, z3::implies(
+                    prior >= 0 && prior < n, condition.substitute(from, to)));
+            }
             // looks like there are some bugs in z3 for doing negation of forall
             // z3::expr query =  z3::forall(n, z3::implies(premise, summary->evaluate_expr(v_condition.as_expr())));
             // solver.add(!query);
             solver.add(premise);
             z3::expr query = summary->evaluate_expr(v_condition.as_expr());
+            if (parent_state->is_summarizing()) {
+                // The outer counter is still symbolic. Discharge this guarded
+                // child obligation after substituting the outer trajectory.
+                summary->add_obligation(z3::forall(n, z3::implies(premise, query)));
+                continue;
+            }
             solver.add(!query);
             auto res = solver.check();
             if (res == z3::sat) {
+                if (!complete) {
+                    // Projected history is enough for a proof, but not for a
+                    // counterexample beyond the first (history-free) iteration.
+                    solver.add(n == 0);
+                    if (solver.check() != z3::sat) return VERIUNKNOWN;
+                }
+                if (const auto* directory = std::getenv("ARITHEXE_SOLVER_TRACE_DIR")) {
+                    std::filesystem::create_directories(directory);
+                    const auto prefix = loop->getHeader()->getParent()->getName().str() +
+                                        "_" + loop->getHeader()->getName().str();
+                    std::ofstream query(std::filesystem::path(directory) /
+                                        (prefix + "_assertion_sat.smt2"));
+                    query << solver.to_smt2();
+                    std::ofstream model(std::filesystem::path(directory) /
+                                        (prefix + "_assertion_sat.model"));
+                    model << solver.get_model();
+                }
                 return FAIL;
             } else if (res == z3::unknown) {
+                spdlog::warn("Loop assertion check inconclusive: {}", solver.reason_unknown());
+                if (const auto* directory = std::getenv("ARITHEXE_SOLVER_TRACE_DIR")) {
+                    std::filesystem::create_directories(directory);
+                    std::ofstream output(std::filesystem::path(directory) /
+                        ("assert_" + loop->getHeader()->getName().str() + ".smt2"));
+                    output << solver.to_smt2();
+                }
                 return VERIUNKNOWN;
             }
         }
         return HOLD;
+    }
+
+    z3::expr
+    LoopSummarizer::iteration_feasibility(const loop_state_list& final_states,
+                                          bool allow_entry_arrays, bool& complete) {
+        const auto calls = get_unknown_calls();
+        auto manager = AnalysisManager::get_instance();
+        auto& ctx = manager->get_z3ctx();
+        std::set<std::string> oracles;
+        for (const auto call : calls) {
+            oracles.insert("ari_" + call->getName().str() + "_unknown");
+        }
+        std::set<unsigned> snapshots;
+        bool stable_quantifiers = false;
+        if (allow_entry_arrays) {
+            bool unchanged = true;
+            const auto arrays = parent_state->memory.get_arrays();
+            for (const auto& array : arrays) {
+                for (const auto& state : final_states) {
+                    const auto final = state->memory.get_object(array->get_addr());
+                    if (!final || !z3::eq(final->get_value().as_expr(), array->get_value().as_expr()) ||
+                        !z3::eq(final->get_value().defined(), array->get_value().defined())) {
+                        unchanged = false;
+                    }
+                }
+            }
+            if (unchanged) {
+                stable_quantifiers = true;
+                for (const auto& array : arrays) {
+                    std::vector<z3::expr> pending{array->get_value().as_expr()};
+                    std::set<unsigned> seen;
+                    while (!pending.empty()) {
+                        auto term = pending.back(); pending.pop_back();
+                        if (!seen.insert(term.id()).second || !term.is_app()) continue;
+                        if (term.num_args() && term.decl().decl_kind() == Z3_OP_UNINTERPRETED)
+                            snapshots.insert(term.decl().id());
+                        for (const auto& arg : term.args()) pending.push_back(arg);
+                    }
+                }
+            }
+        }
+        // Array snapshots in a one-step state are not necessarily entry arrays.
+        // Project out entire conjuncts containing such applications, preserving
+        // a necessary (possibly weaker) condition on successful iterations.
+        const auto scalar_input_only = [&](const z3::expr& expr,
+                                            const auto& self) -> bool {
+            if (expr.is_quantifier())
+                return stable_quantifiers && self(expr.body(), self);
+            if (expr.is_var()) return stable_quantifiers;
+            if (!expr.is_app()) return false;
+            if (expr.num_args() > 0 &&
+                expr.decl().decl_kind() == Z3_OP_UNINTERPRETED &&
+                !oracles.count(expr.decl().name().str()) &&
+                !snapshots.count(expr.decl().id())) return false;
+            for (const auto& arg : expr.args()) {
+                if (!self(arg, self)) return false;
+            }
+            return true;
+        };
+        const auto project = [&](const z3::expr& expr,
+                                 const auto& self) -> z3::expr {
+            if (expr.is_and()) {
+                z3::expr result = ctx.bool_val(true);
+                for (const auto& arg : expr.args()) result = result && self(arg, self);
+                return result;
+            }
+            if (scalar_input_only(expr, scalar_input_only)) return expr;
+            complete = false;
+            return ctx.bool_val(true);
+        };
+        z3::expr feasible = ctx.bool_val(false);
+        for (const auto& state : final_states) {
+            feasible = feasible || project(state->get_path_condition().as_expr(), project);
+        }
+        return project(summary->evaluate_expr(feasible).simplify(), project).simplify();
+    }
+
+    void
+    LoopSummarizer::retain_input_constraints(const z3::expr& feasible) {
+        if (feasible.is_true() || summary->is_over_approximated() ||
+            !summary->get_N().has_value()) return;
+        auto manager = AnalysisManager::get_instance();
+        const auto n = manager->get_ind_var();
+        const auto N = *summary->get_N();
+        const auto condition = z3::forall(
+            n, z3::implies(0 <= n && n < N, feasible)).simplify();
+        summary->add_constraints(condition);
     }
 
     void
@@ -471,6 +847,14 @@ namespace ari_exe {
                 }
             }
         }
+        std::vector<std::pair<z3::expr, z3::expr>> auxiliary_forms;
+        for (auto call : get_unknown_calls()) {
+            const auto name = get_z3_name(call->getName().str()) + "_call_count";
+            const auto counter = z3ctx.int_const(name.c_str());
+            const auto found = closed.find(counter);
+            if (found == closed.end()) is_approximate = true;
+            else auxiliary_forms.emplace_back(counter, found->second);
+        }
         //---------------------------- End of Collecting Parameters ----------------
 
         spdlog::info("Closed-form solutions are computed successfully:");
@@ -503,7 +887,24 @@ namespace ari_exe {
                               loop_guard_vars_str.begin(), loop_guard_vars_str.end(),
                               std::inserter(iteration_related_vars, iteration_related_vars.begin()));
 
-        auto [N_constraints, N] = get_iterations_constraints(exit_states, params, params_values);
+        z3::expr_vector solving_params(z3ctx), solving_values(z3ctx);
+        for (unsigned i = 0; i < params.size(); ++i) {
+            solving_params.push_back(params[i]);
+            solving_values.push_back(params_values[i]);
+        }
+        for (const auto& [counter, value] : auxiliary_forms) {
+            solving_params.push_back(counter);
+            solving_values.push_back(value);
+        }
+        if (!std::includes(params_str.begin(), params_str.end(),
+                           iteration_related_vars.begin(), iteration_related_vars.end())) {
+            // An unsolved guard component is a changing state value, not an
+            // invariant parameter. Its entry value cannot constrain every
+            // iteration or the exit without excluding real executions.
+            spdlog::warn("Cannot summarize loop: a guard component has no certified solution");
+            return;
+        }
+        auto [N_constraints, N, count_constraints] = get_iterations_constraints(exit_states, solving_params, solving_values);
         const auto contains_modulo = [](const z3::expr& expression,
                                         const auto& self) -> bool {
             if (expression.is_var()) return false;
@@ -517,20 +918,35 @@ namespace ari_exe {
             }
             return false;
         };
-        if (std::includes(params_str.begin(), params_str.end(),
-                          iteration_related_vars.begin(),
-                          iteration_related_vars.end()) &&
-            !contains_modulo(N_constraints, contains_modulo)) {
+        if (!contains_modulo(count_constraints, contains_modulo)) {
             auto linear_logic = LinearLogic();
             z3::expr_vector N_vec(z3ctx);
             N_vec.push_back(N);
             spdlog::info("Solving for N");
-            auto N_value = linear_logic.solve_vars(N_constraints, N_vec);
+            // Input-array quantifiers do not belong in count synthesis. The
+            // independent guard constraints still characterize the first exit.
+            auto N_value = linear_logic.solve_vars(count_constraints, N_vec);
+            if (!N_value.empty()) {
+                z3::expr_vector from(z3ctx), to(z3ctx);
+                from.push_back(N);
+                to.push_back(N_value[0]);
+                auto instantiated = count_constraints;
+                instantiated = instantiated.substitute(from, to);
+                z3::solver certificate(z3ctx);
+                certificate.set("timeout", 200u);
+                certificate.add(!instantiated);
+                if (certificate.check() != z3::unsat) N_value = z3::expr_vector(z3ctx);
+            }
+            if (N_value.empty()) N_value = linear_logic.solve_vars(N_constraints, N_vec);
             if (N_value.size() == 0) {
                 spdlog::info("fail to compute the number of iterations, record the constraints on it in path conditions");
             } else {
-                spdlog::info("The number of iterations is {}", N_value[0].to_string());
-                N_opt = N_value[0];
+                // Independent synthesis includes zero-trip parameter regions.
+                // Remove them only when the actual entry path proves they are
+                // unreachable, before composing this count into later loops.
+                N_opt = restrict_to_domain(N_value[0],
+                    parent_state->get_path_condition().as_expr()).simplify();
+                spdlog::info("The number of iterations is {}", N_opt->to_string());
             }
         }
         z3::expr_vector src(z3ctx);
@@ -542,7 +958,7 @@ namespace ari_exe {
         for (auto& p : closed) {
             auto new_first = p.first;
             new_first = new_first.substitute(params, params_values).substitute(src, dst);
-            auto new_second = p.second.substitute(params, params_values).substitute(src, dst);
+            auto new_second = p.second.substitute(solving_params, solving_values).substitute(src, dst);
             over_closed.insert_or_assign(new_first, new_second);
         }
         for (auto expr : params_values) {
@@ -563,13 +979,22 @@ namespace ari_exe {
                     exit_condition, N_opt);
             }
         } else {
-            z3::expr summary_constraints =
-                N_opt.has_value() ? z3ctx.bool_val(true) : N_constraints;
+            z3::expr summary_constraints = N_constraints;
+            if (N_opt.has_value()) {
+                z3::expr_vector from(z3ctx), to(z3ctx);
+                from.push_back(N);
+                to.push_back(*N_opt);
+                summary_constraints = summary_constraints.substitute(from, to).simplify();
+            }
             summary = LoopSummary(
                 params, exit_values, params_values, summary_constraints,
                 modified_values,
                 N_opt.has_value() ? N_opt
                                   : std::optional<z3::expr>(N));
+        }
+        summary->set_functional_iteration_count(N_opt.has_value());
+        for (const auto& [counter, value] : auxiliary_forms) {
+            summary->add_auxiliary_closed_form(counter, value);
         }
     }
 
@@ -643,11 +1068,27 @@ namespace ari_exe {
         lhs_args.push_back(manager->get_ind_var()); // add loop counter
         std::vector<z3::expr> conditions;
         std::vector<rec_ty> eqs;
-        // assume the last condition and expression represent the frame part
+        // A substituted child summary may place its frame in any branch.
         auto array_conditions = array->get_value().get_conditions();
         auto array_expressions = array->get_value().get_expressions();
-        for (int i = 0; i < array_conditions.size() - 1; i++) {
+        for (unsigned i = 0; i < array_conditions.size(); ++i) {
+            if (z3::eq(array_expressions[i].simplify(), sig)) continue;
             auto eval_expr = summary.value().evaluate_expr(array_expressions[i]);
+            auto execution_domain = scalars.evaluate_expr(
+                state->get_path_condition().as_expr() && array_conditions[i]);
+            const auto iteration = manager->get_ind_var();
+            execution_domain = execution_domain && iteration >= 0;
+            if (const auto count = scalars.get_N()) {
+                // A recurrence may extend beyond the loop; earlier array
+                // summaries only need to be specialized on actual iterations.
+                execution_domain = execution_domain && iteration < *count &&
+                                   scalars.get_constraints();
+            }
+            // Dropping non-arithmetic conjuncts weakens the premise, so any
+            // rewrite certified here is also valid in the full context.
+            // Keep unrelated array constraints out of polynomial certificates.
+            eval_expr = restrict_to_domain(eval_expr, arithmetic_conjuncts(execution_domain));
+            eval_expr = restrict_to_domain(eval_expr, execution_domain);
             auto apps_of_arr = get_app_of(eval_expr, sig.decl());
             z3::expr_vector sub_src(z3ctx);
             z3::expr_vector sub_dst(z3ctx);
@@ -668,7 +1109,9 @@ namespace ari_exe {
                 eq.insert_or_assign(rec_func(lhs_args), ite_expressions[j]);
                 eqs.push_back(eq);
                 // auto cur_cond = condition && ite_conditions[j];
-                conditions.push_back(condition.substitute(go_back_src, go_back_dst) && ite_conditions[j]);
+                const auto guard = condition.substitute(go_back_src, go_back_dst) && ite_conditions[j];
+                conditions.push_back(loop->getSubLoops().empty()
+                    ? guard : normalize_array_guard(guard));
             }
         }
         return {conditions, eqs};
@@ -686,6 +1129,71 @@ namespace ari_exe {
         for (int i = 0; i < arrays.size(); i++) {
             auto array = arrays[i];
             summary->add_modified_value(array->get_llvm_value());
+            const Expression entry_value = array->get_value();
+            const bool unchanged = !final_states.empty() && std::all_of(
+                final_states.begin(), final_states.end(),
+                [&](const loop_state_ptr& state) {
+                    auto final_array = state->memory.get_object(array->get_addr());
+                    if (!final_array) return false;
+                    const Expression final_value = final_array->get_value();
+                    return z3::eq(final_value.as_expr(), entry_value.as_expr()) &&
+                           z3::eq(final_value.defined(), entry_value.defined());
+                });
+            if (unchanged) {
+                // Retain established read-only summaries instead of solving
+                // identity recurrences over their piecewise array values.
+                summary->add_closed_form(array->get_signature(), entry_value.as_expr());
+                summary->add_preserved_value(array->get_llvm_value());
+                continue;
+            }
+            if (parent_state->session.uses_integer_relaxation() &&
+                !loop->getSubLoops().empty() &&
+                !scalar_summary.is_over_approximated() &&
+                scalar_summary.has_functional_iteration_count() &&
+                array->get_indices().size()==1) {
+                const auto n=manager->get_ind_var();
+                auto valid=arithmetic_conjuncts(parent_state->get_path_condition().as_expr());
+                const auto index=array->get_indices()[0];
+                valid=valid&&index>=0&&index<array->get_sizes()[0].as_expr();
+                std::vector<z3::expr> guards,updates;
+                z3::expr_vector from(z3ctx),to(z3ctx);
+                from.push_back(n);to.push_back(n-1);
+                for (const auto& state:final_states) {
+                    const auto final_array=state->memory.get_object(array->get_addr());
+                    auto guard=scalar_summary.evaluate_expr(state->path_condition_in_loop.as_expr());
+                    auto value=scalar_summary.evaluate_expr(final_array->get_value().as_expr());
+                    guards.push_back(guard.substitute(from,to).simplify());
+                    updates.push_back(value.substitute(from,to).simplify());
+                }
+                // The loop count is a useful stride proposal for square VLAs;
+                // allocation factors also cover rectangular parametric arrays.
+                std::vector<z3::expr> strides{*scalar_summary.get_N()};
+                const auto extent=array->get_sizes()[0].as_expr().simplify();
+                if (extent.is_app() && extent.decl().decl_kind()==Z3_OP_MUL)
+                    for (const auto& factor:extent.args())
+                    if (!factor.is_numeral()) strides.push_back(factor);
+                std::optional<z3::expr> row_summary;
+                for (const auto& stride:strides) {
+                    row_summary=compose_strided_rows(array->get_signature(),n,
+                        *scalar_summary.get_N(),stride,valid,guards,updates);
+                    if (row_summary) break;
+                }
+                if (row_summary) {
+                    auto value=*row_summary;
+                    z3::expr_vector counts(z3ctx);counts.push_back(*scalar_summary.get_N());
+                    value=value.substitute(from,counts).simplify();
+                    const auto reads=get_app_of(value,array->get_signature().decl());
+                    z3::expr_vector entries(z3ctx);
+                    for (const auto& read:reads) {
+                        auto initial=entry_value.as_expr();
+                        entries.push_back(initial.substitute(array->get_indices(),read.args()));
+                    }
+                    value=value.substitute(reads,entries).simplify();
+                    value=restrict_to_domain(value,valid).simplify();
+                    summary->add_closed_form(array->get_signature(),value);
+                    continue;
+                }
+            }
             std::vector<z3::expr> conditions;
             std::vector<rec_ty> eqs;
 
@@ -716,13 +1224,58 @@ namespace ari_exe {
             for (int j = 0; j < conditions.size(); j++) {
 
             }
-            auto closed = solve_recurrence(conditions, eqs);
+            closed_form_ty closed;
+            if (parent_state->session.uses_integer_relaxation() &&
+                !scalar_summary.is_over_approximated() &&
+                scalar_summary.has_functional_iteration_count()) {
+                std::vector<z3::expr> values;
+                for (const auto& equation:eqs) {
+                    if (equation.size()!=1) break;
+                    values.push_back(equation.begin()->second);
+                }
+                bool independent=true;
+                for (const auto other:arrays) {
+                    if (other==array) continue;
+                    const auto other_value=other->get_value();
+                    const bool frozen=std::all_of(final_states.begin(),final_states.end(),
+                        [&](const loop_state_ptr& state) {
+                            const auto final=state->memory.get_object(other->get_addr());
+                            return final&&z3::eq(final->get_value().as_expr(),other_value.as_expr())&&
+                                   z3::eq(final->get_value().defined(),other_value.defined());
+                        });
+                    if (frozen) continue;
+                    for (const auto& value:values) {
+                        if (!get_app_of(value,other->get_signature().decl()).empty() ||
+                            !get_app_of(value,get_array_rec_func(other)).empty()) {
+                            independent=false;
+                        }
+                    }
+                }
+                if (independent&&values.size()==eqs.size()) {
+                    auto valid_domain=arithmetic_conjuncts(
+                        parent_state->get_path_condition().as_expr());
+                    const auto sizes=array->get_sizes();
+                    const auto indices=array->get_indices();
+                    for (unsigned d=0;d<indices.size();++d) {
+                        valid_domain=valid_domain&&indices[d]>=0&&
+                                     indices[d]<sizes[d].as_expr();
+                    }
+                    if (auto region=summarize_overwrite_regions(
+                            array->get_signature(),get_array_rec_func(array),
+                            manager->get_ind_var(),conditions,values,valid_domain,
+                            scalar_summary.has_functional_iteration_count()
+                                ? scalar_summary.get_N() : std::nullopt)) {
+                        closed.insert_or_assign(array->get_signature(),*region);
+                    }
+                }
+            }
+            if (closed.empty()) closed=solve_recurrence(conditions,eqs);
             spdlog::info("Array summaries are computed successfully");
 
             z3::expr_vector n_src(z3ctx);
             n_src.push_back(manager->get_ind_var());
             z3::expr_vector N_dst(z3ctx);
-            auto N = scalar_summary.get_N().value_or(manager->get_loop_N());
+            auto N = scalar_summary.get_N().value_or(iteration_parameter);
             N_dst.push_back(N);
             auto dims = array->get_sizes();
             z3::expr domain =
@@ -757,7 +1310,9 @@ namespace ari_exe {
                                             .substitute(all_apps, app_values)
                                             .substitute(n_src, N_dst);
                 // auto real_closed_form = closed_form.substitute(all_apps, app_values);
-                auto closed_form = restrict_to_domain(real_closed_form, domain).simplify();
+                auto closed_form = restrict_to_domain(real_closed_form,
+                    arithmetic_conjuncts(domain));
+                closed_form = restrict_to_domain(closed_form, domain).simplify();
                 spdlog::info("Array closed form: {}", closed_form.to_string());
                 summary->add_closed_form(array->get_signature(), closed_form);
                 spdlog::info("Finish Restricting");
@@ -771,6 +1326,7 @@ namespace ari_exe {
         auto manager = AnalysisManager::get_instance();
         auto& z3ctx = manager->get_z3ctx();
         rec_solver solver(z3ctx);
+        solver.set_ind_var(manager->get_ind_var());
         solver.set_eqs(conditions, rec_eqs);
         solver.solve();
         return solver.get_res();
@@ -835,11 +1391,15 @@ namespace ari_exe {
             auto phi_value = phi.getIncomingValueForBlock(prev_block);
             values.push_back(parent_state->evaluate(phi_value).as_expr().simplify());
         }
-        for (auto call_inst : get_unknown_calls()) {
-            auto name = get_z3_name(call_inst->getName().str()) + "_call_count";
-            auto counter_func = z3ctx.function(name.c_str(), z3ctx.int_sort(), z3ctx.int_sort());
-            func.push_back(counter_func(z3ctx.int_val(0)));
-            values.push_back(z3ctx.int_val(0));
+        // Counter functions are already included in func alongside the PHIs.
+        const auto calls = get_unknown_calls();
+        for (std::size_t i = 0; i < calls.size(); ++i) {
+            z3::expr initial = z3ctx.int_val(0);
+            if (auto outer = std::dynamic_pointer_cast<LoopState>(parent_state)) {
+                const auto found = outer->unknown_call_counters.find(calls[i]);
+                if (found != outer->unknown_call_counters.end()) initial = found->second;
+            }
+            values.push_back(initial);
         }
         auto accessible_objects = parent_state->memory.get_accessible_objects();
         for (auto obj : accessible_objects) {
@@ -891,37 +1451,19 @@ namespace ari_exe {
         }
     }
 
-    static llvm::Value*
-    get_base_value(llvm::Value* v) {
-        if (llvm::isa<llvm::GlobalVariable>(v)) {
-            return v;
-        }
-        if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(v)) {
-            auto called_func = call_inst->getCalledFunction();
-            if (called_func->getName() == "malloc") {
-                return v;
-            }
-        }
-        if (llvm::isa<llvm::AllocaInst>(v)) {
-            return v;
-        }
-        if (auto gep = llvm::dyn_cast_or_null<llvm::GetElementPtrInst>(v)) {
-            return get_base_value(gep->getPointerOperand());
-        }
-        assert(false && "not supported yet");
-        return nullptr;
-    }
-
     void
     LoopExecution::symbolize_stores(loop_state_ptr state) {
-        auto manager = AnalysisManager::get_instance();
-        auto& z3ctx = manager->get_z3ctx();
         auto stores = get_all_stores(loop);
         for (auto store : stores) {
             auto ptr = store->getPointerOperand();
-            auto base_value = get_base_value(ptr);
+            // Resolve formal pointers through their caller-provided addresses.
+            // Only object discovery strips offsets; actual loads/stores retain them.
+            auto base_value = llvm::getUnderlyingObject(ptr, 0);
             auto written_obj = state->memory.get_object_pointed_by(base_value);
-            assert(written_obj);
+            if (!written_obj) {
+                throw VerifierError(VerifierIssueKind::UnsupportedSemantics,
+                                    "Cannot resolve loop store memory object");
+            }
             written_obj->write(written_obj->get_signature());
         }
     }
@@ -975,9 +1517,45 @@ namespace ari_exe {
         auto header_phis_scalar_and_func = get_header_phis_scalar_and_func();
         auto src = header_phis_scalar_and_func.first;
         auto dst = header_phis_scalar_and_func.second;
-        for (auto state : final_states) {
+        std::vector<std::vector<z3::expr>> state_updates;
+        for (auto state : final_states) state_updates.push_back(get_update(state));
+
+        // Prove simple counter bounds before inlining read-only arrays into
+        // dependent accumulators. Unknown queries never justify a bound.
+        z3::expr invariant = rec_s.z3ctx.bool_val(true);
+        z3::solver invariant_solver(rec_s.z3ctx);
+        z3::params invariant_parameters(rec_s.z3ctx);
+        invariant_parameters.set("timeout", 200u);
+        invariant_solver.set(invariant_parameters);
+        const auto predecessor = parent_state->trace.back();
+        for (unsigned i = 0; i < phis.size(); ++i) {
+            const auto initial = parent_state->evaluate(
+                phis[i]->getIncomingValueForBlock(predecessor)).as_expr();
+            invariant_solver.push();
+            invariant_solver.add(parent_state->get_path_condition().as_expr());
+            invariant_solver.add(initial < 0);
+            const bool initialized_nonnegative =
+                invariant_solver.check() == z3::unsat;
+            invariant_solver.pop();
+            if (!initialized_nonnegative) continue;
+            const auto candidate = src[i] >= 0;
+            bool inductive = true;
+            for (unsigned j = 0; j < final_states.size(); ++j) {
+                invariant_solver.push();
+                invariant_solver.add(candidate &&
+                    final_states[j]->get_path_condition().as_expr() &&
+                    state_updates[j][i] < 0);
+                inductive = invariant_solver.check() == z3::unsat;
+                invariant_solver.pop();
+                if (!inductive) break;
+            }
+            if (inductive) invariant = invariant && candidate;
+        }
+
+        for (unsigned state_index = 0; state_index < final_states.size(); ++state_index) {
+            const auto state = final_states[state_index];
             auto path_cond = state->path_condition_in_loop.as_expr().substitute(src, dst);
-            auto updates = get_update(state);
+            auto updates = state_updates[state_index];
             for (auto call_inst : unknown_calls) {
                 auto counter_it = state->unknown_call_counters.find(call_inst);
                 if (counter_it == state->unknown_call_counters.end()) {
@@ -996,7 +1574,10 @@ namespace ari_exe {
             std::vector<z3::expr_vector> ite_conditions;
             std::vector<z3::expr_vector> ite_expressions;
             std::vector<int> sizes; // record the size of each update
+            const auto execution_domain =
+                state->get_path_condition().as_expr() && invariant;
             for (auto update : updates) {
+                update = restrict_to_domain(update, execution_domain);
                 auto [tmp_conditions, tmp_expressions] = expr2piecewise(update);
                 ite_conditions.push_back(tmp_conditions);
                 ite_expressions.push_back(tmp_expressions);
@@ -1047,7 +1628,7 @@ namespace ari_exe {
         return false;
     }
 
-    std::pair<z3::expr, z3::expr>
+    std::tuple<z3::expr, z3::expr, z3::expr>
     LoopSummarizer::get_iterations_constraints(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values) {
         spdlog::info("Computing the number of iterations");
         auto loop_guard = get_loop_guard_condition(exit_states);
@@ -1058,8 +1639,10 @@ namespace ari_exe {
         spdlog::info("Loop guard condition (closed-form): {}", loop_guard_closed_form.to_string());
         auto manager = AnalysisManager::get_instance();
         auto& z3ctx = manager->get_z3ctx();
-        z3::expr N = manager->get_loop_N();
+        z3::expr N = iteration_parameter;
         z3::expr n = manager->get_ind_var();
+        loop_guard_closed_form = simplify_boolean_condition(
+            restrict_to_domain(loop_guard_closed_form, n >= 0), n >= 0);
         z3::expr constraints = z3::forall(n, z3::implies(0 <= n && n < N, loop_guard_closed_form.substitute(params, values)));
         z3::expr_vector src(z3ctx);
         z3::expr_vector dst(z3ctx);
@@ -1068,11 +1651,12 @@ namespace ari_exe {
         constraints = constraints && !loop_guard_closed_form.substitute(src, dst);
         constraints = constraints && N >= 0;
         spdlog::info("constraints for N: {}", constraints.to_string());
-        constraints = constraints && parent_state->get_path_condition().as_expr();
         constraints = constraints.substitute(params, values);
+        auto parent_condition = parent_state->get_path_condition().as_expr();
+        parent_condition = parent_condition.substitute(params, values);
 
         if (contains_modulo(constraints)) {
-            return {constraints, N};
+            return {constraints && parent_condition, N, constraints};
         }
 
         z3::tactic qe_tactic = z3::tactic(z3ctx, "qe");
@@ -1082,7 +1666,7 @@ namespace ari_exe {
         z3::expr_vector N_vec(z3ctx);
         N_vec.push_back(N);
         auto N_constraints = apply_result2expr(result);
-        return {N_constraints, N};
+        return {N_constraints && parent_condition, N, N_constraints};
     }
 
     std::pair<z3::expr, z3::expr>
@@ -1092,7 +1676,7 @@ namespace ari_exe {
         z3::expr_vector src(loop_guard.ctx());
         z3::expr_vector dst(loop_guard.ctx());
         auto n = manager->get_ind_var();
-        auto N = manager->get_loop_N();
+        auto N = iteration_parameter;
         src.push_back(n);
         dst.push_back(N);
         auto exit_loop_guard = loop_guard.substitute(src, dst);
@@ -1160,8 +1744,7 @@ namespace ari_exe {
         for (auto& block : loop->blocks()) {
             for (auto& inst : *block) {
                 if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(&inst)) {
-                    auto func = call_inst->getCalledFunction();
-                    if (!func || !func->hasExactDefinition()) {
+                    if (is_uninterpreted_loop_call(call_inst)) {
                         calls.push_back(call_inst);
                     }
                 }

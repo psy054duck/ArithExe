@@ -191,20 +191,25 @@ LoopState::append_path_condition(const Expression& _path_condition) {
     auto manager = AnalysisManager::get_instance();
     auto inst = pc->inst;
     auto& LI = manager->get_LI(inst->getFunction());
-    auto loop = LI.getLoopFor(inst->getParent());
-    assert(loop);
+    auto loop = summarizing_loop ? summarizing_loop : LI.getLoopFor(inst->getParent());
 
     if (auto branch = dyn_cast_or_null<llvm::BranchInst>(inst)) {
         if (branch->isConditional()) {
             auto true_block = branch->getSuccessor(0);
             auto false_block = branch->getSuccessor(1);
-            if (loop->contains(true_block) && loop->contains(false_block)) {
+            // A callee's branch is part of the caller's iteration, not an
+            // exit from the loop being summarized.
+            if (!loop || !loop->contains(inst->getParent()) ||
+                (loop->contains(true_block) && loop->contains(false_block))) {
                 path_condition_in_loop = path_condition_in_loop && normalize_bool(_path_condition.as_expr());
             }
         }
     } else if (auto select = dyn_cast_or_null<llvm::SelectInst>(inst)) {
         path_condition_in_loop = path_condition_in_loop && normalize_bool(_path_condition.as_expr());
     } else {
-        assert(false && "Unsupported instruction type");
+        // Calls and memory operations also contribute definedness constraints.
+        path_condition_in_loop = path_condition_in_loop &&
+            _path_condition.defined() &&
+            normalize_bool(_path_condition.as_expr());
     }
 }

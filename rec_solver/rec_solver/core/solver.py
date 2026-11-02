@@ -7,6 +7,10 @@ from .ultimately_periodic import solve_ultimately_periodic_symbolic
 from .poly_expr import poly_expr_solving
 from .bounded_cfinite import can_attempt_bounded_cfinite_map, solve_bounded_cfinite_map
 from .solvable_polynomial import is_solvable_map
+from .utils import conversion_cache
+from .modulo_normalization import DEFAULT_MAX_BRANCHES, modulo_branch_limit, normalize_constant_modulo
+from .phase_lengths import phase_length_scope
+from .verification import is_inductive_scalar_closed_form as _direct_function_closed_form_is_inductive
 
 
 def _closed_form_has_content(closed_form):
@@ -24,76 +28,44 @@ def _closed_form_has_content(closed_form):
     )
 
 
-def _direct_function_closed_form_is_inductive(rec, closed_form):
-    try:
-        closed_dict = closed_form.as_dict()
-    except AttributeError:
-        return True
-
-    ind_var = rec.ind_var
-    func_closed = {}
-    for func_decl in rec.func_decls:
-        if func_decl.arity() != 1:
-            continue
-        app = func_decl(ind_var)
-        if app in closed_dict:
-            func_closed[app] = closed_dict[app]
-
-    if not func_closed:
-        return True
-
-    solver = z3.Solver()
-    for app, expr in func_closed.items():
-        initial_app = app.decl()(z3.IntVal(0))
-        if initial_app not in rec.initial:
-            continue
-        initial_expr = rec.initial[initial_app]
-        initial_value = z3.simplify(
-            z3.substitute(expr, (ind_var, z3.IntVal(0)))
-        )
-        solver.push()
-        solver.add(initial_value != initial_expr)
-        if solver.check() != z3.unsat:
-            solver.pop()
-            return False
-        solver.pop()
-
-    current_mapping = list(func_closed.items())
-    for condition, transition in zip(rec.conditions, rec.transitions):
-        closed_condition = z3.simplify(
-            z3.substitute(condition, *current_mapping)
-        )
-        for lhs_next, rhs in transition.items():
-            if lhs_next.decl().arity() != 1:
-                continue
-            app = lhs_next.decl()(ind_var)
-            if app not in func_closed:
-                continue
-            expected_next = z3.simplify(
-                z3.substitute(func_closed[app], (ind_var, ind_var + 1))
-            )
-            actual_next = z3.simplify(z3.substitute(rhs, *current_mapping))
-            solver.push()
-            solver.add(ind_var >= 0)
-            solver.add(closed_condition)
-            solver.add(expected_next != actual_next)
-            if solver.check() != z3.unsat:
-                solver.pop()
-                return False
-            solver.pop()
-
-    return True
-
-
 def solve_str(
     s,
     enable_bounded_cfinite=True,
     poly_expr_strategy="auto",
     poly_expr_order=1,
     poly_expr_degree=None,
+    multivariate_strategy="pivot",
+    tupling_options=None,
+    modulo_max_branches=DEFAULT_MAX_BRANCHES,
+    phase_length_options=None,
+    phase_length_stats=None,
+    enable_aggregates=True,
 ):
+    with conversion_cache(), modulo_branch_limit(modulo_max_branches), \
+            phase_length_scope(phase_length_options, phase_length_stats):
+        return _solve_str(s, enable_bounded_cfinite, poly_expr_strategy,
+                          poly_expr_order, poly_expr_degree,
+                          multivariate_strategy, tupling_options, modulo_max_branches,
+                          enable_aggregates)
+
+
+def _solve_str(s, enable_bounded_cfinite, poly_expr_strategy, poly_expr_order,
+               poly_expr_degree, multivariate_strategy, tupling_options, modulo_max_branches,
+               enable_aggregates=True):
+    if multivariate_strategy not in {"pivot", "tupling"}:
+        raise ValueError("multivariate_strategy must be 'pivot' or 'tupling'")
     rec = parse_str(s)
     if isinstance(rec, LoopRecurrence):
+        from .periodic_counters import solve_periodic_counter
+        counter = solve_periodic_counter(rec)
+        if counter is not None:
+            return counter
+        rec = normalize_constant_modulo(rec, max_branches=modulo_max_branches)
+        from .aggregates import has_external_inputs, solve_aggregate_recurrence
+        if enable_aggregates and has_external_inputs(rec):
+            aggregate = solve_aggregate_recurrence(rec)
+            if aggregate is not None:
+                return aggregate
         solvable = False
         try:
             solvable = is_solvable_map(rec)
@@ -111,6 +83,7 @@ def solve_str(
             res = solve_ultimately_periodic_symbolic(
                 rec,
                 enable_bounded_cfinite=enable_bounded_cfinite,
+                modulo_max_branches=modulo_max_branches,
             )
             if _closed_form_has_content(res):
                 return res
@@ -124,6 +97,10 @@ def solve_str(
                     return res
             except:
                 pass
+        if enable_aggregates:
+            aggregate = solve_aggregate_recurrence(rec)
+            if aggregate is not None:
+                return aggregate
         degrees = [poly_expr_degree] if poly_expr_degree is not None else [2, 3]
         res = None
         for degree in degrees:
@@ -137,6 +114,9 @@ def solve_str(
                 return res
         return res
     elif isinstance(rec, MultiRecurrence):
+        if multivariate_strategy == "tupling":
+            from .tupling import solve_tupled_rec
+            return solve_tupled_rec(rec, options=tupling_options)
         return solve_multivariate_rec(rec)
     return None
 
@@ -146,6 +126,12 @@ def solve_file(
     poly_expr_strategy="auto",
     poly_expr_order=1,
     poly_expr_degree=None,
+    multivariate_strategy="pivot",
+    tupling_options=None,
+    modulo_max_branches=DEFAULT_MAX_BRANCHES,
+    phase_length_options=None,
+    phase_length_stats=None,
+    enable_aggregates=True,
 ):
     with open(filename) as fp:
         return solve_str(
@@ -154,4 +140,10 @@ def solve_file(
             poly_expr_strategy=poly_expr_strategy,
             poly_expr_order=poly_expr_order,
             poly_expr_degree=poly_expr_degree,
+            multivariate_strategy=multivariate_strategy,
+            tupling_options=tupling_options,
+            modulo_max_branches=modulo_max_branches,
+            phase_length_options=phase_length_options,
+            phase_length_stats=phase_length_stats,
+            enable_aggregates=enable_aggregates,
         )

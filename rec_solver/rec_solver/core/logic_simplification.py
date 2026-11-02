@@ -33,16 +33,21 @@ def is_literal(f):
 def get_vars(f: z3.ExprRef):
     '''f: a formula in z3
        ret: set of all variables in f'''
-    r = set()
-    def collect(f):
-      if z3.is_const(f): 
-          if f.decl().kind() == z3.Z3_OP_UNINTERPRETED:
-              r.add(f)
-      else:
-          for c in f.children():
-              collect(c)
-    collect(f)
-    return r
+    result, seen, pending = set(), set(), [f]
+    while pending:
+        term = pending.pop()
+        identity = term.get_id()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if z3.is_quantifier(term):
+            pending.append(term.body())
+        elif z3.is_app(term):
+            if term.num_args() == 0 and term.decl().kind() == z3.Z3_OP_UNINTERPRETED:
+                result.add(term)
+            else:
+                pending.extend(term.children())
+    return result
 
 def is_atom(t):
     if not z3.is_bool(t):
@@ -86,7 +91,6 @@ def implicant(atoms, s, snot):
     return z3.Or([z3.mk_not(c) for c in core])
 
 def to_cnf(fml):
-    str(fml)
     atms = atoms(fml)
     s = z3.Solver()
     snot = z3.Solver()

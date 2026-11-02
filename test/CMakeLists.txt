@@ -21,6 +21,8 @@ enable_testing()
 add_executable(
   test_engine
   test_engine.cpp
+  test_entry_array.cpp
+  test_stack_array.cpp
 )
 
 add_executable(

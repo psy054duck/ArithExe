@@ -1,0 +1,1 @@
+"""BenchExec adapters for ArithExe."""

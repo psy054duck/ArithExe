@@ -5,6 +5,11 @@ from .recurrence import LoopRecurrence
 from functools import reduce
 
 def solve_solvable_map(rec: LoopRecurrence):
+    protected = _parameter_integer_divisions(rec)
+    original = rec
+    if protected:
+        rec = rec.subs(dict(protected))
+        rec.set_reverse(original.reverses)
     components = get_layers_for_solvable_map(rec)
     for component in components:
         partial_closed_form = solve_solvable_map_for_component(rec, component)
@@ -12,7 +17,49 @@ def solve_solvable_map(rec: LoopRecurrence):
         # partial_closed_form = {k: c.subs(rec.initial, simultaneous=True) for k, c in partial_closed_form.items()}
         partial_closed_form = {k: z3.substitute(c, *list(rec.initial.items())) for k, c in partial_closed_form.items()}
         rec.simplify_with_partial_solution(partial_closed_form)
-    return rec.closed_forms
+    result = rec.closed_forms
+    if protected:
+        restore = [(parameter, term) for term, parameter in protected]
+        result = {app: z3.substitute(value, restore) for app, value in result.items()}
+        original.simplify_with_partial_solution(result)
+    return result
+
+
+def _parameter_integer_divisions(rec):
+    # Rational polynomial algebra must not rewrite integer quotients of
+    # parameters. Solve for arbitrary constants, then restore the exact terms.
+    candidates = []
+    pending = list(rec.initial.values()) + [value for transition in rec.transitions
+                                            for value in transition.values()]
+    expressions = pending.copy()
+    seen = set()
+    while pending:
+        term = pending.pop()
+        identity = term.get_id()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if z3.is_app(term) and term.decl().kind() == z3.Z3_OP_IDIV:
+            if z3.is_int_value(z3.simplify(term)):
+                continue
+            if (rec.ind_var not in utils.get_vars(term)
+                    and not (utils.get_func_decls(term) & rec.func_decls)):
+                candidates.append(term)
+                continue
+        pending.extend(term.children())
+    if not candidates:
+        return []
+    used = {var.decl().name() for expression in expressions + rec.conditions
+            for var in utils.get_vars(expression)}
+    used |= {rec.ind_var.decl().name()} | {decl.name() for decl in rec.func_decls}
+    protected = []
+    for term in candidates:
+        name = '_integer_quotient_%d' % len(protected)
+        while name in used:
+            name = '_' + name
+        used.add(name)
+        protected.append((term, z3.Int(name, ctx=rec.ind_var.ctx)))
+    return protected
 
 def solve_solvable_map_for_component(rec: LoopRecurrence, component):
     ordered_component = list(component)

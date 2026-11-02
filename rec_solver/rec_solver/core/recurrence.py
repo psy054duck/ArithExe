@@ -60,32 +60,39 @@ class Recurrence:
 
     @staticmethod
     def is_loop_recurrence(branches):
-        conditions = [branch[0] for branch in branches]
         transitions = [branch[1] for branch in branches]
-        for cond, trans in zip(conditions, transitions):
-            # applied_func = cond.atoms(AppliedUndef)
-            # applied_func |= reduce(set.union, [e.atoms(AppliedUndef) for e in trans.keys()])
-            # applied_func |= reduce(set.union, [e.atoms(AppliedUndef) for e in trans.values()])
-            applied_func = utils.get_applied_functions(cond)
-            applied_func |= reduce(set.union, [utils.get_applied_functions(e) for e in trans.keys()])
-            applied_func |= reduce(set.union, [utils.get_applied_functions(e) for e in trans.values()])
-            # check if all functions are univariate
-            # if not all([list(f.nargs)[0] == 1 for f in applied_func]):
-            #     return False
-            if not all([len(f.children()) == 1 for f in applied_func]):
+        keys = [lhs for transition in transitions for lhs in transition]
+        if not keys or any(lhs.decl().arity() != 1 for lhs in keys):
+            return False
+        variables = utils.get_vars(keys[0].arg(0))
+        if len(variables) != 1:
+            return False
+        ind_var = next(iter(variables))
+        state_decls = {lhs.decl() for lhs in keys}
+        current = z3.simplify(ind_var)
+        following = z3.simplify(ind_var + 1)
+        # Input arrays are not recurrence components. Their arguments may be
+        # constant, multidimensional, or contain scalar state applications.
+        # Traverse through them, but only inspect state-function time indices.
+        def state_calls(expression):
+            pending, visited = [expression], set()
+            while pending:
+                term = pending.pop()
+                if term.get_id() in visited:
+                    continue
+                visited.add(term.get_id())
+                if z3.is_app(term) and term.decl() in state_decls:
+                    yield term
+                pending.extend(term.children())
+
+        for cond, trans in branches:
+            if any(not z3.eq(z3.simplify(lhs.arg(0)), following) for lhs in trans):
                 return False
-            # check if the inductive variable is the only symbol in arguments
-            ind_var = Recurrence.get_possible_ind_var(transitions)
-            args = reduce(set.union, [set(f.children()) for f in applied_func])
-            if not all([len(utils.get_vars(arg)) == 1 for arg in args]) and not all([list(arg.free_symbols)[0] == ind_var for arg in args]):
-                return False
-            # check if all recursive cases are of form f(n + 1) = g(f(n))
-            solver = z3.Solver()
-            if not all([solver.check(arg != ind_var) == z3.unsat or solver.check(arg != ind_var + 1) for arg in args]):
-                return False
-            for k in trans:
-                if solver.check(k.arg(0) == ind_var + 1) == z3.unsat:
-                    return False
+            for expression in [cond, *trans.values()]:
+                for call in state_calls(expression):
+                    time = z3.simplify(call.arg(0))
+                    if not (z3.eq(time, current) or z3.eq(time, following)):
+                        return False
         return True
 
     @staticmethod
@@ -350,11 +357,12 @@ class LoopRecurrence:
             self._transitions = [branch[1] for branch in branches] + [{}]
         self._initial = initial
         app = self.get_app()
-        # print(app)
+        state_decls = {lhs.decl() for trans in self._transitions for lhs in trans}
+        # External array reads may use state expressions as their indices.
+        # Only functions defined by the recurrence determine its iteration argument.
         rec_apps = [
             a for a in app
-            if a.decl().kind() == z3.Z3_OP_UNINTERPRETED
-            and not a.decl().name().endswith("_unknown")
+            if a.decl() in state_decls
         ]
         last_args = {a.children()[-1] for a in rec_apps}
         if len(last_args) > 1:
@@ -362,6 +370,26 @@ class LoopRecurrence:
         self._ind_var = last_args.pop()
         # print(self._ind_var)
         self._transitions = self._padding_transitions(self._transitions, self.all_funcs)
+        # Array-dependent guards are irrelevant when every possible branch
+        # (including the implicit identity branch) has the same state update.
+        first_transition = self._transitions[0]
+        if all(set(first_transition) == set(trans) and
+               all(z3.eq(z3.simplify(value), z3.simplify(trans[lhs]))
+                   for lhs, value in first_transition.items())
+               for trans in self._transitions[1:]):
+            coverage = z3.simplify(z3.Or(*self._conditions))
+            exhaustive = z3.is_true(coverage)
+            if not exhaustive and any(
+                    app.decl() not in state_decls
+                    for condition in self._conditions
+                    for app in utils.get_applied_functions(condition)):
+                checker = z3.Solver(ctx=coverage.ctx)
+                checker.set(timeout=100)
+                checker.add(z3.Not(coverage))
+                exhaustive = checker.check() == z3.unsat
+            if exhaustive:
+                self._conditions = [z3.BoolVal(True)]
+                self._transitions = [self._transitions[0]]
         self._func_decls = self._get_all_func_decl()
         zero_indexed_func_apps = [func_decl(0) for func_decl in self.func_decls if func_decl.arity() == 1]
         self._initial = {zero_app: initial.get(zero_app, zero_app) for zero_app in zero_indexed_func_apps}
@@ -590,8 +618,12 @@ class LoopRecurrence:
         for i in seq:
             cur_transition = transitions[i]
             # left composition
-            left_cur_transition = {z3.simplify(func_app.decl()(ind_var)): trans for func_app, trans in cur_transition.items()}
-            left_transition = {z3.simplify(func_app): z3.substitute(trans, *list(left_cur_transition.items())) for func_app, trans in transition.items() if z3.simplify(func_app) not in rec.reverses}
+            current_state = {z3.simplify(func_app.decl()(ind_var)): trans
+                             for func_app, trans in transition.items()}
+            # Apply the next update to the state produced by the prefix.
+            left_transition = {z3.simplify(func_app): z3.substitute(trans, *list(current_state.items()))
+                               for func_app, trans in cur_transition.items()
+                               if z3.simplify(func_app) not in rec.reverses}
 
             # right composition
             right_cur_transition = cur_transition
@@ -599,7 +631,7 @@ class LoopRecurrence:
             right_transition = {z3.simplify(func_app): z3.substitute(trans, *list(transition_shift.items())) for func_app, trans in right_cur_transition.items() if z3.simplify(func_app) in rec.reverses}
             transition = left_transition | right_transition
         new_rec = cls(initial, [(z3.BoolVal(True), transition)])
-        new_rec.set_reverse = rec.reverses
+        new_rec.set_reverse(rec.reverses)
         return new_rec
 
     def get_app(self):

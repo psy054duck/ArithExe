@@ -146,7 +146,7 @@ namespace ari_exe {
                 : session(session), z3ctx(z3ctx), pc(pc), prev_pc(prev_pc),
                   memory(memory), path_condition(path_condition), trace(trace),
                   status(status) {};
-            State(const State& state): session(state.session), z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), summary_invariants(state.summary_invariants), is_over_approx(state.is_over_approx), nondet_calls(state.nondet_calls), counterexample_complete(state.counterexample_complete), loop_certificates(state.loop_certificates), function_certificates(state.function_certificates), path_decisions(state.path_decisions), loop_path_expressions(state.loop_path_expressions) {};
+            State(const State& state): session(state.session), z3ctx(state.z3ctx), pc(state.pc), prev_pc(state.prev_pc), memory(state.memory), path_condition(state.path_condition), trace(state.trace), status(state.status), verification_condition(state.verification_condition), summary_invariants(state.summary_invariants), summary_obligations(state.summary_obligations), is_over_approx(state.is_over_approx), nondet_calls(state.nondet_calls), counterexample_complete(state.counterexample_complete), loop_certificates(state.loop_certificates), function_certificates(state.function_certificates), path_decisions(state.path_decisions), loop_path_expressions(state.loop_path_expressions) {};
 
             // if the state is in the process of summarizing a loop
             virtual bool is_summarizing() const { return false; }
@@ -198,6 +198,8 @@ namespace ari_exe {
             // They are used only as candidates and must pass an inductiveness
             // check before entering a summary.
             std::vector<Expression> summary_invariants;
+            // Already guarded at the child entry, before completion assumptions.
+            std::vector<z3::expr> summary_obligations;
 
             Expression get_path_condition() const { return path_condition; }
 
@@ -243,7 +245,7 @@ namespace ari_exe {
                       const Expression& path_condition_in_loop,
                       const trace_ty& trace, Status status = RUNNING);
             LoopState(const State& state): State(state), path_condition_in_loop(state.z3ctx.bool_val(true)), summarizing_loop(nullptr) {};
-            LoopState(const LoopState& state): State(state), path_condition_in_loop(state.path_condition_in_loop), summarizing_loop(state.summarizing_loop) {};
+            LoopState(const LoopState& state): State(state), path_condition_in_loop(state.path_condition_in_loop), summarizing_loop(state.summarizing_loop), unknown_call_counters(state.unknown_call_counters) {};
 
             // if the state is in the process of summarizing a loop
             bool is_summarizing() const override { return true; }

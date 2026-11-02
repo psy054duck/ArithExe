@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <optional>
+#include <tuple>
 #include <queue>
 #include <algorithm>
 #include <map>
@@ -104,6 +105,9 @@ namespace ari_exe {
 
             std::vector<llvm::CallInst*> get_unknown_calls(llvm::Loop* loop);
 
+            void record_assertion(const loop_state_ptr& state,
+                                  const Expression& assertion);
+
             /**
              * @brief Check if the given state is an exit state
              * @param state The current state
@@ -157,6 +161,7 @@ namespace ari_exe {
             std::vector<llvm::CallInst*> unknown_calls;
 
             bool saw_unknown = false;
+            std::map<llvm::LoadInst*, bool> entry_reads;
     };
 
     /**
@@ -172,7 +177,7 @@ namespace ari_exe {
              * @param loop The loop to be summarized
              * @param z3ctx The Z3 context
              */
-            LoopSummarizer(llvm::Loop* loop, state_ptr parent_state): loop(loop), rec_s(AnalysisManager::get_instance()->get_z3ctx()), parent_state(parent_state) {};
+            LoopSummarizer(llvm::Loop* loop, state_ptr parent_state);
 
             std::optional<LoopSummary> get_summary();
 
@@ -181,6 +186,7 @@ namespace ari_exe {
             rec_solver rec_s;
             std::optional<LoopSummary> summary;
             std::vector<llvm::CallInst*> unknown_calls;
+            z3::expr iteration_parameter;
 
 
             /**
@@ -199,6 +205,10 @@ namespace ari_exe {
              * @brief Summarize the loop for scalar values.
              */
             void summarize_scalar(const loop_state_list& final_states, const loop_state_list& exit_states);
+
+            z3::expr iteration_feasibility(const loop_state_list& final_states,
+                                          bool allow_entry_arrays, bool& complete);
+            void retain_input_constraints(const z3::expr& feasible);
 
             /**
              * @brief Summarize the loop for array values.
@@ -249,7 +259,7 @@ namespace ari_exe {
              * @param values The closed-form solution to the header phis
              * @return constraints on the number of iterations of the loop and the symbol used to denote the number of iterations
              */
-            std::pair<z3::expr, z3::expr> get_iterations_constraints(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values);
+            std::tuple<z3::expr, z3::expr, z3::expr> get_iterations_constraints(const loop_state_list& exit_states, const z3::expr_vector& params, const z3::expr_vector& values);
 
             /**
              * @brief get exit conditions for the loop
@@ -289,7 +299,8 @@ namespace ari_exe {
              */
             std::tuple<loop_state_list, loop_state_list, std::vector<Expression>> get_final_and_exit_states();
 
-            VeriResult prove_invariants(const std::vector<Expression>& v_conditions);
+            VeriResult prove_invariants(const std::vector<Expression>& v_conditions,
+                                        const z3::expr& feasible, bool complete);
 
             /**
              * @brief get initial values for the loop
@@ -310,6 +321,8 @@ namespace ari_exe {
              * @brief log info
              */
             void log_states(const loop_state_list& final_states, const loop_state_list& exit_states);
+
+            bool incomplete_execution = false;
 
     };
 }

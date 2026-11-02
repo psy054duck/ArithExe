@@ -8,19 +8,45 @@
 #include "z3++.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <optional>
 #include <cstdlib>
 #include <functional>
 #include <sstream>
+#include <set>
 #include <unordered_map>
 
 using namespace ari_exe;
 
 namespace {
+bool supports_scalar_cache(const llvm::Function* function) {
+    if (function->isVarArg() || !function->getReturnType()->isIntegerTy()) {
+        return false;
+    }
+    for (const auto& argument : function->args()) {
+        if (!argument.getType()->isIntegerTy()) return false;
+    }
+    return true;
+}
+
+std::optional<int> concrete_cache_integer(
+    state_ptr state, const Expression& value, const z3::model& model) {
+    if (value.get_expressions().empty()) return std::nullopt;
+    const auto candidate = model.eval(value.as_expr(), true);
+    int integer;
+    // Model completion is only a proposal, not a proof of concreteness.
+    if (!candidate.is_int() || !candidate.is_numeral() ||
+        !candidate.is_numeral_i(integer) || !state->is_concrete(value, candidate)) {
+        return std::nullopt;
+    }
+    return integer;
+}
+
 std::pair<z3::expr, z3::expr> relaxed_integer_binary(
     const z3::expr& lhs, const z3::expr& rhs, unsigned opcode,
     unsigned width, bool exact) {
@@ -873,19 +899,25 @@ AInstructionAlloca::execute(state_ptr state) {
     auto alloca_inst = dyn_cast<llvm::AllocaInst>(inst);
     auto& z3ctx = state->z3ctx;
 
-    assert(!alloca_inst->isArrayAllocation() && "Array allocation is not supported yet");
-    // Allocate memory for the alloca instruction
-    // auto size = alloca_inst->getAllocatedType()->getPrimitiveSizeInBits() / 8;
-    auto size = 1;
-    auto ty = alloca_inst->getAllocatedType();
-    if (ty->isArrayTy()) {
-        auto size_value = alloca_inst->getArraySize();
-        size = ty->getArrayNumElements();
+    auto* count_value = alloca_inst->getArraySize();
+    const auto count_expression = state->evaluate(count_value, false);
+    const auto count = unsigned_value(count_expression.as_expr(),
+                                     count_value->getType()->getIntegerBitWidth(), state);
+    state_ptr new_state = clone_state_preserving_type(state);
+    new_state->append_path_condition(Expression(count_expression.defined()));
+    if (state->session.uses_integer_relaxation()) {
+        new_state->append_path_condition(Expression(count >= 0));
     }
-    
-    state_ptr new_state = std::make_shared<State>(*state);
     z3::expr_vector sizes(z3ctx);
-    sizes.push_back(z3ctx.int_val(size));
+    auto* type = alloca_inst->getAllocatedType();
+    // A scalar VLA uses the alloca count; fixed array types carry their shape.
+    if (alloca_inst->isArrayAllocation() || !type->isArrayTy()) {
+        sizes.push_back(count.simplify());
+    }
+    while (type->isArrayTy()) {
+        sizes.push_back(z3ctx.int_val(std::to_string(type->getArrayNumElements()).c_str()));
+        type = type->getArrayElementType();
+    }
     new_state->memory.allocate(inst, sizes);
     new_state->step_pc();
     return {new_state};
@@ -925,7 +957,8 @@ AInstructionCall::execute(state_ptr state) {
         return {execute_assert(call_state)};
     } else if (called_func &&
                (called_func->getName().find("reach_error") != std::string::npos ||
-                called_func->getName() == "__VERIFIER_error")) {
+                called_func->getName() == "__VERIFIER_error" ||
+                called_func->getName() == "__assert_fail")) {
         return {execute_reach_error(call_state)};
     } else if (called_func && called_func->getName().find("assume") != std::string::npos) {
         // assume function, add the condition to the path condition
@@ -1113,6 +1146,8 @@ AInstructionCall::execute_cache(state_ptr state) {
     assert(call_inst);
     auto called_func = resolve_called_function(call_inst);
 
+    if (!supports_scalar_cache(called_func)) return nullptr;
+
     for (auto& arg : call_inst->args()) {
         if (arg->getType()->isPointerTy()) {
             return nullptr;
@@ -1125,11 +1160,9 @@ AInstructionCall::execute_cache(state_ptr state) {
     for (int i = 0; i < call_inst->arg_size(); i++) {
         auto arg = call_inst->getArgOperand(i);
         auto state_value = state->evaluate(arg);
-        auto concrete_value = model.eval(state_value.as_expr(), true);
-        if (!state->is_concrete(state_value, concrete_value)) {
-            return nullptr;
-        }
-        args.push_back(concrete_value.as_int64());
+        auto concrete_value = concrete_cache_integer(state, state_value, model);
+        if (!concrete_value) return nullptr;
+        args.push_back(*concrete_value);
     }
     auto cached_value = cache.get_func_value(called_func, args);
     if (cached_value.has_value()) {
@@ -1519,20 +1552,20 @@ void
 AInstructionReturn::cache_func_value(state_ptr state, const Expression& result) {
     auto& cache_instance = state->session.function_cache();
     auto& top_frame = state->memory.top_frame();
+    if (!supports_scalar_cache(top_frame.func)) return;
     param_list_ty args;
 
     auto model = state->get_model();
-    auto concrete_result = model.eval(result.as_expr(), false);
-    if (!state->is_concrete(result, concrete_result)) return;
+    auto concrete_result = concrete_cache_integer(state, result, model);
+    if (!concrete_result) return;
 
     for (auto& param : top_frame.func->args()) {
         auto arg_value = state->evaluate(&param);
-        auto concrete_value = model.eval(arg_value.as_expr(), true);
-        if (!state->is_concrete(arg_value, concrete_value)) return;
-        args.push_back(concrete_value.as_int64());
+        auto concrete_value = concrete_cache_integer(state, arg_value, model);
+        if (!concrete_value) return;
+        args.push_back(*concrete_value);
     }
-    cache_instance.cache_func_value(top_frame.func, args,
-                                    concrete_result.as_int64());
+    cache_instance.cache_func_value(top_frame.func, args, *concrete_result);
 }
 
 std::vector<state_ptr>
@@ -1624,11 +1657,18 @@ AInstructionPhi::execute(state_ptr state) {
     // The legacy recurrence route does not distinguish successive Boolean
     // oracle values in its exit relation. Use the sequence-aware accelerator
     // for recognized nondeterministic header controls even in normal mode.
-    // The experimental relaxation also selects the path-expression route;
-    // it is intended to bypass the first-break modulo bottleneck here.
+    // Arithmetic semantics does not select the acceleration algorithm;
+    // path-expression experiments have their own explicit mode switch.
+    const bool memory_loop = loop && std::any_of(
+        loop->block_begin(), loop->block_end(), [](llvm::BasicBlock* block) {
+            return std::any_of(block->begin(), block->end(),
+                [](const llvm::Instruction& instruction) {
+                    return llvm::isa<llvm::LoadInst>(instruction) ||
+                           llvm::isa<llvm::StoreInst>(instruction);
+                });
+        });
     if (loop && !force_path_expression_mode() &&
-        !loop->getParentLoop() && loop->getSubLoops().empty() &&
-        !state->session.uses_integer_relaxation() &&
+        (memory_loop || (!loop->getParentLoop() && loop->getSubLoops().empty())) &&
         !PathExpressionAccelerator::has_nondeterministic_header_control(loop) &&
         !state->session.loop_summary_failed(loop)) {
         if (!state->is_summarizing()) {
@@ -1637,6 +1677,11 @@ AInstructionPhi::execute(state_ptr state) {
                 return accelarated_states;
             } else {
                 state->session.mark_loop_summary_failed(loop);
+                if (memory_loop && (loop->getParentLoop() || !loop->getSubLoops().empty())) {
+                    auto unknown = std::make_shared<State>(*state);
+                    unknown->status = State::UNKNOWN;
+                    return {unknown};
+                }
             }
         }
     }
@@ -1696,22 +1741,30 @@ AInstructionPhi::execute(loop_state_ptr state) {
     auto& LI = manager->get_LI(phi_inst->getFunction());
     auto loop = LI.getLoopFor(phi_inst->getParent());
 
-    if (loop && !state->session.loop_summary_failed(loop)) {
+    if (loop) {
         auto outer_loop = state->summarizing_loop;
         auto header = loop->getHeader();
         bool is_first_phi = phi_inst == &*header->phis().begin();
         bool is_strict_inner_loop = outer_loop && loop != outer_loop && outer_loop->contains(loop);
         if (is_first_phi && is_strict_inner_loop) {
+            if (state->session.loop_summary_failed(loop)) {
+                auto unknown = std::make_shared<LoopState>(*state);
+                unknown->status = State::UNKNOWN;
+                return {unknown};
+            }
             spdlog::info("Summarizing nested loop {}", loop->getHeader()->getName().str());
             auto accelerated_states = execute_if_summarizable(std::static_pointer_cast<State>(state));
             if (accelerated_states.empty()) {
                 state->session.mark_loop_summary_failed(loop);
-                return {};
+                auto unknown = std::make_shared<LoopState>(*state);
+                unknown->status = State::UNKNOWN;
+                return {unknown};
             }
 
             loop_state_list nested_states;
             for (auto& accelerated_state : accelerated_states) {
-                auto nested_state = std::make_shared<LoopState>(*accelerated_state);
+                auto nested_state = std::dynamic_pointer_cast<LoopState>(accelerated_state);
+                if (!nested_state) nested_state = std::make_shared<LoopState>(*accelerated_state);
                 nested_state->path_condition_in_loop = state->path_condition_in_loop;
                 nested_state->summarizing_loop = outer_loop;
                 nested_states.push_back(nested_state);
@@ -1739,6 +1792,81 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     // try summarizing the loop only when encountering the first phi of the loop
     if (phi_inst != &*header->phis().begin()) return {};
 
+    auto exit_block = loop->getUniqueExitBlock();
+    if (!exit_block) return {};
+    llvm::SmallVector<llvm::BasicBlock*, 4> exiting_blocks;
+    loop->getExitingBlocks(exiting_blocks);
+    auto exit_predecessor = exiting_blocks.front();
+    if (std::find(exiting_blocks.begin(), exiting_blocks.end(), header) !=
+        exiting_blocks.end()) exit_predecessor = header;
+    std::set<llvm::BasicBlock*> exit_prefix;
+    if (exiting_blocks.size() > 1) {
+        if (!loop->getSubLoops().empty()) return {};
+        // This shortcut rebuilds header values, not a partial body iteration.
+        // Keep ordinary execution when an exit needs additional live-outs or
+        // side effects, or when its PHIs distinguish incoming exit edges.
+        for (auto& phi : exit_block->phis()) {
+            auto* value = phi.getIncomingValueForBlock(exit_predecessor);
+            for (auto* predecessor : exiting_blocks) {
+                if (phi.getIncomingValueForBlock(predecessor) != value) return {};
+            }
+        }
+        for (auto* block : loop->blocks()) {
+            if (!llvm::isa<llvm::BranchInst>(block->getTerminator()) &&
+                !llvm::isa<llvm::SwitchInst>(block->getTerminator())) return {};
+            for (auto& instruction : *block) {
+                if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction)) {
+                    auto* callee = resolve_called_function(call);
+                    if (!callee || callee->hasExactDefinition() ||
+                        !call->getType()->isIntegerTy() ||
+                        !callee->getName().starts_with("__VERIFIER_nondet_")) return {};
+                }
+            }
+            if (block == header) {
+                for (auto& instruction : *block) {
+                    auto* load = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+                    if (!load) continue;
+                    auto* global = llvm::dyn_cast<llvm::GlobalVariable>(
+                        load->getPointerOperand()->stripPointerCasts());
+                    if (!global || load->isVolatile() || load->isAtomic()) return {};
+                    for (auto* body : loop->blocks()) {
+                        for (auto& candidate : *body) {
+                            auto* store = llvm::dyn_cast<llvm::StoreInst>(&candidate);
+                            if (!store) continue;
+                            auto* base = llvm::getUnderlyingObject(store->getPointerOperand());
+                            if (base == global || (!llvm::isa<llvm::AllocaInst>(base) &&
+                                                   !llvm::isa<llvm::GlobalVariable>(base))) return {};
+                        }
+                    }
+                }
+            }
+            if (block == header) continue;
+            for (auto& instruction : *block) {
+                for (auto* user : instruction.users()) {
+                    auto* use = llvm::dyn_cast<llvm::Instruction>(user);
+                    if (use && !loop->contains(use)) return {};
+                }
+            }
+        }
+        std::vector<llvm::BasicBlock*> pending(exiting_blocks.begin(), exiting_blocks.end());
+        while (!pending.empty()) {
+            auto* block = pending.back();
+            pending.pop_back();
+            if (block == header || !loop->contains(block) ||
+                !exit_prefix.insert(block).second) continue;
+            for (auto& instruction : *block) {
+                if (llvm::isa<llvm::LoadInst>(instruction)) return {};
+                auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                auto* callee = call ? resolve_called_function(call) : nullptr;
+                const bool nondeterministic_input = callee &&
+                    callee->getName().starts_with("__VERIFIER_nondet_");
+                if (instruction.mayHaveSideEffects() &&
+                    !instruction.isTerminator() && !nondeterministic_input) return {};
+            }
+            for (auto* predecessor : llvm::predecessors(block)) pending.push_back(predecessor);
+        }
+    }
+
     spdlog::info("Summarizing loop {}", loop->getHeader()->getName().str());
     auto loop_summarizer = LoopSummarizer(loop, state);
     auto summary = loop_summarizer.get_summary();
@@ -1746,9 +1874,13 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         spdlog::info("Cannot summarize loop {}", loop->getHeader()->getName().str());
         return {};
     }
+    if (state->is_summarizing() &&
+        (summary->is_over_approximated() || !summary->has_functional_iteration_count())) return {};
 
-    state_ptr new_state = std::make_shared<State>(*state);
-    if (!summary->is_over_approximated()) {
+    state_ptr new_state = clone_state_preserving_type(state);
+    new_state->summary_obligations.insert(new_state->summary_obligations.end(),
+        summary->get_obligations().begin(), summary->get_obligations().end());
+    if (!summary->is_over_approximated() && !state->is_summarizing()) {
         LoopCertificate certificate{loop, {}};
         const auto modified = summary->get_modified_values();
         const unsigned count = std::min<unsigned>(
@@ -1776,6 +1908,21 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         }
     }
     const auto iteration_count = summary->get_N();
+    if (auto outer = std::dynamic_pointer_cast<LoopState>(new_state)) {
+        for (auto& [call, counter] : outer->unknown_call_counters) {
+            if (!loop->contains(call->getParent())) continue;
+            const auto name = get_z3_name(call->getName().str()) + "_call_count";
+            const auto parameter = state->z3ctx.int_const(name.c_str());
+            auto value = summary->evaluate_expr(parameter);
+            if (iteration_count) {
+                z3::expr_vector src(state->z3ctx), dst(state->z3ctx);
+                src.push_back(manager->get_ind_var());
+                dst.push_back(*iteration_count);
+                value = value.substitute(src, dst);
+            }
+            counter = value.simplify();
+        }
+    }
     auto& loop_info = manager->get_LI(phi_inst->getFunction());
     auto& dominator_tree = manager->get_DT(phi_inst->getFunction());
     llvm::BasicBlock* latch = loop->getLoopLatch();
@@ -1803,6 +1950,11 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                 call->getType()->isIntegerTy(1)
                     ? state->z3ctx.bool_sort() : state->z3ctx.int_sort());
             z3::expr call_count = *iteration_count;
+            if (exit_prefix.count(block)) {
+                // A body exit may consume one more input than the backedge
+                // count records. Do not advertise a complete witness trace.
+                new_state->counterexample_complete = false;
+            }
             if (block == header) {
                 // A call in the loop header is also evaluated once for the
                 // final, false guard check.
@@ -1828,15 +1980,11 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         }
     }
 
+    new_state->counterexample_complete = new_state->counterexample_complete &&
+                                        summary->has_exact_feasibility();
+
     // assert(!summary->is_over_approximated() && "Over-approximation is not supported yet");
 
-
-    auto exit_block = loop->getExitBlock();
-    // only consider those loops with only one exit block
-    if (!exit_block) {
-        new_state->status = State::TERMINATED;
-        return {new_state};
-    }
 
     auto entering_block = get_loop_entering_block(loop);
     if (summary->is_over_approximated()) {
@@ -1894,6 +2042,7 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
         auto modified_values = summary->get_modified_values();
         for (int i = 0; i < closed_forms.size(); i++) {
             auto modified_value = modified_values[i];
+            if (summary->preserves_value(modified_value)) continue;
             auto N = summary->get_N();
             z3::expr summarized_value = closed_forms[i];
             if (N.has_value()) {
@@ -1903,6 +2052,7 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                 dst.push_back(N.value());
                 summarized_value = summarized_value.substitute(src, dst);
             }
+            summarized_value = new_state->session.expand_aggregates(summarized_value);
             if (auto obj =
                     new_state->memory.get_object_pointed_by(modified_value)) {
                 obj->write(summarized_value);
@@ -1929,12 +2079,17 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
             res.push_back(cur_state);
             continue;
         }
-        auto new_states = cur_state->pc->execute(cur_state);
+        state_list new_states;
+        if (auto nested = std::dynamic_pointer_cast<LoopState>(cur_state)) {
+            for (auto& next : cur_state->pc->execute(nested)) new_states.push_back(next);
+        } else {
+            new_states = cur_state->pc->execute(cur_state);
+        }
         for (auto& new_state : new_states) states.push(new_state);
     }
 
     for (auto& state : res) {
-        state->trace.push_back(header);
+        state->trace.push_back(exit_predecessor);
         // auto new_pc = AInstruction::create(&*exit_block->begin());
         auto exit_block_first_inst = &*exit_block->begin();
         // if (exit_block_first_inst->isDebugOrPseudoInst())
@@ -2049,9 +2204,49 @@ parse_gep(llvm::GetElementPtrInst* gep, state_ptr state) {
         addr = parse_ptr(pointed_obj, state);
     }
 
+    pointed_obj = state->memory.get_object(addr);
+    const auto dimensions = pointed_obj->get_sizes().size();
+    if (addr.offset.empty()) {
+        for (unsigned i = 0; i < dimensions; ++i)
+            addr.offset.emplace_back(z3ctx.int_val(0));
+    }
+    if (addr.offset.size() != dimensions) {
+        throw std::runtime_error("Noncanonical base address for GEP");
+    }
+    llvm::Type* indexed_type = gep->getSourceElementType();
+    bool first = true;
     for (auto& idx : gep->indices()) {
-        auto idx_value = state->evaluate(idx.get());
-        addr.offset.push_back(idx_value);
+        if (!first) {
+            if (!indexed_type->isArrayTy()) {
+                throw std::runtime_error("Unsupported non-array aggregate in GEP");
+            }
+            indexed_type = indexed_type->getArrayElementType();
+        }
+        first = false;
+        Expression index = state->evaluate(idx.get());
+        unsigned rank = 0;
+        z3::expr cells = z3ctx.int_val(1);
+        for (auto* type = indexed_type; type->isArrayTy();
+             type = type->getArrayElementType()) {
+            ++rank;
+            cells = cells * z3ctx.int_val(
+                std::to_string(type->getArrayNumElements()).c_str());
+        }
+        if (dimensions == 0) {
+            if (!z3::eq(index.as_expr().simplify(), z3ctx.int_val(0)))
+                throw std::runtime_error("Nonzero scalar-object GEP offset");
+            continue;
+        }
+        if (dimensions == 1) {
+            // VLA lowering uses chained scalar GEPs: accumulate i*n, then j.
+            addr.offset[0] = addr.offset[0] + index * Expression(cells.simplify());
+        } else if (rank < dimensions) {
+            addr.offset[dimensions-rank-1] = addr.offset[dimensions-rank-1] + index;
+        } else if (rank == dimensions) {
+            addr.offset[0] = addr.offset[0] + index * pointed_obj->get_sizes()[0];
+        } else {
+            throw std::runtime_error("GEP aggregate rank exceeds array dimensions");
+        }
     }
     return addr;
 }
@@ -2130,9 +2325,6 @@ AInstructionGEP::execute(state_ptr state) {
     auto new_state = std::make_shared<State>(*state);
     auto addr = parse_gep(gep, new_state);
     auto target_obj = new_state->memory.get_object(addr);
-    if (target_obj->get_sizes().size() < addr.offset.size()) {
-        addr.offset = std::vector<Expression>(addr.offset.begin() + 1, addr.offset.end());
-    }
     new_state->memory.put_temp(inst, addr);
     // new_state->store_gep(gep);
     new_state->step_pc();

@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include "z3++.h"
 #include <iostream>
@@ -300,12 +301,17 @@ namespace ari_exe {
 
             template<>
             inline z3::expr Matrix<z3::expr>::data_div(const z3::expr& a, const z3::expr& b) {
-                assert((b != a.ctx().int_val(0)).simplify().is_true() && "Division by zero");
+                if (!(b != a.ctx().int_val(0)).simplify().is_true()) {
+                    throw std::domain_error("Integer elimination pivot is not provably nonzero");
+                }
                 z3::solver solver(a.ctx());
+                solver.set("timeout", 100u);
                 auto to_check = (a / b * b) != a;
                 solver.add(to_check);
                 auto res = solver.check();
-                assert(res == z3::unsat && "for z3::expr matrix, division only applicable when a is a multiple of b");
+                if (res != z3::unsat) {
+                    throw std::domain_error("Integer elimination requires exact division");
+                }
                 return (a / b).simplify();
             }
 

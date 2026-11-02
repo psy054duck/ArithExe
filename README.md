@@ -24,6 +24,7 @@ Other versions may also applicable.
 * Boost
 * LLVM 20.1.8 (the current frontend uses LLVM's debug-variable records)
 * Z3 4.13.4.0
+* ISL (discovered with pkg-config; Ubuntu package `libisl-dev`)
 * google test (can be download automatically by provided CMakeLists.txt)
 *  spdlog (also download by cmake automatically)
 
@@ -55,6 +56,16 @@ ctest
 ```
 
 ## Usage
+
+An opt-in guarded unfold/fold tupling backend is documented in
+[docs/tupling.md](docs/tupling.md). Enable it with
+`ARITHEXE_MULTIVARIATE_STRATEGY=tupling`; the existing pivot implementation
+and default behavior are unchanged.
+
+For reproducible array-fpi experiments, use the BenchExec runner described in
+[docs/benchexec.md](docs/benchexec.md). It records resource limits, source hashes,
+task metadata, per-task logs, and HTML/CSV tables.
+
 After building, an executable called `arith_exe` will be in `build` folder.
 The following is the format to run it. A conclusive result writes an
 SV-COMP YAML 2.1 witness to `witness.yml` by default.

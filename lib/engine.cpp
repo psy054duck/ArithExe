@@ -114,7 +114,9 @@ Engine::run(state_ptr state) {
             auto res = test(cur_state);
             if (res == FEASIBLE) {
                 if (cur_state->is_over_approx ||
-                    !cur_state->counterexample_complete) {
+                    !cur_state->counterexample_complete ||
+                    session->contains_aggregates(session->expand_aggregates(
+                        cur_state->get_path_condition().as_expr()))) {
                     record_issue(
                         cur_state->is_over_approx
                             ? VerifierIssueKind::OverApproximation
@@ -149,7 +151,8 @@ Engine::run(state_ptr state) {
             results.push_back(VERIUNKNOWN);
             return;
         } else if (cur_state->status == State::FAIL) {
-            if (!cur_state->counterexample_complete) {
+            if (!cur_state->counterexample_complete ||
+                session->contains_aggregates(cur_state->get_path_condition().as_expr())) {
                 record_issue(VerifierIssueKind::IncompleteCounterexample,
                              "counterexample path is incomplete");
                 results.push_back(VERIUNKNOWN);
@@ -218,19 +221,19 @@ Engine::verify(state_ptr state) {
     z3::expr assertion_defined(z3ctx);
     z3::expr assertion(z3ctx);
     try {
-        path_condition = state->get_path_condition().as_expr();
+        path_condition = session->expand_aggregates(state->get_path_condition().as_expr());
     } catch (const z3::exception& error) {
         throw std::runtime_error("failed to assemble assertion path: " +
                                  std::string(error.msg()));
     }
     try {
-        assertion_defined = state->verification_condition.defined();
+        assertion_defined = session->expand_aggregates(state->verification_condition.defined());
     } catch (const z3::exception& error) {
         throw std::runtime_error("failed to assemble assertion definedness: " +
                                  std::string(error.msg()));
     }
     try {
-        assertion = state->verification_condition.as_expr();
+        assertion = session->expand_aggregates(state->verification_condition.as_expr());
     } catch (const z3::exception& error) {
         throw std::runtime_error("failed to assemble verification condition: " +
                                  std::string(error.msg()));
@@ -257,6 +260,7 @@ Engine::verify(state_ptr state) {
     z3::check_result res = z3::unknown;
     try {
         solver.add(assumptions);
+        solver.add(session->aggregate_identities(z3::mk_and(assumptions), path_condition));
         res = solver.check();
     } catch (const z3::exception& error) {
         throw std::runtime_error("Z3 assertion query failed: " +
@@ -268,7 +272,10 @@ Engine::verify(state_ptr state) {
             result = HOLD;
             break;
         case z3::sat:
-            if (state->is_over_approx || !state->counterexample_complete) {
+            if (state->is_over_approx || !state->counterexample_complete ||
+                session->contains_aggregates(path_condition) ||
+                session->contains_aggregates(assertion_defined) ||
+                session->contains_aggregates(assertion)) {
                 record_issue(
                     state->is_over_approx
                         ? VerifierIssueKind::OverApproximation
@@ -356,9 +363,10 @@ TestResult
 Engine::test(state_ptr state) {
     auto activation = session->activate();
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(state->get_path_condition().as_expr());
+    assumptions.push_back(session->expand_aggregates(state->get_path_condition().as_expr()));
     solver.reset();
     solver.add(assumptions);
+    solver.add(session->aggregate_identities(z3::mk_and(assumptions), assumptions[0]));
     auto res = solver.check();
     TestResult result;
     switch (res) {

@@ -1,5 +1,6 @@
 #include "rec_solver.h"
 #include "VerificationSession.h"
+#include "llvm/Support/JSON.h"
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
@@ -94,7 +95,8 @@ namespace {
                 return nested;
             }
         }
-        if (expression.is_app() &&
+        // The recurrence language's symbolic parameters have integer sort.
+        if (expression.is_int() && expression.is_app() &&
             expression.decl().decl_kind() == Z3_OP_ITE &&
             !depends_on_recurrence(expression, recurrence_declarations,
                                    induction_variable)) {
@@ -567,8 +569,12 @@ rec_solver::set_eqs(const std::vector<z3::expr>& _conds, const std::vector<rec_t
             ("ari_rec_parameter_" +
              std::to_string(recurrence_parameters.size()))
                 .c_str());
+        // Inner ITEs are abstracted first. Keep each binding fully expanded:
+        // Z3's simultaneous substitution does not rewrite inserted values.
+        z3::expr value = invariant->substitute(
+            recurrence_parameters, recurrence_parameter_values);
         recurrence_parameters.push_back(parameter);
-        recurrence_parameter_values.push_back(*invariant);
+        recurrence_parameter_values.push_back(value);
         z3::expr_vector source(z3ctx);
         z3::expr_vector destination(z3ctx);
         source.push_back(*invariant);
@@ -693,6 +699,9 @@ closed_form_ty rec_solver::get_res() {
 }
 
 void rec_solver::add_initial_values(z3::expr_vector k, z3::expr_vector v) {
+    if (k.size() != v.size()) {
+        throw std::invalid_argument("Recurrence initial-value keys and values must have equal lengths");
+    }
     int size = k.size();
     for (int i = 0; i < size; i++) {
         bool found = false;
@@ -723,6 +732,11 @@ std::string rec_solver::rec2string() {
 }
 
 std::string rec_solver::z3_infix(z3::expr e) {
+    if (!e.is_app()) {
+        throw std::runtime_error(
+            "Unsupported non-application expression in recurrence: " +
+            e.to_string());
+    }
     if (e.is_const() || e.is_numeral()) {
         if (e.to_string().starts_with("nondet")) {
             return "*";
@@ -951,19 +965,49 @@ bool rec_solver::is_ite_free(z3::expr e) {
 }
 
 void rec_solver::smt2_to_z3(const std::string& smt2) {
-    z3::expr_vector c = z3ctx.parse_string(smt2.c_str());
+    std::string summary = smt2;
+    const auto first = smt2.find_first_not_of(" \t\r\n");
+    if (first != std::string::npos && smt2[first] == '{') {
+        auto document = llvm::json::parse(smt2);
+        if (!document) throw std::invalid_argument(llvm::toString(document.takeError()));
+        auto* object = document->getAsObject();
+        auto format = object ? object->getString("format") : std::nullopt;
+        auto text = object ? object->getString("summary") : std::nullopt;
+        auto* definitions = object ? object->getArray("aggregates") : nullptr;
+        if (!format || *format != "arith-exe-aggregates-v1" || !text || !definitions) {
+            throw std::invalid_argument("malformed aggregate solver response");
+        }
+        for (const auto& value : *definitions) {
+            const auto* definition = value.getAsObject();
+            auto kind = definition ? definition->getString("kind") : std::nullopt;
+            auto encoded = definition ? definition->getString("smt2") : std::nullopt;
+            if (!kind || (*kind != "sum" && *kind != "product") || !encoded) {
+                throw std::invalid_argument("malformed aggregate metadata");
+            }
+            auto parts = z3ctx.parse_string(encoded->str().c_str());
+            if (parts.size() != 2 || !parts[0].is_eq() || !parts[1].is_eq()) {
+                throw std::invalid_argument("malformed aggregate binding");
+            }
+            VerificationSession::current().register_aggregate(
+                *kind == "product", parts[0].arg(0), parts[1].arg(0), parts[0].arg(1));
+        }
+        summary = text->str();
+    }
+    z3::expr_vector c = z3ctx.parse_string(summary.c_str());
+    closed_form_ty parsed;
     for (auto e : c) {
         auto kind = e.decl().decl_kind();
         auto args = e.args();
-        assert(kind == Z3_OP_EQ);
+        if (kind != Z3_OP_EQ) throw std::invalid_argument("expected a summary equality");
         z3::expr k = args[0].simplify();
         z3::expr v = args[1].simplify();
         if (k.is_numeral()) {
             k = args[1];
             v = args[0];
         }
-        res.insert_or_assign(k, v.simplify());
+        parsed.insert_or_assign(k, VerificationSession::current().expand_aggregates(v));
     }
+    res = std::move(parsed);
 }
 
 void rec_solver::print_recs() {

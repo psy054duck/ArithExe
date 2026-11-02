@@ -7,6 +7,12 @@ from .logic_simplification import DNFConverter, equals
 from functools import reduce
 # z3.set_option(max_depth=99999999, max_args=9999999, max_width=999999999, max_lines=99999999, max_indent=99999999)
 
+
+def _export_key(conditions, closed_forms):
+    # Keep AST references alive and notice mutations through the public lists.
+    return (tuple(conditions), tuple(tuple(closed.items()) for closed in closed_forms))
+
+
 class PeriodicClosedForm:
     def __init__(self, closed_form_list, ind_var, conditions=None):
         self._closed_form_list = closed_form_list
@@ -15,6 +21,8 @@ class PeriodicClosedForm:
             self._conditions = conditions
         else:
             self._conditions = [self.ind_var % self.period == i for i in range(self.period)]
+        self._dict_cache_key = None
+        self._dict_cache = None
     
     def eval_at(self, n):
         # if self.period == 1:
@@ -46,6 +54,9 @@ class PeriodicClosedForm:
         return res
 
     def as_dict(self):
+        key = _export_key(self._conditions, self._closed_form_list)
+        if key == self._dict_cache_key:
+            return self._dict_cache.copy()
         tmp_res = defaultdict(list)
         # for i in range(self.period):
         for i, cond in enumerate(self.conditions):
@@ -54,7 +65,10 @@ class PeriodicClosedForm:
             #     cond = self.ind_var % self.period == i
             for f in self.closed_forms[i]:
                 tmp_res[f].append((utils.sp_z3_simplify(self.closed_forms[i][f], cond), cond))
-        return {z3.simplify(f): utils.to_ite(tmp_res[f]) for f in tmp_res}
+        result = {z3.simplify(f): utils.to_ite(tmp_res[f]) for f in tmp_res}
+        self._dict_cache_key = key
+        self._dict_cache = result
+        return result.copy()
 
     def pprint(self):
         sp.init_printing()
@@ -162,6 +176,8 @@ class PiecewiseClosedForm:
         self._conditions = conditions
         self._closed_forms = closed_forms
         self._ind_var = ind_var
+        self._dict_cache_key = None
+        self._dict_cache = None
 
     def concatenate(self, latter_closed, threshold):
         conditions = [z3.And(cond, self.ind_var < threshold) for cond in self.conditions]
@@ -213,6 +229,9 @@ class PiecewiseClosedForm:
 
     def as_dict(self):
         closed_forms_z3 = [closed.as_dict() for closed in self.closed_forms]
+        key = _export_key(self._conditions, closed_forms_z3)
+        if key == self._dict_cache_key:
+            return self._dict_cache.copy()
         res = {}
         for var in self.all_vars:
             var_z3 = var
@@ -222,7 +241,9 @@ class PiecewiseClosedForm:
                 # closed = closed_forms_z3[i][var_z3]
                 expr_z3 = z3.If(cond, closed[var], expr_z3)
             res[var_z3] = z3.simplify(expr_z3)
-        return res
+        self._dict_cache_key = key
+        self._dict_cache = res
+        return res.copy()
 
     def __str__(self):
         res = ''
@@ -289,7 +310,9 @@ class SymbolicClosedForm:
         # self._simplify_constraints()
         self._flatten_conditions = None
         self._flatten_closed_forms = None
-        self._simplify()
+        self._flatten_cache_key = None
+        self._dict_cache_key = None
+        self._dict_cache = None
         # assert(self._check_consistant())
 
     def _reorder(self):
@@ -299,10 +322,10 @@ class SymbolicClosedForm:
         self._constraints[longest_idx], self._constraints[-1] = self._constraints[-1], self._constraints[longest_idx]
         self._closed_forms[longest_idx], self._closed_forms[-1] = self._closed_forms[-1], self._closed_forms[longest_idx]
 
-    def _simplify(self):
+    def _simplify(self, conditions=None, closed_forms=None):
+        if conditions is None:
+            conditions, closed_forms = self._flatten_inputs()
         merged = defaultdict(set)
-        conditions = self.flatten_conditions
-        closed_forms = self.flatten_closed_forms
         for i, (cond_replaced, closed_replaced) in enumerate(zip(conditions, closed_forms)):
             for j, closed_match in enumerate(closed_forms):
                 # if i == j or any((j in s) for s in merged.values()): continue
@@ -313,17 +336,17 @@ class SymbolicClosedForm:
         E = sum([[(i, j) for j in merged[i]] for i in merged], [])
         res_conditions = []
         res_closed_forms = []
-        converter = DNFConverter()
         for component in strongly_connected_components((V, E)):
             any_idx = component[0]
             cur_cond = z3.Or([conditions[i] for i in component])
-            simplified = z3.Or([z3.And(c) for c in converter.to_dnf(cur_cond)])
-            simplified = z3.Or([z3.And(c) for c in converter.to_dnf(simplified)])
+            # Merged guards need not be enumerated into a normal form.
+            simplified = z3.simplify(cur_cond)
             cur_closed = closed_forms[any_idx]
             res_conditions.append(z3.simplify(simplified))
             res_closed_forms.append(cur_closed)
         self._flatten_conditions = res_conditions
         self._flatten_closed_forms = res_closed_forms
+        self._flatten_cache_key = _export_key(conditions, closed_forms)
 
     def _check_consistant(self):
         solver = z3.Solver()
@@ -388,14 +411,20 @@ class SymbolicClosedForm:
         return SymbolicClosedForm(constraints, closed_forms, self.ind_var)
 
     def as_dict(self):
+        closed_forms_z3 = [closed.as_dict() for closed in self._closed_forms]
+        key = _export_key(self._constraints, closed_forms_z3)
+        if key == self._dict_cache_key:
+            return self._dict_cache.copy()
         res = {}
         for var in self.all_vars:
             var_z3 = var
-            expr = self._closed_forms[-1].as_dict()[var_z3]
-            for constraint, closed in zip(self._constraints[:-1], self._closed_forms[:-1]):
-                expr = z3.If(constraint, closed.as_dict()[var_z3], expr)
+            expr = closed_forms_z3[-1][var_z3]
+            for constraint, closed in zip(self._constraints[:-1], closed_forms_z3[:-1]):
+                expr = z3.If(constraint, closed[var_z3], expr)
             res[var_z3] = z3.simplify(expr)
-        return res
+        self._dict_cache_key = key
+        self._dict_cache = res
+        return res.copy()
 
     @property
     def ind_var(self):
@@ -445,27 +474,26 @@ class SymbolicClosedForm:
 
     @property
     def flatten_conditions(self):
-        if self._flatten_conditions is not None:
-            return self._flatten_conditions
-
-        res = []
-        for case, closed in zip(self._constraints, self._closed_forms):
-            for cond in closed.flatten_conditions:
-                res.append(z3.And(case, cond))
-        self._flatten_conditions = res
-        return res
+        self._ensure_flattened()
+        return self._flatten_conditions
 
     @property
     def flatten_closed_forms(self):
-        if self._flatten_closed_forms is not None:
-            return self._flatten_closed_forms
+        self._ensure_flattened()
+        return self._flatten_closed_forms
 
-        res = []
-        for closed in self._closed_forms:
-            for c in closed.flatten_closed_forms:
-                res.append(c)
-        self._flatten_closed_forms = res
-        return res
+    def _flatten_inputs(self):
+        conditions, closed_forms = [], []
+        for case, closed in zip(self._constraints, self._closed_forms):
+            conditions.extend(z3.And(case, cond) for cond in closed.flatten_conditions)
+            closed_forms.extend(closed.flatten_closed_forms)
+        return conditions, closed_forms
+
+    def _ensure_flattened(self):
+        conditions, closed_forms = self._flatten_inputs()
+        key = _export_key(conditions, closed_forms)
+        if key != self._flatten_cache_key:
+            self._simplify(conditions, closed_forms)
 
 class ExprClosedForm:
     def __init__(self, closed_forms, ind_var):

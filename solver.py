@@ -4,6 +4,7 @@ import z3
 import fire
 import os
 import sys
+import json
 from functools import reduce
 from sympy.core.function import AppliedUndef
 from pathlib import Path
@@ -11,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'rec_solver'))
 from rec_solver import solve_str
 from rec_solver.core.closed_form import MultiFuncClosedForm, ExprClosedForm, SymbolicClosedForm, PiecewiseClosedForm
-from rec_solver.core.utils import to_z3, get_applied_functions
+from rec_solver.core.utils import to_z3, get_applied_functions, conversion_cache
 
 def env_flag(name, default=True):
     raw_value = os.environ.get(name)
@@ -43,6 +44,17 @@ def solver_options():
         poly_expr_strategy=os.environ.get("ARITHEXE_POLY_EXPR_STRATEGY", "auto"),
         poly_expr_order=env_int("ARITHEXE_POLY_EXPR_ORDER", 1),
         poly_expr_degree=env_optional_int("ARITHEXE_POLY_EXPR_DEGREE"),
+        multivariate_strategy=os.environ.get("ARITHEXE_MULTIVARIATE_STRATEGY", "pivot"),
+        modulo_max_branches=env_int("ARITHEXE_MODULO_MAX_BRANCHES", 128),
+        enable_aggregates=env_flag("ARITHEXE_ENABLE_AGGREGATES"),
+        phase_length_options=dict(
+            enabled=env_flag("ARITHEXE_PHASE_PREPROCESSING"),
+            check_timeout_ms=env_int("ARITHEXE_PHASE_CHECK_TIMEOUT_MS", 100),
+            max_transitions=env_int("ARITHEXE_PHASE_MAX_TRANSITIONS", 32),
+            max_enum_count=env_int("ARITHEXE_PHASE_MAX_ENUM_COUNT", 8),
+            max_variants=env_int("ARITHEXE_PHASE_MAX_VARIANTS", 16),
+            total_time_ms=env_int("ARITHEXE_PHASE_BUDGET_MS", 1000),
+        ),
     )
 
 def closed_form_to_smt2(closed):
@@ -68,7 +80,18 @@ def closed_form_to_smt2(closed):
     new_closed_dict = {z3.substitute(k, remove_func_mapping): z3.substitute(v, remove_func_mapping) for k, v in closed_dict.items()}
     for k, e in new_closed_dict.items():
         solver.add(k == e)
-    return solver.to_smt2()
+    smt2 = solver.to_smt2()
+    if hasattr(closed, "aggregates"):
+        return json.dumps(dict(format="arith-exe-aggregates-v1", summary=smt2,
+                               aggregates=closed.aggregates.export()))
+    return smt2
 
 def solve_str_to_smt2(recurrence):
-    return closed_form_to_smt2(solve_str(recurrence, **solver_options()))
+    stats = {}
+    try:
+        with conversion_cache():
+            return closed_form_to_smt2(solve_str(
+                recurrence, phase_length_stats=stats, **solver_options()))
+    finally:
+        if env_flag("ARITHEXE_PHASE_STATS", default=False):
+            print("Phase-length statistics: " + json.dumps(stats), file=sys.stderr, flush=True)

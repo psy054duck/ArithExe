@@ -5,9 +5,12 @@
 
 #include <set>
 #include <unordered_set>
+#include <unordered_map>
+#include <functional>
 #include <spdlog/spdlog.h>
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 
 namespace ari_exe {
 
@@ -25,7 +28,7 @@ namespace ari_exe {
         for (const auto& clause : clauses) {
             solver.push();
             solver.add(!clause);
-            if (solver.check() == z3::sat) {
+            if (solver.check() != z3::unsat) {
                 // this clause is not entailed, so keep it
                 z3::expr_vector literals(z3ctx);
                 if (clause.is_or()) {
@@ -62,6 +65,7 @@ namespace ari_exe {
      */
     static bool
     conditionally_eq(const z3::expr& cond, const z3::expr& e1, const z3::expr& e2) {
+        if (z3::eq(e1, e2)) return true;
         auto& z3ctx = e1.ctx();
         z3::solver s(z3ctx);
         z3::params p(z3ctx);
@@ -69,7 +73,6 @@ namespace ari_exe {
         s.set(p);
         s.add(cond);
         s.add(e1 != e2);
-        s.check();
         return s.check() == z3::unsat;
     }
 
@@ -118,23 +121,151 @@ namespace ari_exe {
 
     z3::expr
     restrict_to_domain(const z3::expr& f, z3::expr domain) {
-        auto [conditions, expressions] = expr2piecewise(f);
-        auto solver = z3::solver(f.ctx());
+        z3::solver solver(f.ctx());
+        z3::params parameters(f.ctx());
+        parameters.set("timeout", 50u);
+        solver.set(parameters);
         solver.add(domain);
-        auto feasible_conditions = z3::expr_vector(f.ctx());
-        auto feasible_expressions = z3::expr_vector(f.ctx());
-        for (int i = 0; i < conditions.size(); ++i) {
-            // auto restricted_conditions = simplify(conditions[i] && domain);
-            auto restricted_conditions = simplify(conditions[i], domain);
+        unsigned queries = 0;
+        auto entails = [&](const z3::expr& condition) {
+            if (queries >= 256) return false;
+            ++queries;
             solver.push();
-            solver.add(restricted_conditions);
-            if (solver.check() == z3::sat) {
-                feasible_conditions.push_back(restricted_conditions);
-                feasible_expressions.push_back(expressions[i]);
-            }
+            solver.add(!condition);
+            const bool proved = solver.check() == z3::unsat;
             solver.pop();
-        }
-        return piecewise2ite(feasible_conditions, feasible_expressions);
+            return proved;
+        };
+        std::unordered_map<unsigned, bool> polynomial_cache;
+        unsigned polynomial_nodes = 0;
+        std::function<bool(const z3::expr&)> is_polynomial;
+        is_polynomial = [&](const z3::expr& expression) {
+            const auto found = polynomial_cache.find(expression.id());
+            if (found != polynomial_cache.end()) return found->second;
+            if (++polynomial_nodes > 1024 || !expression.is_app() ||
+                (!expression.is_int() && !expression.is_real())) return false;
+            const auto kind = expression.decl().decl_kind();
+            bool result = expression.is_numeral() ||
+                (expression.is_const() && kind == Z3_OP_UNINTERPRETED);
+            if (kind == Z3_OP_ADD || kind == Z3_OP_SUB ||
+                kind == Z3_OP_UMINUS || kind == Z3_OP_MUL) {
+                result = true;
+                for (const auto& argument : expression.args()) {
+                    if (!is_polynomial(argument)) { result = false; break; }
+                }
+            }
+            polynomial_cache.emplace(expression.id(), result);
+            return result;
+        };
+        unsigned polynomial_queries = 0;
+        const auto polynomial_deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(150);
+        auto whole_polynomial = [&](const z3::expr& expression)
+            -> std::optional<z3::expr> {
+            if (!expression.is_int() && !expression.is_real()) return std::nullopt;
+            std::vector<z3::expr> pending{expression};
+            std::unordered_set<unsigned> seen;
+            while (!pending.empty() && seen.size() < 128 &&
+                   polynomial_queries < 8 && queries < 256 &&
+                   std::chrono::steady_clock::now() < polynomial_deadline) {
+                auto candidate = pending.back();
+                pending.pop_back();
+                if (!seen.insert(candidate.id()).second) continue;
+                if (candidate.is_ite()) {
+                    pending.push_back(candidate.arg(2));
+                    pending.push_back(candidate.arg(1));
+                } else if (!candidate.is_numeral() && is_polynomial(candidate)) {
+                    // A leaf polynomial can cover several nonadjacent boundary
+                    // cases, but only a whole-expression certificate permits it.
+                    ++polynomial_queries;
+                    if (entails(expression == candidate)) return candidate.simplify();
+                }
+            }
+            return std::nullopt;
+        };
+        using Cache = std::unordered_map<unsigned, z3::expr>;
+        std::function<z3::expr(const z3::expr&, Cache&)> visit;
+        visit = [&](const z3::expr& expression, Cache& cache) -> z3::expr {
+            const auto found = cache.find(expression.id());
+            if (found != cache.end()) return found->second;
+            z3::expr result = expression;
+            if (queries >= 256 || !expression.is_app() || expression.is_const()) {
+                return expression.simplify();
+            }
+            if (expression.is_ite()) {
+                if (auto polynomial = whole_polynomial(expression)) {
+                    cache.emplace(expression.id(), *polynomial);
+                    return *polynomial;
+                }
+                const z3::expr condition = visit(expression.arg(0), cache);
+                if (condition.is_true() || entails(condition)) {
+                    result = visit(expression.arg(1), cache);
+                } else if (condition.is_false() || entails(!condition)) {
+                    result = visit(expression.arg(2), cache);
+                } else {
+                    // Cache entries are local to the branch assumptions.
+                    Cache then_cache, else_cache;
+                    solver.push();
+                    solver.add(condition);
+                    const z3::expr then_value = visit(expression.arg(1), then_cache);
+                    solver.pop();
+                    solver.push();
+                    solver.add(!condition);
+                    const z3::expr else_value = visit(expression.arg(2), else_cache);
+                    solver.pop();
+                    if (z3::eq(then_value, else_value)) {
+                        result = then_value;
+                    } else if (entails(z3::implies(condition, then_value == else_value))) {
+                        // A boundary value may be an instance of the other
+                        // branch's polynomial on the current domain.
+                        result = else_value;
+                    } else if (entails(z3::implies(!condition, then_value == else_value))) {
+                        result = then_value;
+                    } else {
+                        result = z3::ite(condition, then_value, else_value).simplify();
+                    }
+                }
+            } else {
+                z3::expr_vector arguments(f.ctx());
+                for (const z3::expr& argument : expression.args()) {
+                    arguments.push_back(visit(argument, cache));
+                }
+                result = expression.decl()(arguments).simplify();
+                if (result.is_app() && result.num_args()==2 &&
+                    !result.arg(1).is_numeral() &&
+                    (result.decl().decl_kind()==Z3_OP_IDIV ||
+                     result.decl().decl_kind()==Z3_OP_MOD)) {
+                    const auto divisor=result.arg(1), dividend=result.arg(0);
+                    auto quotient=f.ctx().int_val(0), remainder=f.ctx().int_val(0);
+                    std::vector<z3::expr> terms;
+                    if (dividend.is_app() && dividend.decl().decl_kind()==Z3_OP_ADD)
+                        for (const auto& term:dividend.args()) terms.push_back(term);
+                    else terms.push_back(dividend);
+                    for (const auto& term:terms) {
+                        if (z3::eq(term,divisor)) quotient=quotient+1;
+                        else if (term.is_app() && term.decl().decl_kind()==Z3_OP_MUL) {
+                            auto factor=f.ctx().int_val(1);
+                            bool divided=false;
+                            for (const auto& arg:term.args()) {
+                                if (!divided && z3::eq(arg,divisor)) divided=true;
+                                else factor=factor*arg;
+                            }
+                            if (divided) quotient=quotient+factor;
+                            else remainder=remainder+term;
+                        } else remainder=remainder+term;
+                    }
+                    quotient=quotient.simplify();remainder=remainder.simplify();
+                    // Euclidean coordinates are valid only on a certified
+                    // positive-stride, in-range remainder domain.
+                    if (entails(divisor>0 && remainder>=0 && remainder<divisor))
+                        result=result.decl().decl_kind()==Z3_OP_IDIV ? quotient : remainder;
+                }
+            }
+            cache.emplace(expression.id(), result);
+            return result;
+        };
+        Cache cache;
+        return visit(f, cache);
     }
 
     bool is_feasible(const z3::expr& fml, std::optional<z3::expr> assumption) {
@@ -209,38 +340,70 @@ namespace ari_exe {
 
     z3::expr
     eliminate_ite(const z3::expr& expr) {
-        auto goal = z3::goal(expr.ctx());
-        goal.add(expr);
-        z3::expr_vector to_or(expr.ctx());
-        auto elim_ite = z3::tactic(expr.ctx(), "elim-term-ite");
-        auto elim_res = elim_ite(goal);
-        for (int i = 0; i < elim_res.size(); ++i) {
-            to_or.push_back(elim_res[i].as_expr());
-        }
-        auto eliminated_expr = z3::mk_or(to_or);
-        auto elim_temp = z3::tactic(expr.ctx(), "qe");
-        auto logic = Logic();
-        auto aux_vars = logic.collect_aux_vars(eliminated_expr);
-        if (!aux_vars.empty()) {
-            // If there are auxiliary variables, we need to eliminate them
-            auto exits_expr = z3::exists(aux_vars, eliminated_expr);
-            auto qe_goal = z3::goal(expr.ctx());
-            qe_goal.add(exits_expr);
-            auto qe_res = elim_temp(qe_goal);
-            z3::expr_vector qe_conditions(expr.ctx());
-            for (int j = 0; j < qe_res.size(); ++j) {
-                qe_conditions.push_back(qe_res[j].as_expr());
+        if (!expr.is_bool()) return expr;
+        bool has_ite = false;
+        std::vector<z3::expr> pending{expr};
+        std::set<unsigned> visited;
+        while (!pending.empty()) {
+            const auto term = pending.back();
+            pending.pop_back();
+            if (!visited.insert(term.id()).second) continue;
+            if (term.is_quantifier()) pending.push_back(term.body());
+            if (!term.is_app()) continue;
+            if (term.is_ite()) {
+                has_ite = true;
+                break;
             }
-            eliminated_expr = z3::mk_or(qe_conditions).simplify();
-            assert(is_equivalent(eliminated_expr, expr));
+            for (const auto& argument : term.args()) pending.push_back(argument);
         }
-        return eliminated_expr.simplify();
+        if (!has_ite) return expr.simplify();
+        // Tactics can introduce fresh symbols, but source symbols may also
+        // contain '!'. Only project constants absent from the original AST.
+        const auto original_variables = Logic().collect_vars(expr);
+        try {
+            auto goal = z3::goal(expr.ctx());
+            goal.add(expr);
+            z3::expr_vector to_or(expr.ctx());
+            auto elim_ite = z3::tactic(expr.ctx(), "elim-term-ite");
+            auto elim_res = elim_ite(goal);
+            for (int i = 0; i < elim_res.size(); ++i) {
+                to_or.push_back(elim_res[i].as_expr());
+            }
+            auto eliminated_expr = z3::mk_or(to_or);
+            auto elim_temp = z3::tactic(expr.ctx(), "qe");
+            auto logic = Logic();
+            z3::expr_vector aux_vars(expr.ctx());
+            for (const auto& variable : logic.collect_vars(eliminated_expr)) {
+                if (!original_variables.contains(variable)) aux_vars.push_back(variable);
+            }
+            if (!aux_vars.empty()) {
+                auto exits_expr = z3::exists(aux_vars, eliminated_expr);
+                auto qe_goal = z3::goal(expr.ctx());
+                qe_goal.add(exits_expr);
+                auto qe_res = z3::try_for(elim_temp, 100)(qe_goal);
+                z3::expr_vector qe_conditions(expr.ctx());
+                for (int j = 0; j < qe_res.size(); ++j) {
+                    qe_conditions.push_back(qe_res[j].as_expr());
+                }
+                eliminated_expr = z3::mk_or(qe_conditions).simplify();
+            }
+            z3::solver certificate(expr.ctx());
+            certificate.set("timeout", 100u);
+            certificate.add(eliminated_expr != expr);
+            if (certificate.check() == z3::unsat) return eliminated_expr.simplify();
+        } catch (const z3::exception&) {
+            // Unsupported or timed-out QE never justifies a replacement.
+        }
+        return expr.simplify();
     }
 
     z3::expr
     piecewise2ite(const z3::expr_vector& conditions, const z3::expr_vector& expressions) {
         if (conditions.size() != expressions.size()) {
             throw std::invalid_argument("Conditions and expressions must have the same size.");
+        }
+        if (conditions.empty()) {
+            throw std::invalid_argument("A piecewise expression needs at least one branch.");
         }
 
         if (conditions.size() == 1) {
@@ -275,6 +438,11 @@ namespace ari_exe {
 
     void
     Logic::collect_vars_rec(const z3::expr& e, std::set<z3::expr, expr_compare>& vars) {
+        if (e.is_quantifier()) {
+            collect_vars_rec(e.body(), vars);
+            return;
+        }
+        if (!e.is_app()) return;
         if (e.is_const() && e.num_args() == 0 && e.decl().decl_kind() == Z3_OP_UNINTERPRETED) {
             vars.insert(e);
             return;
@@ -331,6 +499,39 @@ namespace ari_exe {
     z3::expr_vector
     LinearLogic::solve_vars(const z3::expr& constraints, const z3::expr_vector& vars) {
         auto& z3ctx = constraints.ctx();
+        const auto has_quantifier = [](const z3::expr& expression,
+                                       const auto& self) -> bool {
+            if (expression.is_quantifier()) return true;
+            if (!expression.is_app()) return false;
+            for (const auto& argument : expression.args()) {
+                if (self(argument, self)) return true;
+            }
+            return false;
+        };
+        // A uniquely forced numeral is already a closed form. Certify the
+        // model values before invoking elimination with auxiliary variables.
+        z3::solver constants(z3ctx);
+        constants.set("timeout", 100u);
+        constants.add(constraints);
+        if (!vars.empty() && constants.check() == z3::sat) {
+            auto model = constants.get_model();
+            z3::expr_vector values(z3ctx), equalities(z3ctx);
+            for (const auto& variable : vars) {
+                const auto value = model.eval(variable, true).simplify();
+                if (!value.is_numeral()) break;
+                values.push_back(value);
+                equalities.push_back(variable == value);
+            }
+            if (values.size() == vars.size()) {
+                constants.add(!z3::mk_and(equalities));
+                if (constants.check() == z3::unsat) return values;
+            }
+        }
+        if (has_quantifier(constraints, has_quantifier)) {
+            // A forced constant above is safe even with unrelated quantified
+            // input constraints. Do not attempt general algebra on quantifiers.
+            return z3::expr_vector(z3ctx);
+        }
         auto [processed_cons, tmp_vars] = preprocess_constraints(constraints);
 
         z3::solver tmp_s(z3ctx);
@@ -389,6 +590,15 @@ namespace ari_exe {
         for (int i = 0; i < res_vec.size(); ++i) {
             res.push_back(res_vec[i].simplify());
         }
+        // A rejected DNF case must not leave an arbitrary default solution
+        // covering that case. Certify the combined result on the full input.
+        z3::solver certificate(z3ctx);
+        certificate.set("timeout", 100u);
+        certificate.add(constraints);
+        z3::expr_vector equalities(z3ctx);
+        for (unsigned i = 0; i < vars.size(); ++i) equalities.push_back(vars[i] == res[i]);
+        certificate.add(!z3::mk_and(equalities));
+        if (certificate.check() != z3::unsat) return z3::expr_vector(z3ctx);
         return res;
     }
 
@@ -420,11 +630,13 @@ namespace ari_exe {
     bool 
     Logic::is_atom(const z3::expr& t) {
         if (!t.is_bool()) return false;
+        if (t.is_quantifier()) return true;
         if (!t.is_app()) return false;
         Z3_decl_kind k = t.decl().decl_kind();
         if (k == Z3_OP_AND || k == Z3_OP_OR || k == Z3_OP_IMPLIES) return false;
         // if (k == Z3_OP_EQ && t.arg(0).is_bool()) return false;
         if (k == Z3_OP_TRUE || k == Z3_OP_FALSE || k == Z3_OP_XOR || k == Z3_OP_NOT) return false;
+        if (t.num_args() == 0) return true;
         if (t.arg(0).is_bool()) return false;
         return true;
     }
@@ -439,6 +651,7 @@ namespace ari_exe {
         if (is_atom(t)) {
             atms.push_back(t);
         }
+        if (!t.is_app()) return;
         for (unsigned i = 0; i < t.num_args(); ++i) {
             atoms_rec(t.arg(i), visited, atms);
         }
@@ -505,7 +718,7 @@ namespace ari_exe {
             lits.push_back(atom2literal(m, a));
         }
         z3::check_result is_sat = s.check(lits);
-        assert(is_sat == z3::unsat);
+        if (is_sat != z3::unsat) return s.ctx().bool_val(true);
 
         z3::expr_vector core = s.unsat_core();
         z3::expr_vector minimized_core = minimize_conjunction(core);
@@ -527,8 +740,19 @@ namespace ari_exe {
         snot.add(!fml);
         s.add(fml);
 
-        while (snot.check() == z3::sat) {
+        while (true) {
+            const auto result = snot.check();
+            if (result == z3::unsat) break;
+            if (result == z3::unknown) {
+                // An unknown query does not justify dropping the formula.
+                cnf_clauses.push_back(fml);
+                return cnf_clauses;
+            }
             z3::expr clause = implicant(atms, s, snot);
+            if (clause.is_true()) {
+                cnf_clauses.push_back(fml);
+                return cnf_clauses;
+            }
             cnf_clauses.push_back(clause.simplify());
             snot.add(clause);
         }
@@ -619,7 +843,10 @@ namespace ari_exe {
                 }
             }
             if (!is_itersect) continue;
-
+            const auto atom = literal.is_not() ? literal.arg(0) : literal;
+            if (!(is_ge(atom) || is_le(atom) || is_eq(atom) ||
+                  is_lt(atom) || is_gt(atom)) || atom.num_args() != 2 ||
+                !atom.arg(0).is_int() || !atom.arg(1).is_int()) continue;
             auto normalized = normalize(literal);
             auto target = normalized.arg(0);
             s.push();
@@ -686,12 +913,44 @@ namespace ari_exe {
 
     z3::expr_vector
     LinearLogic::solve_linear_equations(z3::expr_vector equations, z3::expr_vector vars) {
-        auto [A, b] = build_matrix_form(equations, vars);
-        auto sol = A.solve(A, b);
-        z3::expr_vector res(vars.ctx());
-        for (int i = 0; i < vars.size(); ++i) {
-            res.push_back(sol(i, 0));
+        if (vars.empty() || equations.size() != vars.size()) {
+            return z3::expr_vector(vars.ctx());
         }
+        auto [A, b] = build_matrix_form(equations, vars);
+        const auto mentions_unknown = [&](const z3::expr& expression) {
+            const auto used = collect_vars(expression);
+            for (const auto& variable : vars) if (used.contains(variable)) return true;
+            return false;
+        };
+        for (unsigned i = 0; i < vars.size(); ++i) {
+            if (mentions_unknown(b(i, 0))) return z3::expr_vector(vars.ctx());
+            b(i, 0) = z3::to_real(b(i, 0)).simplify();
+            for (unsigned j = 0; j < vars.size(); ++j) {
+                const auto coefficient = A(i, j).simplify();
+                if (!coefficient.is_numeral()) return z3::expr_vector(vars.ctx());
+                A(i, j) = z3::to_real(coefficient).simplify();
+            }
+        }
+        z3::expr_vector res(vars.ctx());
+        try {
+            auto sol = A.solve(A, b);
+            for (int i = 0; i < vars.size(); ++i) {
+                // Eliminate over rationals; the SMT certificate below checks
+                // the resulting integer candidate against the source system.
+                res.push_back(z3::expr(vars.ctx(), Z3_mk_real2int(
+                    vars.ctx(), sol(i, 0))).simplify());
+            }
+        } catch (const std::domain_error&) {
+            return z3::expr_vector(vars.ctx());
+        }
+        z3::solver certificate(vars.ctx());
+        certificate.set("timeout", 100u);
+        certificate.add(z3::mk_and(equations));
+        if (certificate.check() != z3::sat) return z3::expr_vector(vars.ctx());
+        z3::expr_vector equalities(vars.ctx());
+        for (unsigned i = 0; i < vars.size(); ++i) equalities.push_back(vars[i] == res[i]);
+        certificate.add(!z3::mk_and(equalities));
+        if (certificate.check() != z3::unsat) return z3::expr_vector(vars.ctx());
         return res;
     }
 

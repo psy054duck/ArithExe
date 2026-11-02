@@ -95,9 +95,7 @@ MStack::allocate(llvm::Value* value, z3::expr_vector dims) {
     z3::sort_vector indices_sorts(z3ctx);
     std::string name = value->getName().str() + std::to_string(value_counter[value]++) + "_undef";
     for (const auto& dim : dims) {
-        if (dim.is_numeral()) {
-            sizes.emplace_back(dim);
-        }
+        sizes.emplace_back(dim);
         indices_sorts.push_back(z3ctx.int_sort());
     }
     auto undef_func= z3ctx.function(name.c_str(), indices_sorts, z3ctx.int_sort());

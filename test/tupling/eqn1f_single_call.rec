@@ -1,0 +1,7 @@
+if (Or(n <= 0, i < 0)) {
+    array(i,n) = initial(i);
+} else if (i == n) {
+    array(i,n) = 20 + array(n-1,n-1);
+} else {
+    array(i,n) = array(i,n-1);
+}

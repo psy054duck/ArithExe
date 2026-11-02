@@ -1,0 +1,5 @@
+if (t <= 1) {
+    A(k,l,t) = k+l+t;
+} else {
+    A(k,l,t) = A(k,l,t-1) + A(k,l,t-2);
+}

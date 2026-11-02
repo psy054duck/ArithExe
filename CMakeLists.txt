@@ -21,6 +21,8 @@ if(LLVM_PACKAGE_VERSION VERSION_LESS 20)
 endif()
 find_package(Z3 REQUIRED CONFIG HINTS /opt/homebrew/Cellar/z3)
 find_package(Boost REQUIRED CONFIG)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ISL REQUIRED IMPORTED_TARGET isl)
 
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")

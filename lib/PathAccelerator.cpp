@@ -1039,6 +1039,17 @@ std::shared_ptr<NestedPathSummary> build_nested_summary(
 state_ptr PathExpressionAccelerator::accelerate_nested(
     llvm::Loop* loop, const state_ptr& state) {
     if (!loop || state->trace.empty() || loop->contains(state->trace.back())) return nullptr;
+    if (state->session.unsupported_path_profile(loop, true)) return nullptr;
+    for (auto* block : loop->blocks()) {
+        for (auto& instruction : *block) {
+            if (!nested_instruction_supported(&instruction)) {
+                state->session.mark_unsupported_path_profile(loop, true);
+                spdlog::debug("[nested-path] loop {} outside structural profile: {}",
+                              loop_name(loop), instruction.getOpcodeName());
+                return nullptr;
+            }
+        }
+    }
     auto& cache = state->session.nested_path_summaries();
     auto found = cache.find(loop);
     std::shared_ptr<NestedPathSummary> summary;
@@ -1106,6 +1117,7 @@ PathExpressionAccelerator::accelerate(
     llvm::Loop* loop, const state_ptr& state,
     const PathSchemaCandidate& candidate) {
     if (!loop) return std::nullopt;
+    if (state->session.unsupported_path_profile(loop, false)) return std::nullopt;
     const std::string name = loop_name(loop);
     spdlog::debug("[path-expr] loop {} trying candidate {}", name,
                   render_path_schema(candidate));
@@ -1122,6 +1134,7 @@ PathExpressionAccelerator::accelerate(
             name, called_function(nondet_control->call)->getName().str());
     }
     if (auto reason = unsupported_profile_reason(loop, nondet_control)) {
+        state->session.mark_unsupported_path_profile(loop, false);
         spdlog::debug(
             "[path-expr] loop {} is outside the accelerator profile: {}",
             name, *reason);

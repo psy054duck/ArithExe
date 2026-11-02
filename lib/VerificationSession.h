@@ -47,6 +47,7 @@ class VerificationSession {
     Activation activate() { return Activation(*this); }
 
     static VerificationSession& current();
+    static z3::expr expand_current_aggregates(const z3::expr& expression);
 
     // Experimental IR-level relaxation, not a proof of fixed-width C semantics.
     // Configure before starting execution; do not mix cached semantic profiles.
@@ -82,6 +83,13 @@ class VerificationSession {
     Cache& function_cache() { return cached_function_values; }
 
     RecurrenceSolverWorker& recurrence_solver_worker();
+
+    void register_aggregate(bool product, const z3::expr& signature,
+                            const z3::expr& index, const z3::expr& body);
+    z3::expr expand_aggregates(const z3::expr& expression) const;
+    bool contains_aggregates(const z3::expr& expression) const;
+    z3::expr_vector aggregate_identities(const z3::expr& expression,
+                                        const z3::expr& assumptions) const;
 
     int next_call_value_id(llvm::Value* value) {
         return call_value_counters[value]++;
@@ -127,9 +135,28 @@ class VerificationSession {
         return nested_path_summaries_built;
     }
 
+    bool unsupported_path_profile(llvm::Loop* loop, bool nested) const {
+        return (nested ? unsupported_nested_profiles : unsupported_profiles).contains(loop);
+    }
+    void mark_unsupported_path_profile(llvm::Loop* loop, bool nested) {
+        (nested ? unsupported_nested_profiles : unsupported_profiles).insert(loop);
+    }
+    std::size_t unsupported_path_profile_count(bool nested) const {
+        return (nested ? unsupported_nested_profiles : unsupported_profiles).size();
+    }
+
     void clear_module_state();
 
   private:
+    z3::expr_vector sum_linearity_identities(const z3::expr& expression) const;
+
+    struct FiniteAggregate {
+        bool product;
+        z3::expr signature;
+        z3::expr index;
+        z3::expr body;
+    };
+    std::map<unsigned, FiniteAggregate> finite_aggregates;
     static thread_local VerificationSession* active_session;
 
     AnalysisManager analysis_manager;
@@ -154,6 +181,8 @@ class VerificationSession {
     std::map<llvm::Loop*, std::shared_ptr<NestedPathSummary>>
         nested_path_summary_cache;
     std::uint64_t nested_path_summaries_built = 0;
+    std::set<llvm::Loop*> unsupported_nested_profiles;
+    std::set<llvm::Loop*> unsupported_profiles;
 };
 
 } // namespace ari_exe
