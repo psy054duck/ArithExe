@@ -19,6 +19,41 @@ from rec_solver.core import utils
 
 
 class FiniteAggregates(unittest.TestCase):
+    def test_overwrite_recurrence_preserves_seed_without_zero_products(self):
+        rec = parse_str('i(0)=0;x(0)=seed;if(true){i(n+1)=i(n)+1;x(n+1)=p+i(n);}')
+        closed = solve_aggregate_recurrence(rec)
+        self.assertIsNotNone(closed)
+        self.assertTrue(certify_aggregate_closed_form(rec,closed))
+        self.assertFalse(closed.aggregates.definitions)
+        value = closed.as_dict()[z3.Function('x',z3.IntSort(),z3.IntSort())(rec.ind_var)]
+        for n in range(7):
+            actual = z3.substitute(value,(rec.ind_var,z3.IntVal(n)))
+            self.equivalent(actual,z3.Int('seed') if n==0 else z3.Int('p')+n-1)
+
+    def test_constant_body_export_retains_signature_on_left(self):
+        aggregates = AggregateContext(preserve_symbolic=True)
+        i,n = z3.Ints('export_i export_n')
+        value = aggregates.make('product',i,0,n,z3.IntVal(0))
+        self.assertIn(value.decl(),aggregates.definitions)
+        metadata, = aggregates.export()
+        binding = z3.parse_smt2_string(metadata['smt2'])[0]
+        self.assertEqual(binding.arg(0).decl().name(),value.decl().name())
+        self.assertTrue(z3.is_int_value(binding.arg(1)))
+        self.equivalent(aggregates.expand(z3.substitute(value,(n,z3.IntVal(0)))),z3.IntVal(1))
+        self.equivalent(aggregates.expand(z3.substitute(value,(n,z3.IntVal(3)))),z3.IntVal(0))
+
+    def test_preserved_small_sums_expand_only_when_requested(self):
+        i = z3.Int('preserved_i')
+        a = z3.Function('preserved_a', z3.IntSort(), z3.IntSort())
+        for n in (15, 16, 17, 20, 31, 32, 33, 40):
+            aggregates = AggregateContext(preserve_symbolic=True)
+            term = aggregates.make('sum', i, 0, n, a(i))
+            self.assertIn(term.decl(), aggregates.definitions)
+            if n <= 32:
+                self.assertNotIn(aggregates.expand(term).decl(), aggregates.definitions)
+        eager = AggregateContext()
+        self.assertNotIn(eager.make('sum', i, 0, 2, a(i)).decl(), eager.definitions)
+
     def equivalent(self, lhs, rhs):
         check = z3.Solver()
         check.add(lhs != rhs)

@@ -20,6 +20,12 @@ from tools.submit_benchexec import submission_command
 
 
 class AdapterTests(unittest.TestCase):
+    def test_fold_registry_reaches_the_solver_environment(self):
+        with patch.dict(os.environ, {"ARITHEXE_FOLD_OPERATORS": "/snapshot/operators.json"}):
+            environment = Tool().environment("/workspace/ArithExe/build/arith_exe")
+        self.assertEqual(environment["newEnv"]["ARITHEXE_FOLD_OPERATORS"],
+                         "/snapshot/operators.json")
+
     def test_tool_name(self):
         self.assertEqual(Tool().name(), "ArrayRec")
 
@@ -118,6 +124,13 @@ class AdapterTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
+    def test_system_scope_preserves_fold_registry(self):
+        env = {key: "test" for key in ("PATH", "PYTHONPATH", "ARITHEXE_MULTIVARIATE_STRATEGY",
+               "ARITHEXE_SOLVER_PYTHON", "ARITHEXE_SOLVER_TIMEOUT_MS")}
+        env["ARITHEXE_FOLD_OPERATORS"] = "/snapshot/operators.json"
+        command = launch_command(["benchexec"], SimpleNamespace(scope="system"), env)
+        self.assertIn("ARITHEXE_FOLD_OPERATORS=/snapshot/operators.json", command)
+
     def test_integer_definition_enables_and_labels_the_mode(self):
         args = SimpleNamespace(timelimit=300, walltimelimit=360, memory="3 GB",
                                workers=2, strategy="tupling", semantics="integer")

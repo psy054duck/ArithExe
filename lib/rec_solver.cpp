@@ -981,15 +981,27 @@ void rec_solver::smt2_to_z3(const std::string& smt2) {
             const auto* definition = value.getAsObject();
             auto kind = definition ? definition->getString("kind") : std::nullopt;
             auto encoded = definition ? definition->getString("smt2") : std::nullopt;
-            if (!kind || (*kind != "sum" && *kind != "product") || !encoded) {
+            if (!kind || (*kind != "sum" && *kind != "product" && *kind != "fold") || !encoded) {
                 throw std::invalid_argument("malformed aggregate metadata");
             }
             auto parts = z3ctx.parse_string(encoded->str().c_str());
             if (parts.size() != 2 || !parts[0].is_eq() || !parts[1].is_eq()) {
                 throw std::invalid_argument("malformed aggregate binding");
             }
-            VerificationSession::current().register_aggregate(
-                *kind == "product", parts[0].arg(0), parts[1].arg(0), parts[0].arg(1));
+            if (*kind == "fold") {
+                auto operation = definition->getString("combine_smt2");
+                if (!operation) throw std::invalid_argument("missing fold operation");
+                auto combine = z3ctx.parse_string(operation->str().c_str());
+                if (combine.size() != 3 || !combine[0].is_eq() ||
+                    !combine[1].is_eq() || !combine[2].is_eq()) {
+                    throw std::invalid_argument("malformed fold operation");
+                }
+                VerificationSession::current().register_fold(parts[0].arg(0), parts[1].arg(0),
+                    parts[0].arg(1), combine[1].arg(0), combine[2].arg(0), combine[0].arg(1));
+            } else {
+                VerificationSession::current().register_aggregate(
+                    *kind == "product", parts[0].arg(0), parts[1].arg(0), parts[0].arg(1));
+            }
         }
         summary = text->str();
     }
@@ -1005,7 +1017,7 @@ void rec_solver::smt2_to_z3(const std::string& smt2) {
             k = args[1];
             v = args[0];
         }
-        parsed.insert_or_assign(k, VerificationSession::current().expand_aggregates(v));
+        parsed.insert_or_assign(k, v);
     }
     res = std::move(parsed);
 }

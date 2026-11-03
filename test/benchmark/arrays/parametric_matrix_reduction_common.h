@@ -18,6 +18,10 @@ int main(void) {
             a[row][col]=row==col ? 0 : col;
 #elif MATRIX_KIND == 1
             a[row][col]=distance(row,col);
+#elif MATRIX_KIND == 3
+            a[row][col]=row==col ? 0 : row;
+#elif MATRIX_KIND == 4
+            a[row][col]=row>col ? row+col : row<col ? -(row+col) : 0;
 #else
             if (row%2==col%2) {
                 a[row][col]=value;
@@ -33,6 +37,10 @@ int main(void) {
     __VERIFIER_assert(2*sum==(long long)n*(n-1)*(n-1)+WRONG_RESULT);
 #elif MATRIX_KIND == 1
     __VERIFIER_assert(3*sum==(long long)n*(n-1)*(n+1)+WRONG_RESULT);
+#elif MATRIX_KIND == 3
+    __VERIFIER_assert(2*sum==(long long)n*(n-1)*(n-1)+WRONG_RESULT);
+#elif MATRIX_KIND == 4
+    __VERIFIER_assert(sum==WRONG_RESULT);
 #elif WRONG_RESULT
     __VERIFIER_assert(sum==2);
 #else

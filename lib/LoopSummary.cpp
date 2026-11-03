@@ -22,16 +22,14 @@ LoopSummary::evaluate(const z3::expr_vector& args) {
         return result;
     }
     for (auto v : summary_closed_form) {
-        result.push_back(VerificationSession::expand_current_aggregates(
-            v.substitute(auxiliary_params, auxiliary_closed_forms).substitute(params, args)));
+        result.push_back(v.substitute(auxiliary_params, auxiliary_closed_forms).substitute(params, args));
     }
     return result;
 }
 
 z3::expr
 LoopSummary::evaluate_expr(z3::expr expr) const {
-    return VerificationSession::expand_current_aggregates(
-        expr.substitute(auxiliary_params, auxiliary_closed_forms).substitute(params, summary_closed_form));
+    return expr.substitute(auxiliary_params, auxiliary_closed_forms).substitute(params, summary_closed_form);
 }
 
 void

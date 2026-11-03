@@ -1076,6 +1076,12 @@ AInstructionCall::execute_normal(state_ptr state) {
         }
 
         auto function_value = summary->evaluate(args);
+        if (new_state->session.contains_aggregates(
+                new_state->session.expand_aggregates(function_value.as_expr())) ||
+            new_state->session.contains_aggregates(
+                new_state->session.expand_aggregates(function_value.defined()))) {
+            new_state->counterexample_complete = false;
+        }
         // new_state->memory.allocate(inst, z3::expr_vector(z3ctx));
         new_state->memory.put_temp(inst, function_value);
         new_state->step_pc();
@@ -2057,7 +2063,12 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
                 dst.push_back(N.value());
                 summarized_value = summarized_value.substitute(src, dst);
             }
-            summarized_value = new_state->session.expand_aggregates(summarized_value);
+            // Keep residual aggregate provenance even if later abstraction
+            // removes the term from the final counterexample query.
+            if (new_state->session.contains_aggregates(
+                    new_state->session.expand_aggregates(summarized_value))) {
+                new_state->counterexample_complete = false;
+            }
             if (auto obj =
                     new_state->memory.get_object_pointed_by(modified_value)) {
                 obj->write(summarized_value);

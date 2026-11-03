@@ -669,7 +669,6 @@ namespace ari_exe {
             // looks like there are some bugs in z3 for doing negation of forall
             // z3::expr query =  z3::forall(n, z3::implies(premise, summary->evaluate_expr(v_condition.as_expr())));
             // solver.add(!query);
-            solver.add(premise);
             z3::expr query = summary->evaluate_expr(v_condition.as_expr());
             if (parent_state->is_summarizing()) {
                 // The outer counter is still symbolic. Discharge this guarded
@@ -677,9 +676,15 @@ namespace ari_exe {
                 summary->add_obligation(z3::forall(n, z3::implies(premise, query)));
                 continue;
             }
-            solver.add(!query);
+            auto& session = VerificationSession::current();
+            const auto symbolic_query = premise && !query;
+            solver.add(session.aggregate_query(symbolic_query, premise));
             auto res = solver.check();
             if (res == z3::sat) {
+                if (parent_state->is_over_approx || !parent_state->counterexample_complete ||
+                    session.contains_aggregates(session.expand_aggregates(symbolic_query))) {
+                    return VERIUNKNOWN;
+                }
                 if (!complete) {
                     // Projected history is enough for a proof, but not for a
                     // counterexample beyond the first (history-free) iteration.

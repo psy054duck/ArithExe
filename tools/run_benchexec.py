@@ -114,6 +114,8 @@ def launch_command(command, args, env):
     assignments = [f"{key}={env[key]}" for key in (
         "PATH", "PYTHONPATH", "ARITHEXE_MULTIVARIATE_STRATEGY",
         "ARITHEXE_SOLVER_PYTHON", "ARITHEXE_SOLVER_TIMEOUT_MS")]
+    if env.get("ARITHEXE_FOLD_OPERATORS"):
+        assignments.append(f"ARITHEXE_FOLD_OPERATORS={env['ARITHEXE_FOLD_OPERATORS']}")
     properties = ["--property=Delegate=yes", "--property=MemorySwapMax=0"]
     parent = env.get("ARITHEXE_BENCHEXEC_PARENT_UNIT")
     if parent:
@@ -143,6 +145,8 @@ def main():
     parser.add_argument("--scope", choices=("user", "system", "none"), default="user",
                         help="Use system for a transient sudo-created delegated service")
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--fold-operators", type=Path,
+                        help="Snapshot a user-defined integer fold operator registry")
     args = parser.parse_args()
     args.svcomp = args.svcomp or ROOT.parent / ("svcomp26-arrays" if args.suite == "arrays" else "svcomp25")
     args.solver_python = interpreter_path(args.solver_python)
@@ -185,6 +189,14 @@ def main():
                ARITHEXE_MULTIVARIATE_STRATEGY=args.strategy,
                ARITHEXE_SOLVER_PYTHON=str(args.solver_python),
                ARITHEXE_SOLVER_TIMEOUT_MS=str(args.solver_timeout_ms))
+    registry = args.fold_operators or env.get("ARITHEXE_FOLD_OPERATORS")
+    fold_metadata = None
+    if registry:
+        registry = Path(registry).resolve()
+        snapshot = output / "fold-operators.json"
+        snapshot.write_bytes(registry.read_bytes())
+        env["ARITHEXE_FOLD_OPERATORS"] = str(snapshot)
+        fold_metadata = dict(source=str(registry), snapshot=str(snapshot), sha256=digest(snapshot))
     for key in ("LD_PRELOAD", "ARITHEXE_SOLVER_TRACE_DIR"):
         env.pop(key, None)
     benchexec = str(Path(sys.executable).parent / "benchexec")
@@ -204,7 +216,8 @@ def main():
                         path=str(arrays_definition(args.svcomp)),
                         sha256=digest(arrays_definition(args.svcomp)))
                         if args.suite == "arrays" else None),
-                    strategy=args.strategy, git_head=git("rev-parse", "HEAD").strip(),
+                    strategy=args.strategy, fold_operators=fold_metadata,
+                    git_head=git("rev-parse", "HEAD").strip(),
                     git_branch=git("branch", "--show-current").strip(),
                     git_status=git("status", "--short"),
                     binary_sha256=digest(binary), source_sha256=sources,

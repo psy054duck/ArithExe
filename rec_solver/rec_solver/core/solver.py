@@ -62,9 +62,15 @@ def _solve_str(s, enable_bounded_cfinite, poly_expr_strategy, poly_expr_order,
             return counter
         rec = normalize_constant_modulo(rec, max_branches=modulo_max_branches)
         from .aggregates import has_external_inputs, solve_aggregate_recurrence
-        if enable_aggregates and has_external_inputs(rec):
+        # Pure arithmetic triangular sums need the same early exact path as
+        # entry-array sums; otherwise symbolic periodic solving may dominate.
+        if enable_aggregates:
             aggregate = solve_aggregate_recurrence(rec)
-            if aggregate is not None:
+            # Residual arithmetic aggregates are exact representations, but
+            # cannot replace the closed scalar forms used by loop guards.
+            # Preserve the previous solver priority unless arithmetic closed.
+            if aggregate is not None and (has_external_inputs(rec) or
+                                          not aggregate.aggregates.definitions):
                 return aggregate
         solvable = False
         try:

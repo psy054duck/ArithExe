@@ -8,6 +8,7 @@ may over-approximate residual aggregate applications, never counterexamples.
 
 from dataclasses import dataclass
 import hashlib
+import time
 
 import z3
 from z3.z3util import get_vars
@@ -45,13 +46,35 @@ class AggregateDefinition:
     index: z3.ExprRef
     parameters: tuple
     body: z3.ExprRef
+    operator: object = None
 
 
 class AggregateContext:
     """Bind the index; explicitly pass every other free integer variable."""
 
-    def __init__(self):
+    def __init__(self, preserve_symbolic=False):
         self.definitions = {}
+        self.preserve_symbolic = preserve_symbolic
+
+    def _finish(self, expression):
+        return expression if self.preserve_symbolic else self.expand(expression)
+
+    def make_fold(self, operator, index, lower, upper, seed, body):
+        ctx = index.ctx
+        lower, upper = [z3.IntVal(v, ctx) if isinstance(v, int) else v
+                        for v in (lower, upper)]
+        if not all(z3.is_int(v) for v in (index, lower, upper, seed, body)):
+            raise AggregateUnsupported("fold terms must be integers")
+        parameters = tuple(sorted((v for v in get_vars(body) if not z3.eq(v, index)),
+                                  key=lambda v: v.sexpr()))
+        if any(not z3.is_int(v) for v in parameters):
+            raise AggregateUnsupported("fold parameters must be integers")
+        key = z3.Lambda([index, *parameters], body).body().sexpr() + operator.expression.sexpr()
+        name = "ari_finite_fold_" + hashlib.sha256(key.encode()).hexdigest()
+        function = z3.Function(name, *([z3.IntSort(ctx)] * (len(parameters) + 4)))
+        self.definitions.setdefault(function, AggregateDefinition(
+            "fold", function, index, parameters, body, operator))
+        return self._finish(function(lower, upper, seed, *parameters))
 
     def make(self, kind, index, lower, upper, body):
         if kind not in {"sum", "product"}:
@@ -62,6 +85,11 @@ class AggregateContext:
         body = z3.simplify(body)
         if not all(v.sort() == z3.IntSort(ctx) for v in (index, lower, upper, body)):
             raise AggregateUnsupported("aggregate terms must be integers")
+        if kind == "sum":
+            from .polynomial_sums import polynomial_sum
+            polynomial = polynomial_sum(index, lower, upper, body)
+            if polynomial is not None:
+                return polynomial
         count = z3.simplify(upper - lower)
         identity = z3.IntVal(0 if kind == "sum" else 1, ctx)
         if z3.is_int_value(count) and count.as_long() <= 0:
@@ -94,10 +122,10 @@ class AggregateContext:
                 previous = z3.substitute(definition.body,
                     (definition.index, index), *zip(definition.parameters, parameters))
                 if _prove(z3.BoolVal(True, ctx), previous == body):
-                    return self.expand(definition.function(lower, upper, *parameters))
+                    return self._finish(definition.function(lower, upper, *parameters))
             self.definitions[function] = AggregateDefinition(
                 kind, function, index, parameters, body)
-        return self.expand(function(lower, upper, *parameters))
+        return self._finish(function(lower, upper, *parameters))
 
     def expand(self, expression, max_terms=32, budget=256):
         """Only unfold finite small intervals; retain larger symbolic terms."""
@@ -114,18 +142,20 @@ class AggregateContext:
             definition = self.definitions.get(result.decl()) if z3.is_app(result) else None
             if definition:
                 lower, upper, *arguments = result.children()
+                seed = arguments.pop(0) if definition.kind == "fold" else None
                 count = z3.simplify(upper - lower)
                 if z3.is_int_value(count) and count.as_long() <= 0:
-                    result = z3.IntVal(0 if definition.kind == "sum" else 1, term.ctx)
+                    result = seed if seed is not None else z3.IntVal(0 if definition.kind == "sum" else 1, term.ctx)
                 elif (z3.is_int_value(count) and count.as_long() <= max_terms
                       and count.as_long() <= remaining[0]):
-                    result = z3.IntVal(0 if definition.kind == "sum" else 1, term.ctx)
+                    result = seed if seed is not None else z3.IntVal(0 if definition.kind == "sum" else 1, term.ctx)
                     for offset in range(count.as_long()):
                         remaining[0] -= 1
                         value = visit(z3.substitute(definition.body,
                             (definition.index, z3.simplify(lower + offset)),
                             *zip(definition.parameters, arguments)))
-                        result = result + value if definition.kind == "sum" else result * value
+                        result = (definition.operator.combine(result, value) if seed is not None else
+                                  result + value if definition.kind == "sum" else result * value)
                     result = z3.simplify(result)
             memo[term] = result
             return result
@@ -138,16 +168,107 @@ class AggregateContext:
             ctx = definition.index.ctx
             lower, upper = z3.FreshInt("aggregate_lower", ctx), z3.FreshInt("aggregate_upper", ctx)
             solver = z3.Solver(ctx=ctx)
-            solver.add(definition.function(lower, upper, *definition.parameters) == definition.body)
+            seed = [z3.FreshInt("fold_seed", ctx)] if definition.kind == "fold" else []
+            application = definition.function(lower, upper, *seed, *definition.parameters)
+            # IntNumRef is an ArithRef subclass: Python's reflected equality
+            # otherwise puts a numeral body first, violating the wire binding.
+            solver.add(z3.ArithRef.__eq__(application, definition.body))
             solver.add(definition.index == 0)
-            definitions.append(dict(kind=definition.kind, smt2=solver.to_smt2()))
+            encoded = dict(kind=definition.kind, smt2=solver.to_smt2())
+            if definition.operator is not None:
+                op = definition.operator
+                binding = z3.Solver(ctx=ctx)
+                binding.add(z3.ArithRef.__eq__(z3.FreshInt("fold_result", ctx), op.expression),
+                            op.left == 0, op.right == 0)
+                encoded["combine_smt2"] = binding.to_smt2()
+            definitions.append(encoded)
         return definitions
 
 
 class AggregateClosedForm(ExprClosedForm):
-    def __init__(self, values, ind_var, aggregates):
+    def __init__(self, values, ind_var, aggregates, operators=()):
         super().__init__(values, ind_var)
         self.aggregates = aggregates
+        self.operators = operators
+
+
+def _fold_solution(rec, function, solved, operators, aggregates):
+    if not operators:
+        return None
+    t, current = rec.ind_var, function(rec.ind_var)
+    deadline = time.monotonic() + 1.0
+    checks = 0
+    states = {lhs.decl() for trans in rec.transitions for lhs in trans}
+    branches, candidates = [], {}
+    for condition, transition in zip(rec.conditions, rec.transitions):
+        guard = z3.simplify(z3.substitute(condition, *solved.items()))
+        update = next(rhs for lhs, rhs in transition.items() if lhs.decl() == function)
+        rhs = z3.simplify(z3.substitute(update, *solved.items()))
+        branches.append((guard, rhs))
+        for term in _walk(rhs):
+            if len(candidates) >= 32:
+                break
+            if z3.is_int(term) and not any(
+                    z3.is_app(v) and v.decl() in states for v in _walk(term)):
+                candidates.setdefault(term.sexpr(), term)
+    # Array composition can split one element expression over several update
+    # branches. Project only independent conjuncts as a discovery heuristic;
+    # the original guards (including accumulator tests) certify the result.
+    # This is not a claim that the projection is an exact domain elimination.
+    updates = {}
+    projection_budget = [256]
+
+    def independent(term):
+        for node in _walk(term):
+            projection_budget[0] -= 1
+            if projection_budget[0] < 0:
+                raise AggregateUnsupported("fold body discovery budget exhausted")
+            if z3.is_app(node) and node.decl() in states:
+                return False
+        return True
+
+    def project(guard):
+        if z3.is_and(guard):
+            return z3.And(*(project(child) for child in guard.children()))
+        return guard if independent(guard) else z3.BoolVal(True, t.ctx)
+
+    try:
+        for guard, rhs in branches:
+            if z3.is_false(guard) or not independent(rhs):
+                continue
+            if len(updates) == 32 and rhs not in updates:
+                raise AggregateUnsupported("too many fold update bodies")
+            updates.setdefault(rhs, []).append(project(guard))
+        if len(updates) > 1:
+            alternatives = list(updates.items())
+            body = alternatives[-1][0]
+            for value, guards in reversed(alternatives[:-1]):
+                body = z3.If(z3.Or(*guards), value, body)
+            body = z3.simplify(body)
+            candidates = dict(list({body.sexpr(): body, **candidates}.items())[:32])
+    except AggregateUnsupported:
+        # A failed discovery attempt cannot weaken the certificate below.
+        pass
+    if not _prove(t >= 0, z3.Or(*(guard for guard, _ in branches))):
+        return None
+    for operator in operators:
+        for body in candidates.values():
+            if checks >= 32 or time.monotonic() >= deadline:
+                return None
+            expected = operator.combine(current, body)
+            matches = True
+            for guard, rhs in branches:
+                if checks >= 32 or time.monotonic() >= deadline:
+                    return None
+                checks += 1
+                if not _prove(z3.And(t >= 0, guard), rhs == expected):
+                    matches = False
+                    break
+            if matches:
+                index = z3.FreshInt("fold_index", t.ctx)
+                return aggregates.make_fold(operator, index, 0, t,
+                    rec.initial[function(0)], z3.substitute(body, (t, index)))
+    return None
 
 
 def has_external_inputs(rec):
@@ -197,6 +318,8 @@ def _coefficients(rec, function, solved):
 def _solution(t, initial, alpha, beta, aggregates):
     r, q = z3.FreshInt("sum_index", t.ctx), z3.FreshInt("product_index", t.ctx)
     at = lambda expression, index: z3.simplify(z3.substitute(expression, (t, index)))
+    if z3.is_true(z3.simplify(alpha == 0)):
+        return z3.simplify(z3.If(t <= 0, initial, at(beta, t-1)))
     if z3.is_true(z3.simplify(alpha == 1)):
         if t not in get_vars(beta):
             return z3.simplify(initial + t * beta)
@@ -230,8 +353,11 @@ def certify_aggregate_closed_form(rec, closed):
                 continue
             coefficients = _coefficients(rec, app.decl(), solved)
             if coefficients is None:
-                continue
-            expected = _solution(rec.ind_var, initial, *coefficients, closed.aggregates)
+                expected = _fold_solution(rec, app.decl(), solved, closed.operators, closed.aggregates)
+                if expected is None:
+                    continue
+            else:
+                expected = _solution(rec.ind_var, initial, *coefficients, closed.aggregates)
             if not _prove(rec.ind_var >= 0, candidate == expected):
                 return False
             solved[app] = candidate
@@ -254,7 +380,9 @@ def solve_aggregate_recurrence(rec):
     if any(not z3.is_true(z3.simplify(lhs.arg(0) == t + 1))
            for trans in rec.transitions for lhs in trans):
         return None
-    solved, aggregates = {}, AggregateContext()
+    from .fold_operators import load_operators
+    operators = load_operators(t.ctx)
+    solved, aggregates = {}, AggregateContext(preserve_symbolic=True)
     pending = sorted(states, key=lambda f: str(f.name()))
     while pending:
         progress = False
@@ -265,13 +393,17 @@ def solve_aggregate_recurrence(rec):
                 continue
             coefficients = _coefficients(rec, function, solved)
             if coefficients is None:
-                continue
-            solved[function(t)] = _solution(t, initial, *coefficients, aggregates)
+                value = _fold_solution(rec, function, solved, operators, aggregates)
+                if value is None:
+                    continue
+            else:
+                value = _solution(t, initial, *coefficients, aggregates)
+            solved[function(t)] = value
             pending.remove(function)
             progress = True
         if not progress:
             return None
-    result = AggregateClosedForm(solved, t, aggregates)
-    if not aggregates.definitions or not certify_aggregate_closed_form(rec, result):
+    result = AggregateClosedForm(solved, t, aggregates, operators)
+    if not certify_aggregate_closed_form(rec, result):
         return None
     return result

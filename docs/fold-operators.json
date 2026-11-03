@@ -1,0 +1,14 @@
+[
+  {
+    "name": "integer_max",
+    "sort": "Int",
+    "combine": "(ite (>= a b) a b)",
+    "laws": ["associative", "commutative", "idempotent"]
+  },
+  {
+    "name": "integer_min",
+    "sort": "Int",
+    "combine": "(ite (<= a b) a b)",
+    "laws": ["associative", "commutative", "idempotent"]
+  }
+]

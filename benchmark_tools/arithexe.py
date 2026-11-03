@@ -32,7 +32,7 @@ class Tool(BaseTool2):
         strategy = os.environ.get("ARITHEXE_MULTIVARIATE_STRATEGY", "tupling")
         if strategy not in {"tupling", "pivot"}:
             raise UnsupportedFeatureException("Unknown multivariate strategy")
-        return {
+        environment = {
             "keepEnv": {name: "" for name in ("PATH", "LD_LIBRARY_PATH", "LANG")},
             "newEnv": {
                 "ARITHEXE_MULTIVARIATE_STRATEGY": strategy,
@@ -49,6 +49,10 @@ class Tool(BaseTool2):
                 "PYTHONHASHSEED": "0",
             },
         }
+        operators = os.environ.get("ARITHEXE_FOLD_OPERATORS")
+        if operators:
+            environment["newEnv"]["ARITHEXE_FOLD_OPERATORS"] = operators
+        return environment
 
     def cmdline(self, executable, options, task, rlimits):
         if not task.property_file:

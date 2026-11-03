@@ -84,9 +84,14 @@ class VerificationSession {
 
     RecurrenceSolverWorker& recurrence_solver_worker();
 
+    void register_fold(const z3::expr& signature, const z3::expr& index,
+                       const z3::expr& body, const z3::expr& left,
+                       const z3::expr& right, const z3::expr& combine);
     void register_aggregate(bool product, const z3::expr& signature,
                             const z3::expr& index, const z3::expr& body);
     z3::expr expand_aggregates(const z3::expr& expression) const;
+    z3::expr aggregate_query(const z3::expr& expression,
+                            const z3::expr& assumptions) const;
     bool contains_aggregates(const z3::expr& expression) const;
     z3::expr_vector aggregate_identities(const z3::expr& expression,
                                         const z3::expr& assumptions) const;
@@ -155,6 +160,9 @@ class VerificationSession {
         z3::expr signature;
         z3::expr index;
         z3::expr body;
+        std::optional<z3::expr> combine;
+        std::optional<z3::expr> left;
+        std::optional<z3::expr> right;
     };
     std::map<unsigned, FiniteAggregate> finite_aggregates;
     static thread_local VerificationSession* active_session;

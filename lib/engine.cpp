@@ -221,19 +221,19 @@ Engine::verify(state_ptr state) {
     z3::expr assertion_defined(z3ctx);
     z3::expr assertion(z3ctx);
     try {
-        path_condition = session->expand_aggregates(state->get_path_condition().as_expr());
+        path_condition = state->get_path_condition().as_expr();
     } catch (const z3::exception& error) {
         throw std::runtime_error("failed to assemble assertion path: " +
                                  std::string(error.msg()));
     }
     try {
-        assertion_defined = session->expand_aggregates(state->verification_condition.defined());
+        assertion_defined = state->verification_condition.defined();
     } catch (const z3::exception& error) {
         throw std::runtime_error("failed to assemble assertion definedness: " +
                                  std::string(error.msg()));
     }
     try {
-        assertion = session->expand_aggregates(state->verification_condition.as_expr());
+        assertion = state->verification_condition.as_expr();
     } catch (const z3::exception& error) {
         throw std::runtime_error("failed to assemble verification condition: " +
                                  std::string(error.msg()));
@@ -259,8 +259,10 @@ Engine::verify(state_ptr state) {
     solver.reset();
     z3::check_result res = z3::unknown;
     try {
-        solver.add(assumptions);
-        solver.add(session->aggregate_identities(z3::mk_and(assumptions), path_condition));
+        solver.add(session->aggregate_query(z3::mk_and(assumptions), path_condition));
+        path_condition = session->expand_aggregates(path_condition);
+        assertion_defined = session->expand_aggregates(assertion_defined);
+        assertion = session->expand_aggregates(assertion);
         res = solver.check();
     } catch (const z3::exception& error) {
         throw std::runtime_error("Z3 assertion query failed: " +
@@ -363,10 +365,9 @@ TestResult
 Engine::test(state_ptr state) {
     auto activation = session->activate();
     z3::expr_vector assumptions(z3ctx);
-    assumptions.push_back(session->expand_aggregates(state->get_path_condition().as_expr()));
+    assumptions.push_back(state->get_path_condition().as_expr());
     solver.reset();
-    solver.add(assumptions);
-    solver.add(session->aggregate_identities(z3::mk_and(assumptions), assumptions[0]));
+    solver.add(session->aggregate_query(z3::mk_and(assumptions), assumptions[0]));
     auto res = solver.check();
     TestResult result;
     switch (res) {
