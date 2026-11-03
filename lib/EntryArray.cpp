@@ -163,12 +163,50 @@ bool may_precede(llvm::Instruction* write, llvm::Instruction* read,
     return false;
 }
 
+bool read_only_call(const llvm::CallBase* call, std::set<const llvm::Function*>& active) {
+    if (call->onlyReadsMemory()) return true;
+    const auto* function=llvm::dyn_cast<llvm::Function>(call->getCalledOperand()->stripPointerCasts());
+    if (!function || function->isDeclaration() || !active.insert(function).second) return false;
+    bool result=true;
+    for (const auto& instruction:llvm::instructions(function)) {
+        if (const auto* nested=llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+            if (!read_only_call(nested,active)) { result=false; break; }
+        } else if (const auto* store=llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+            const auto* local=llvm::dyn_cast<llvm::AllocaInst>(
+                llvm::getUnderlyingObject(store->getPointerOperand()));
+            if (!local || local->getFunction()!=function || store->isVolatile() ||
+                store->isAtomic()) { result=false; break; }
+        } else if (instruction.mayWriteToMemory()) { result=false; break; }
+    }
+    active.erase(function);
+    return result;
+}
+
 } // namespace
 
 bool reads_entry_array(llvm::Loop* loop, llvm::LoadInst* read,
                        const state_ptr& entry) {
-    if (!entry->session.uses_integer_relaxation() || !loop->getSubLoops().empty() ||
+    if (!entry->session.uses_integer_relaxation() ||
         read->isVolatile() || read->isAtomic()) return false;
+    auto read_object=object_at(read->getPointerOperand(),entry);
+    if (!read_object) return false;
+    std::vector<llvm::StoreInst*> aliases;
+    for (auto* block:loop->blocks()) for (auto& instruction:*block) {
+        if (auto* call=llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+            std::set<const llvm::Function*> active;
+            if (!read_only_call(call,active)) return false;
+        }
+        if (llvm::isa<llvm::AtomicRMWInst>(instruction) ||
+            llvm::isa<llvm::AtomicCmpXchgInst>(instruction)) return false;
+        if (auto* write=llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+            if (write->isVolatile() || write->isAtomic()) return false;
+            auto object=object_at(write->getPointerOperand(),entry);
+            if (!object) return false;
+            if (object==read_object) aliases.push_back(write);
+        }
+    }
+    if (aliases.empty()) return true;
+    if (!loop->getSubLoops().empty()) return false;
     // Removing backedges to the header must leave an acyclic iteration.
     std::set<llvm::BasicBlock*> active, done;
     std::function<bool(llvm::BasicBlock*)> acyclic = [&](llvm::BasicBlock* block) {
@@ -183,8 +221,6 @@ bool reads_entry_array(llvm::Loop* loop, llvm::LoadInst* read,
         return true;
     };
     for (auto* block : loop->blocks()) if (!acyclic(block)) return false;
-    auto read_object = object_at(read->getPointerOperand(), entry);
-    if (!read_object) return false;
     AffineAccesses accesses(loop);
     std::optional<std::string> read_offset;
     const auto& layout = read->getModule()->getDataLayout();
@@ -193,7 +229,8 @@ bool reads_entry_array(llvm::Loop* loop, llvm::LoadInst* read,
     for (auto* block : loop->blocks()) {
         for (auto& instruction : *block) {
             if (auto* call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
-                if (!call->onlyReadsMemory()) return false;
+                std::set<const llvm::Function*> active;
+                if (!read_only_call(call,active)) return false;
             }
             if (llvm::isa<llvm::AtomicRMWInst>(instruction) ||
                 llvm::isa<llvm::AtomicCmpXchgInst>(instruction)) return false;

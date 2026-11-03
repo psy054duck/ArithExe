@@ -2,10 +2,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <exception>
 #include "LoopSummarizer.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "EntryArray.h"
 #include "ArrayGuard.h"
+#include "ArrayShape.h"
 #include "VerificationSession.h"
 
 
@@ -71,6 +73,35 @@ namespace ari_exe {
         return z3::mk_and(conjuncts);
     }
 
+    static bool native_array_context(const state_ptr& parent) {
+        if (!parent->session.uses_integer_relaxation()) return false;
+        const auto arrays=parent->memory.get_arrays();
+        return std::any_of(arrays.begin(),arrays.end(),
+            [](const MemoryObject* array) { return array->has_native_vla_shape(); });
+    }
+
+    static z3::expr frozen_loop_domain(llvm::Loop* loop, const state_ptr& parent) {
+        std::set<std::string> changing;
+        for (auto& phi:loop->getHeader()->phis())
+            changing.insert(get_z3_name(phi.getName().str()));
+        for (const auto* object:parent->memory.get_accessible_objects())
+            if (object->is_scalar()) changing.insert(object->get_signature().decl().name().str());
+        auto domain=parent->z3ctx.bool_val(true);
+        std::vector<z3::expr> pending{arithmetic_conjuncts(parent->get_path_condition().as_expr())};
+        while (!pending.empty()) {
+            const auto term=pending.back();pending.pop_back();
+            if (term.is_and()) {
+                for (const auto& arg:term.args()) pending.push_back(arg);
+                continue;
+            }
+            bool frozen=true;
+            for (const auto& variable:Logic().collect_vars(term))
+                if (changing.count(variable.decl().name().str())) { frozen=false;break; }
+            if (frozen) domain=domain&&term;
+        }
+        return domain.simplify();
+    }
+
     static bool is_uninterpreted_loop_call(const llvm::CallInst* call) {
         const auto* function = llvm::dyn_cast<llvm::Function>(
             call->getCalledOperand()->stripPointerCasts());
@@ -81,79 +112,6 @@ namespace ari_exe {
             name.contains("reach_error") || name == "__VERIFIER_error" ||
             name == "__assert_fail") return false;
         return !function->hasExactDefinition();
-    }
-
-    static std::optional<z3::expr> compose_strided_rows(
-        const z3::expr& signature, const z3::expr& iteration,
-        const z3::expr& count, const z3::expr& stride,
-        const z3::expr& domain, const std::vector<z3::expr>& guards,
-        const std::vector<z3::expr>& updates) {
-        if (signature.num_args()!=1 || guards.empty() || guards.size()>8 ||
-            guards.size()!=updates.size()) return std::nullopt;
-        auto& ctx=signature.ctx();
-        z3::solver positive(ctx);
-        positive.set("timeout",100u);
-        positive.add(domain && stride<=0);
-        if (positive.check()!=z3::unsat) return std::nullopt;
-        const z3::expr row(ctx,Z3_mk_fresh_const(ctx,"summary_row",ctx.int_sort()));
-        const z3::expr col(ctx,Z3_mk_fresh_const(ctx,"summary_col",ctx.int_sort()));
-        const auto index=signature.arg(0), flat=row*stride+col;
-        auto replace=[&](z3::expr e, const z3::expr& from, const z3::expr& to) {
-            z3::expr_vector a(ctx),b(ctx); a.push_back(from);b.push_back(to);
-            return e.substitute(a,b).simplify();
-        };
-        const auto entry=replace(signature,index,flat);
-        const auto valid=replace(domain,index,flat)&&col>=0&&col<stride;
-        auto point=entry;
-        auto covered=ctx.bool_val(false);
-        for (unsigned c=0;c<guards.size();++c) {
-            const auto guard=replace(replace(guards[c],index,flat),iteration,row+1);
-            const auto value=replace(replace(updates[c],index,flat),iteration,row+1);
-            point=z3::ite(guard,value,point);
-            covered=covered||guards[c];
-        }
-        point=restrict_to_domain(point,valid&&row>=0&&row<count).simplify();
-        const auto candidate=z3::ite(row>=0&&row<iteration,point,entry);
-        const auto active=iteration>=1&&iteration<=count;
-        unsigned obligation=0;
-        auto certify=[&](const z3::expr& premise, const z3::expr& conclusion) {
-            z3::solver checker(ctx);
-            checker.set("timeout",750u);
-            checker.add(valid&&premise&&!conclusion);
-            const auto result=checker.check();
-            if (result!=z3::unsat) {
-                if (const auto* directory=std::getenv("ARITHEXE_SOLVER_TRACE_DIR")) {
-                    std::filesystem::create_directories(directory);
-                    std::ofstream output(std::filesystem::path(directory)/
-                        ("row_"+std::to_string(row.id())+"_"+
-                         std::to_string(obligation)+".smt2"));
-                    output<<checker.to_smt2();
-                }
-            }
-            ++obligation;
-            return result==z3::unsat;
-        };
-        if (!certify(ctx.bool_val(true),replace(candidate,iteration,ctx.int_val(0))==entry) ||
-            !certify(active,replace(covered,index,flat))) return std::nullopt;
-        const auto prior=replace(candidate,iteration,iteration-1);
-        for (unsigned c=0;c<updates.size();++c) {
-            auto update=replace(updates[c],index,flat);
-            const auto reads=get_app_of(update,signature.decl());
-            z3::expr_vector values(ctx);
-            for (const auto& read:reads) {
-                // Cross-cell feedback needs a different composition rule.
-                if (!z3::eq(read,entry)) return std::nullopt;
-                values.push_back(prior);
-            }
-            update=update.substitute(reads,values).simplify();
-            if (!certify(active&&replace(guards[c],index,flat),candidate==update))
-                return std::nullopt;
-        }
-        auto result=replace(candidate,entry,signature);
-        result=replace(result,row,index/stride);
-        result=replace(result,col,index%stride);
-        spdlog::info("[array-region] certified parametric row composition");
-        return result.simplify();
     }
 
     LoopSummarizer::LoopSummarizer(llvm::Loop* loop, state_ptr parent_state)
@@ -238,7 +196,7 @@ namespace ari_exe {
         return addr;
     }
     LoopExecution::~LoopExecution() {
-        assert(states.empty());
+        assert(states.empty() || std::uncaught_exceptions()>0);
     }
 
     LoopExecution::LoopExecution(llvm::Loop *loop, state_ptr parent_state): loop(loop), solver(AnalysisManager::get_instance()->get_z3ctx()), parent_state(parent_state), v_conditions() {
@@ -320,13 +278,57 @@ namespace ari_exe {
             z3ctx.bool_val(true), z3ctx.bool_val(true), {},
             State::RUNNING));
         initial_state->summarizing_loop = loop;
+        const bool native_context=native_array_context(parent_state);
 
         put_header_phis_in_initial_state(initial_state);
+        for (auto& phi:loop->getHeader()->phis()) {
+            if (!native_context ||
+                !phi.getType()->isIntegerTy() || phi.getType()->isIntegerTy(1)) continue;
+            auto* predecessor=parent_state->trace.back();
+            const auto initial=parent_state->evaluate(phi.getIncomingValueForBlock(predecessor));
+            std::set<llvm::Value*> seen{&phi};
+            std::function<bool(llvm::Value*)> unchanged=[&](llvm::Value* incoming) {
+                if (auto* relay=llvm::dyn_cast<llvm::PHINode>(incoming);
+                    relay && loop->contains(relay)) {
+                    // PHI-only cycles relay the same invariant value. Every
+                    // external input/load in the web must match its base.
+                    if (!seen.insert(relay).second) return true;
+                    for (auto& value:relay->incoming_values())
+                        if (!unchanged(value.get())) return false;
+                    return true;
+                }
+                std::optional<z3::expr> next;
+                if (auto* load=llvm::dyn_cast<llvm::LoadInst>(incoming)) {
+                    auto* object=parent_state->memory.get_object_pointed_by(load->getPointerOperand());
+                    if (object && object->is_scalar() &&
+                        loop->isLoopInvariant(load->getPointerOperand()) &&
+                        reads_entry_array(loop,load,parent_state))
+                        next=object->read().as_expr();
+                } else if (loop->isLoopInvariant(incoming) &&
+                           (llvm::isa<llvm::ConstantInt>(incoming) ||
+                            parent_state->memory.get_object(incoming))) {
+                    next=parent_state->evaluate(incoming).as_expr();
+                }
+                if (!next) return false;
+                z3::solver check(z3ctx);check.set("timeout",100u);
+                check.add(parent_state->get_path_condition().as_expr()&&*next!=initial.as_expr());
+                return check.check()==z3::unsat;
+            };
+            bool stable=true;
+            for (unsigned i=0;i<phi.getNumIncomingValues();++i) {
+                if (!loop->contains(phi.getIncomingBlock(i))) continue;
+                auto* incoming=phi.getIncomingValue(i);
+                if (incoming!=&phi && !unchanged(incoming)) { stable=false;break; }
+            }
+            if (stable)
+                initial_state->State::append_path_condition(
+                    Expression(initial_state->evaluate(&phi).as_expr()==initial.as_expr()));
+        }
         // Establish simple inductive bounds before child-loop summaries are
         // computed, rather than only when preparing the parent's recurrence.
         for (auto& phi : loop->getHeader()->phis()) {
             if (!phi.getType()->isIntegerTy() || phi.getType()->isIntegerTy(1) ||
-                !parent_state->session.uses_integer_relaxation()) continue;
+                !native_context) continue;
             bool inductive = true, initialized = false;
             for (unsigned i=0; i<phi.getNumIncomingValues(); ++i) {
                 const auto incoming = phi.getIncomingValue(i);
@@ -351,6 +353,12 @@ namespace ari_exe {
                     Expression(initial_state->evaluate(&phi).as_expr()>=0));
         }
         symbolize_stores(initial_state);
+        if (native_context) {
+            // Child summaries retain bounds on frozen outer coordinates.
+            // Discard entry facts mentioning this loop's fresh state symbols.
+            initial_state->State::append_path_condition(
+                Expression(frozen_loop_domain(loop,parent_state)));
+        }
         for (auto call_inst : get_unknown_calls(loop)) {
             auto name = get_z3_name(call_inst->getName().str()) + "_call_count";
             initial_state->unknown_call_counters.insert_or_assign(call_inst, z3ctx.int_const(name.c_str()));
@@ -425,6 +433,7 @@ namespace ari_exe {
                 auto addr = parse_ptr(new_state->memory.get_object(ptr), new_state);
                 auto pointed_obj = parent_state->memory.get_object(addr);
                 assert(pointed_obj && "Pointed object must exist");
+                addr.offset=normalize_array_coordinates(*pointed_obj,addr.offset,new_state);
 
                 auto load_value = pointed_obj->read(addr.offset);
                 const z3::expr path =
@@ -934,6 +943,8 @@ namespace ari_exe {
                 instantiated = instantiated.substitute(from, to);
                 z3::solver certificate(z3ctx);
                 certificate.set("timeout", 200u);
+                if (native_array_context(parent_state))
+                    certificate.add(frozen_loop_domain(loop,parent_state));
                 certificate.add(!instantiated);
                 if (certificate.check() != z3::unsat) N_value = z3::expr_vector(z3ctx);
             }
@@ -1145,54 +1156,6 @@ namespace ari_exe {
                 summary->add_closed_form(array->get_signature(), entry_value.as_expr());
                 summary->add_preserved_value(array->get_llvm_value());
                 continue;
-            }
-            if (parent_state->session.uses_integer_relaxation() &&
-                !loop->getSubLoops().empty() &&
-                !scalar_summary.is_over_approximated() &&
-                scalar_summary.has_functional_iteration_count() &&
-                array->get_indices().size()==1) {
-                const auto n=manager->get_ind_var();
-                auto valid=arithmetic_conjuncts(parent_state->get_path_condition().as_expr());
-                const auto index=array->get_indices()[0];
-                valid=valid&&index>=0&&index<array->get_sizes()[0].as_expr();
-                std::vector<z3::expr> guards,updates;
-                z3::expr_vector from(z3ctx),to(z3ctx);
-                from.push_back(n);to.push_back(n-1);
-                for (const auto& state:final_states) {
-                    const auto final_array=state->memory.get_object(array->get_addr());
-                    auto guard=scalar_summary.evaluate_expr(state->path_condition_in_loop.as_expr());
-                    auto value=scalar_summary.evaluate_expr(final_array->get_value().as_expr());
-                    guards.push_back(guard.substitute(from,to).simplify());
-                    updates.push_back(value.substitute(from,to).simplify());
-                }
-                // The loop count is a useful stride proposal for square VLAs;
-                // allocation factors also cover rectangular parametric arrays.
-                std::vector<z3::expr> strides{*scalar_summary.get_N()};
-                const auto extent=array->get_sizes()[0].as_expr().simplify();
-                if (extent.is_app() && extent.decl().decl_kind()==Z3_OP_MUL)
-                    for (const auto& factor:extent.args())
-                    if (!factor.is_numeral()) strides.push_back(factor);
-                std::optional<z3::expr> row_summary;
-                for (const auto& stride:strides) {
-                    row_summary=compose_strided_rows(array->get_signature(),n,
-                        *scalar_summary.get_N(),stride,valid,guards,updates);
-                    if (row_summary) break;
-                }
-                if (row_summary) {
-                    auto value=*row_summary;
-                    z3::expr_vector counts(z3ctx);counts.push_back(*scalar_summary.get_N());
-                    value=value.substitute(from,counts).simplify();
-                    const auto reads=get_app_of(value,array->get_signature().decl());
-                    z3::expr_vector entries(z3ctx);
-                    for (const auto& read:reads) {
-                        auto initial=entry_value.as_expr();
-                        entries.push_back(initial.substitute(array->get_indices(),read.args()));
-                    }
-                    value=value.substitute(reads,entries).simplify();
-                    value=restrict_to_domain(value,valid).simplify();
-                    summary->add_closed_form(array->get_signature(),value);
-                    continue;
-                }
             }
             std::vector<z3::expr> conditions;
             std::vector<rec_ty> eqs;
@@ -1641,8 +1604,11 @@ namespace ari_exe {
         auto& z3ctx = manager->get_z3ctx();
         z3::expr N = iteration_parameter;
         z3::expr n = manager->get_ind_var();
+        const auto parameter_domain=native_array_context(parent_state)
+            ? frozen_loop_domain(loop,parent_state) : z3ctx.bool_val(true);
         loop_guard_closed_form = simplify_boolean_condition(
-            restrict_to_domain(loop_guard_closed_form, n >= 0), n >= 0);
+            restrict_to_domain(loop_guard_closed_form, n>=0&&parameter_domain),
+            n>=0&&parameter_domain);
         z3::expr constraints = z3::forall(n, z3::implies(0 <= n && n < N, loop_guard_closed_form.substitute(params, values)));
         z3::expr_vector src(z3ctx);
         z3::expr_vector dst(z3ctx);
@@ -1692,7 +1658,10 @@ namespace ari_exe {
             auto path_cond = state->get_path_condition();
             acc_exit_cond = acc_exit_cond || path_cond.as_expr();
         }
-        return (!acc_exit_cond).simplify();
+        const auto result=(!acc_exit_cond).simplify();
+        return native_array_context(parent_state)
+            ? simplify_boolean_condition(result,frozen_loop_domain(loop,parent_state))
+            : result;
     }
 
     std::vector<llvm::PHINode*>

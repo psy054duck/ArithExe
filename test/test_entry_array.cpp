@@ -12,6 +12,9 @@ bool classify(const std::string& body, bool aliases = false, bool integer = true
     auto& context = session.analyses().get_z3ctx();
     llvm::LLVMContext llvm_context;
     const std::string ir = "declare void @clobber(ptr)\n"
+        "define i64 @local_identity(i64 %value) {\nentry:\n"
+        "%slot = alloca i64\nstore i64 %value,ptr %slot\n"
+        "%result = load i64,ptr %slot\nret i64 %result\n}\n"
         "define void @accesses(ptr %a, ptr %b, i64 %N) {\n"
         "entry: br label %loop\nloop:\n"
         "%i = phi i64 [0,%entry],[%inc,%loop]\n" + body +
@@ -84,6 +87,11 @@ TEST(PolyhedralEntryReads, ByteOverlapIsNotMistakenForDistinctElements) {
 
 TEST(PolyhedralEntryReads, UnknownMemoryEffectsPreventSnapshot) {
     EXPECT_FALSE(classify("call void @clobber(ptr %a)\n%read = load i32,ptr %a"));
+}
+
+TEST(PolyhedralEntryReads, CalleeLocalStoresDoNotModifyTheEntryArray) {
+    EXPECT_TRUE(classify("%ignored = call i64 @local_identity(i64 %i)\n"
+                         "%read = load i32,ptr %a"));
 }
 
 TEST(PolyhedralEntryReads, ReadOnlyNonAffineAccessUsesEntry) {

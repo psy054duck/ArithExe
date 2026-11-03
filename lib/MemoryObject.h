@@ -65,6 +65,9 @@ namespace ari_exe {
                 sizes = new_sizes;
             }
 
+            bool has_native_vla_shape() const { return native_vla_shape; }
+            void set_native_vla_shape(bool value) { native_vla_shape = value; }
+
             // is the memory object a scalar value?
             bool is_scalar() const { return !is_pointer() && indices.size() == 0; };
 
@@ -118,6 +121,7 @@ namespace ari_exe {
             std::vector<Expression> sizes;
 
             bool _is_signed = true;
+            bool native_vla_shape = false;
             // the name of this object, used for generate z3 function.
             std::string name;
 

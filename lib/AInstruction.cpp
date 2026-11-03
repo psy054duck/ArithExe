@@ -3,6 +3,7 @@
 #include "RelaxedIntegerSemantics.h"
 #include "PathAccelerator.h"
 #include "VerificationSession.h"
+#include "ArrayShape.h"
 #include <spdlog/spdlog.h>
 
 #include "z3++.h"
@@ -918,7 +919,11 @@ AInstructionAlloca::execute(state_ptr state) {
         sizes.push_back(z3ctx.int_val(std::to_string(type->getArrayNumElements()).c_str()));
         type = type->getArrayElementType();
     }
-    new_state->memory.allocate(inst, sizes);
+    auto native_shape=recover_array_shape(alloca_inst,new_state,count);
+    const bool native=!native_shape.empty();
+    if (native) sizes=native_shape;
+    auto* array=new_state->memory.allocate(inst, sizes);
+    array->set_native_vla_shape(native);
     new_state->step_pc();
     return {new_state};
 }
@@ -2237,7 +2242,10 @@ parse_gep(llvm::GetElementPtrInst* gep, state_ptr state) {
                 throw std::runtime_error("Nonzero scalar-object GEP offset");
             continue;
         }
-        if (dimensions == 1) {
+        if (pointed_obj->has_native_vla_shape()) {
+            addr.offset=add_coordinate_offset(*pointed_obj,addr.offset,
+                index*Expression(cells.simplify()));
+        } else if (dimensions == 1) {
             // VLA lowering uses chained scalar GEPs: accumulate i*n, then j.
             addr.offset[0] = addr.offset[0] + index * Expression(cells.simplify());
         } else if (rank < dimensions) {
@@ -2263,6 +2271,7 @@ AInstructionLoad::execute(state_ptr state) {
     }
     auto pointed_obj = new_state->memory.get_object(addr);
     assert(pointed_obj && "Pointed object must exist");
+    addr.offset=normalize_array_coordinates(*pointed_obj,addr.offset,new_state);
 
     auto load_value = pointed_obj->read(addr.offset);
     new_state->memory.put_temp(inst, load_value);
@@ -2304,6 +2313,7 @@ AInstructionStore::execute(state_ptr state) {
     }
 
     auto pointed_obj = new_state->memory.get_object_pointed_by(ptr);
+    offset=normalize_array_coordinates(*pointed_obj,offset,new_state);
     auto value_expr = state->evaluate(value, pointed_obj->is_signed());
     assert(pointed_obj && "Pointed object must exist");
     if (value->getType()->isIntegerTy() &&

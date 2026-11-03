@@ -97,18 +97,6 @@ def _solve_ultimately_periodic_symbolic(rec, bnd, precondition, enable_bounded_c
                 if certified(condition, candidate):
                     accelerated.append((condition, candidate))
                     proved.append(condition)
-            # A path template describes a parameter region, not necessarily
-            # the whole remaining space. The outer loop samples uncovered
-            # regions separately; do not run QE for a template already proved
-            # to cover its sample.
-            if proved:
-                sampled = z3.simplify(z3.substitute(z3.Or(*proved), list(cur_val.items())))
-                sample_check = z3.Solver(ctx=rec.ind_var.ctx)
-                sample_check.set(timeout=100)
-                if sample_check.check(z3.Not(sampled)) == z3.unsat:
-                    accepted.extend(accelerated)
-                    budget.stats['boundary_solutions'] += len(accelerated)
-                    break
             remaining = uncovered_region(region, proved, budget)
             if z3.is_false(remaining):
                 accepted.extend(accelerated)
