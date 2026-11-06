@@ -30,6 +30,18 @@ def is_contradiction(f):
 def is_literal(f):
     return is_atom(f) or z3.is_not(f) and is_atom(f.arg(0))
 
+def contains_quantifier(expr):
+    pending, seen = [expr], set()
+    while pending:
+        term = pending.pop()
+        if z3.is_quantifier(term):
+            return True
+        identity = term.get_id()
+        if identity not in seen:
+            seen.add(identity)
+            pending.extend(term.children())
+    return False
+
 def get_vars(f: z3.ExprRef):
     '''f: a formula in z3
        ret: set of all variables in f'''

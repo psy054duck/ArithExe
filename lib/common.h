@@ -15,6 +15,8 @@
 #include "z3++.h"
 
 namespace ari_exe {
+    bool is_verifier_error_exit(const llvm::BasicBlock* block);
+
     struct ClosedFormVariable {
         const llvm::Value* value;
         std::string source_name;

@@ -107,6 +107,7 @@ namespace ari_exe {
 
             void record_assertion(const loop_state_ptr& state,
                                   const Expression& assertion);
+            llvm::BasicBlock* record_error_branch(const loop_state_ptr& state);
 
             /**
              * @brief Check if the given state is an exit state

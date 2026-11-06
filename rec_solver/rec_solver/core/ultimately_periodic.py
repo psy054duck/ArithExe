@@ -11,7 +11,7 @@ from .recurrence import Recurrence, LoopRecurrence
 from .closed_form import PeriodicClosedForm, PiecewiseClosedForm, SymbolicClosedForm
 from .solvable_polynomial import solve_solvable_map, is_solvable_map
 from .bounded_cfinite import can_attempt_bounded_cfinite_map, solve_bounded_cfinite_map, BoundedCFiniteError
-from .logic_simplification import DNFConverter, my_simplify
+from .logic_simplification import DNFConverter, contains_quantifier, my_simplify
 from .verification import is_inductive_scalar_closed_form
 from .modulo_normalization import normalize_constant_modulo
 from .phase_lengths import PhasePlan, count_variables, phase_length_scope
@@ -187,6 +187,10 @@ def _solve_phase_template(rec, pattern, plan, precondition, enable_bounded_cfini
     constraint = z3.simplify(z3.And(precondition, formula))
     if z3.is_false(constraint):
         return []
+    # The arithmetic extractor assumes a quantifier-free formula. In
+    # particular, atoms below a binder cannot be passed to Z3 as assumptions.
+    if contains_quantifier(constraint):
+        raise UnsolvableError('Phase-template constraint remains quantified after elimination.')
     if variables:
         solution = utils.solve_piecewise_sol(constraint, variables, sort=z3.Int,
                                             precondition=precondition)

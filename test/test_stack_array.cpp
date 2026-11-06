@@ -3,8 +3,55 @@
 #include "AInstruction.h"
 #include "engine.h"
 #include "ArrayShape.h"
+#include "rec_solver.h"
 
 using namespace ari_exe;
+
+TEST(RecurrencePreparation, EntrySeedsDependOnChangingFormalCoordinates) {
+    z3::context ctx;
+    const auto q=ctx.int_const("seed_q"),t=ctx.int_const("seed_t");
+    const auto f=ctx.function("seed_f",ctx.int_sort(),ctx.int_sort(),ctx.int_sort());
+    const auto entry=ctx.function("seed_entry",ctx.int_sort(),ctx.int_sort());
+    for (bool moving:{false,true}) {
+        rec_solver solver(ctx);
+        solver.set_ind_var(t);
+        std::vector<z3::expr> conditions{t<=0,t>0};
+        std::vector<rec_ty> equations{
+            {{f(q,t),z3::ite(q==0,ctx.int_val(0),entry(q))}},
+            {{f(q,t),f(moving ? q-1 : q,t-1)+1}}};
+        solver.set_eqs(conditions,equations);
+        const bool abstracted=solver.rec2string().find("ari_rec_parameter_")!=std::string::npos;
+        EXPECT_EQ(abstracted,!moving);
+    }
+}
+
+TEST(GuardedArrayTupling, ProvesMultipathProgressionAndRejectsChangedAssertion) {
+    const char* previous=std::getenv("ARITHEXE_MULTIVARIATE_STRATEGY");
+    struct Restore {
+        bool present;
+        std::string value;
+        ~Restore() {
+            if (present) setenv("ARITHEXE_MULTIVARIATE_STRATEGY",value.c_str(),1);
+            else unsetenv("ARITHEXE_MULTIVARIATE_STRATEGY");
+        }
+    } restore{previous!=nullptr,previous ? previous : ""};
+    setenv("ARITHEXE_MULTIVARIATE_STRATEGY","tupling",1);
+    for (const auto& prefix:{std::string("true"),std::string("false")}) {
+        Engine engine(std::string(ARITHEXE_TEST_BENCHMARK_DIR)+
+                      "/arrays/"+prefix+"_multipath_progression.c");
+        engine.get_session().set_ignore_bitwidth_constraints(true);
+        EXPECT_EQ(engine.verify(),prefix=="true" ? HOLD : FAIL)<<engine.get_issue_message();
+    }
+}
+
+TEST(DirectVerificationCalls, LatchErrorBranchIsAnObligationNotAnAssumption) {
+    for (const auto& prefix:{std::string("true"),std::string("false")}) {
+        Engine engine(std::string(ARITHEXE_TEST_BENCHMARK_DIR)+
+                      "/arrays/"+prefix+"_direct_latch_assert.c");
+        engine.get_session().set_ignore_bitwidth_constraints(true);
+        EXPECT_EQ(engine.verify(),prefix=="true" ? HOLD : FAIL)<<engine.get_issue_message();
+    }
+}
 
 TEST(CertifiedArithmetic, ExactPolynomialDivisionsDoNotInventDivisibility) {
     VerificationSession session;

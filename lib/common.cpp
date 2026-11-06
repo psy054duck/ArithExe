@@ -1,6 +1,24 @@
 #include "common.h"
+#include "llvm/IR/Instructions.h"
 
 namespace ari_exe {
+    bool is_verifier_error_exit(const llvm::BasicBlock* block) {
+        if (!llvm::isa<llvm::UnreachableInst>(block->getTerminator())) return false;
+        bool found=false;
+        for (const auto& instruction:block->instructionsWithoutDebug()) {
+            if (llvm::isa<llvm::UnreachableInst>(instruction)) continue;
+            const auto* call=llvm::dyn_cast<llvm::CallInst>(&instruction);
+            const auto* function=call ? llvm::dyn_cast<llvm::Function>(
+                call->getCalledOperand()->stripPointerCasts()) : nullptr;
+            if (!function || found) return false;
+            const auto name=function->getName();
+            if (name!="__VERIFIER_error" && name!="reach_error" &&
+                name!="__assert_fail") return false;
+            found=true;
+        }
+        return found;
+    }
+
     z3::expr_vector get_app_of(z3::expr e, z3::func_decl f) {
         z3::expr_vector result(e.ctx());
         if (e.is_app() && e.decl().id() == f.id()) {

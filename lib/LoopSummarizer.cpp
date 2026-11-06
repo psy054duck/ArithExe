@@ -374,11 +374,32 @@ namespace ari_exe {
             assertion.as_expr()));
     }
 
+    llvm::BasicBlock*
+    LoopExecution::record_error_branch(const loop_state_ptr& state) {
+        auto* branch=llvm::dyn_cast<llvm::BranchInst>(state->pc->inst);
+        if (!branch || !branch->isConditional()) return nullptr;
+        const bool true_error=is_verifier_error_exit(branch->getSuccessor(0));
+        const bool false_error=is_verifier_error_exit(branch->getSuccessor(1));
+        if (true_error==false_error) return nullptr;
+        const auto condition=state->evaluate(branch->getCondition());
+        record_assertion(state,true_error ? !condition : condition);
+        return branch->getSuccessor(true_error ? 1 : 0);
+    }
+
     loop_state_list
     LoopExecution::step(loop_state_ptr state) {
         auto pc = state->pc;
         auto& z3ctx = state->z3ctx;
         loop_state_list new_states;
+        if (auto* continuation=record_error_branch(state)) {
+            auto next=std::make_shared<LoopState>(*state);
+            next->trace.push_back(pc->inst->getParent());
+            next->step_pc(AInstruction::create(
+                &*continuation->instructionsWithoutDebug().begin()));
+            // Match an assertion call: continue symbolically without
+            // assuming the assertion that still has to be proved.
+            return {next};
+        }
         if (auto call_inst = llvm::dyn_cast_or_null<llvm::CallInst>(pc->inst)) {
             if (is_uninterpreted_loop_call(call_inst)) {
                 auto name = "ari_" + call_inst->getName().str() + "_unknown";
@@ -523,10 +544,15 @@ namespace ari_exe {
                 continue;
             }
             if (is_final_state(cur_state)) {
+                record_error_branch(cur_state);
                 final_states.push_back(cur_state);
                 continue;
             }
             if (is_exit_state(cur_state)) {
+                if (is_verifier_error_exit(cur_state->pc->get_block())) {
+                    saw_unknown=true;
+                    continue;
+                }
                 exit_states.push_back(cur_state);
                 continue;
             }
@@ -1237,7 +1263,24 @@ namespace ari_exe {
                     }
                 }
             }
-            if (closed.empty()) closed=solve_recurrence(conditions,eqs);
+            if (closed.empty()) {
+                const auto* strategy=std::getenv("ARITHEXE_MULTIVARIATE_STRATEGY");
+                const auto recursive_function=get_array_rec_func(array);
+                const bool multiple_reads=std::any_of(eqs.begin(),eqs.end(),
+                    [&](const rec_ty& equations) {
+                        return std::any_of(equations.begin(),equations.end(),
+                            [&](const auto& equation) {
+                                return get_app_of(equation.second,recursive_function).size()>1;
+                            });
+                    });
+                if (strategy && std::string(strategy)=="tupling" && multiple_reads) {
+                    // Keep established seed cells visible to the tuple solver.
+                    // The signature-only base would hide them until after solving.
+                    eqs.front().insert_or_assign(base_eq.begin()->first,entry_value.as_expr());
+                    spdlog::info("[array-tupling] retaining entry summary in base cases");
+                }
+                closed=solve_recurrence(conditions,eqs);
+            }
             spdlog::info("Array summaries are computed successfully");
 
             z3::expr_vector n_src(z3ctx);

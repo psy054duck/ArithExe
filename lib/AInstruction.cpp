@@ -965,6 +965,13 @@ AInstructionCall::execute(state_ptr state) {
                 called_func->getName() == "__VERIFIER_error" ||
                 called_func->getName() == "__assert_fail")) {
         return {execute_reach_error(call_state)};
+    } else if (called_func && called_func->isDeclaration() &&
+               called_func->getName()=="abort" &&
+               called_func->hasFnAttribute(llvm::Attribute::NoReturn)) {
+        auto stopped=clone_state_preserving_type(call_state);
+        // An abort is not a successful loop iteration or an error call.
+        stopped->status=call_state->is_summarizing() ? State::UNKNOWN : State::TERMINATED;
+        return {stopped};
     } else if (called_func && called_func->getName().find("assume") != std::string::npos) {
         // assume function, add the condition to the path condition
         return {execute_assume(call_state)};
@@ -1804,9 +1811,24 @@ AInstructionPhi::execute_if_summarizable(state_ptr state) {
     if (phi_inst != &*header->phis().begin()) return {};
 
     auto exit_block = loop->getUniqueExitBlock();
-    if (!exit_block) return {};
+    if (!exit_block) {
+        llvm::SmallVector<llvm::BasicBlock*,4> exits;
+        loop->getExitBlocks(exits);
+        for (auto* candidate:exits) {
+            if (is_verifier_error_exit(candidate)) continue;
+            if (exit_block) return {};
+            exit_block=candidate;
+        }
+        if (!exit_block) return {};
+    }
     llvm::SmallVector<llvm::BasicBlock*, 4> exiting_blocks;
     loop->getExitingBlocks(exiting_blocks);
+    exiting_blocks.erase(std::remove_if(exiting_blocks.begin(),exiting_blocks.end(),
+        [&](llvm::BasicBlock* block) {
+            return llvm::none_of(llvm::successors(block),
+                [&](llvm::BasicBlock* successor) { return successor==exit_block; });
+        }),exiting_blocks.end());
+    if (exiting_blocks.empty()) return {};
     auto exit_predecessor = exiting_blocks.front();
     if (std::find(exiting_blocks.begin(), exiting_blocks.end(), header) !=
         exiting_blocks.end()) exit_predecessor = header;

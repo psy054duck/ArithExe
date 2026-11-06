@@ -366,11 +366,42 @@ call arguments. Mutually recursive and nested-call functions are unsupported.
 Array indices can be symbolic parameters: `multidimensional.rec` tuples a
 three-argument array recurrence while preserving both index arguments.
 
-Not every array recurrence fits the current component language. In particular,
-`array_fibonacci.rec` combines a moving write position with frame branches;
-its unconditional tuple of shifted reads grows beyond the finite bound. The
-test explicitly expects rejection. Supporting it requires guarded component
-definitions and/or more selective unfolding; it is not reported as supported.
+Moving-write array recurrences can require frontier components in addition to
+the queried cell. The bounded search first tries selective unfolding, then
+unfolds auxiliary components as well. Singular leaf calls can be lifted to
+invertible child-state maps by preserving formal coordinates; affine equalities
+proved under the branch guard also propose coordinate rewrites. These maps are
+discovery candidates, not assumptions: every leaf must match a tuple component,
+every fold identity must be certified, and one common rank must decrease.
+Component, branch, and round limits still apply. The array Fibonacci fixture
+remains a rejection test at a three-component budget; transformation success
+does not establish that its downstream closed form can be computed.
+
+For genuinely tupled array histories, a bounded polynomial-candidate pass can
+avoid an expensive APS traversal. It discovers a possible written-cell domain
+by Presburger projection of update guards and uses the existing polynomial
+template generator (degree at most two, at most sixteen monomials). Integer
+coefficients are refined by SMT counterexamples, with a two-second search
+budget. No sampled fit is accepted without universal checks of every tuple
+equation, followed by the original recurrence certificate. Unknown results or
+budget exhaustion leave the existing APS path intact. The write-domain shape
+is only a template proposal; neither unique writes nor the proposed domain is
+trusted as an independent acceleration theorem.
+
+The frontend exposes established entry-memory expressions in base cases only
+for multi-read recurrences using the tupling strategy. This preserves initialized
+seed cells that would otherwise be hidden behind an unconstrained input
+function until after solving. It does not infer seeds from assertions, and the
+original pivot route is unchanged. `multipath_array_progression.rec` and the
+positive/negative multipath progression C fixtures exercise this path.
+Entry-memory conditionals involving a changing formal coordinate are not
+abstracted into invariant scalar parameters; stable-coordinate abstraction is
+retained. A direct branch to a pure verifier-error block is recorded as an
+assertion obligation, including at a latch, rather than assumed on the normal
+body path. Only normal exits select the continuation, and an unhandled error
+exit still rejects summarization. A declared nonreturning `abort` terminates
+ordinary execution; inside summarization it remains unsupported rather than
+being mistaken for a completed iteration.
 No whole-SV-COMP performance improvement is claimed from the unit tests.
 
 Initial downstream-solver check: `guarded_affine.rec` is successfully tupled,
@@ -391,7 +422,6 @@ evidence of a tupling-versus-pivot separation.
 solved recurrence with `ARITHEXE_SOLVER_TIMEOUT_MS=60000`; the initial
 10-second worker limit was too small. It checks `progression(n,a)=a+n` for
 `0<=n<=50` and `0<=a<=100` under the ordinary ILP32 verifier semantics.
-The Python suite has 37 tests, including nearly-tail dispatch regressions,
-exact tuple-component comparisons,
+The Python tests include nearly-tail dispatch regressions, exact tuple-component comparisons,
 multi-path and cross-argument cases, a three-call recurrence, scalar
 certification, framed worker integration, and explicit rejection paths.

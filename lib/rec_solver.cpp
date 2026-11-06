@@ -541,8 +541,19 @@ rec_solver::set_eqs(const std::vector<z3::expr>& _conds, const std::vector<rec_t
     std::set<unsigned> recurrence_declarations;
     for (const rec_ty& equations : _exprs) {
         for (const auto& [lhs, rhs] : equations) {
-            (void)rhs;
             recurrence_declarations.insert(lhs.decl().id());
+            for (unsigned i=0;i<lhs.num_args();++i) {
+                const auto argument=lhs.arg(i);
+                if (!argument.is_const() ||
+                    argument.decl().decl_kind()!=Z3_OP_UNINTERPRETED) continue;
+                for (const auto& call:get_app_of(rhs,lhs.decl())) {
+                    if (!z3::eq(call.arg(i).simplify(),argument)) {
+                        // A formal coordinate that changes in recursive calls
+                        // is not an invariant parameter of an entry-memory ITE.
+                        recurrence_declarations.insert(argument.decl().id());
+                    }
+                }
+            }
         }
     }
     while (true) {

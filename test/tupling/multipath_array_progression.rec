@@ -1,0 +1,8 @@
+if (And(Or(t<=0,q<0),q==0)) { A(q,t)=0; }
+else if (And(Or(t<=0,q<0),q==1)) { A(q,t)=1; }
+else if (Or(t<=0,q<0)) { A(q,t)=entry(q); }
+else if (And(q==t+1,t%2==1)) {
+    A(q,t)=2*A(t,t-1)-A(t-1,t-1);
+} else if (q==t+1) {
+    A(q,t)=3*A(t,t-1)-2*A(t-1,t-1)-1;
+} else { A(q,t)=A(q,t-1); }

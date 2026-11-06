@@ -174,7 +174,7 @@ class _Tupler:
             if solver.check() != z3.unsat:
                 raise TuplingUnsupported("nonlinear recursive-result combination")
 
-    def unfold(self, components):
+    def unfold(self, components, unfold_all=False):
         rows = [(z3.BoolVal(True), ())]
         for index, component in enumerate(components):
             new_rows = []
@@ -185,7 +185,7 @@ class _Tupler:
                         # Unfold the selected computation, not every tuple member:
                         # e.g. retain f(n-1) so it folds to the child's first result.
                         expr = (self.rhs(case, component)
-                                if index == 0 or isinstance(case, BaseCase)
+                                if unfold_all or index == 0 or isinstance(case, BaseCase)
                                 else self.func(*component))
                         new_rows.append((condition, expressions + (expr,)))
                         if len(new_rows) > self.options.max_branches:
@@ -209,32 +209,98 @@ class _Tupler:
     def equivalent(self, guard, left, right):
         return self.proves(guard, z3.And(*[a == b for a, b in zip(left, right)]))
 
+    def anchor_candidates(self, guard, values):
+        """Propose affine child states; folding and ranking certify their use."""
+        yield values
+        matrix, _ = self.affine(values)
+        if abs(matrix.det()) == 1:
+            return
+        equalities, pending, seen = [], [guard], set()
+        while pending and len(seen) < 256 and len(equalities) < 8:
+            atom = pending.pop()
+            if atom.get_id() in seen:
+                continue
+            seen.add(atom.get_id())
+            if z3.is_eq(atom) and all(z3.is_int(v) for v in atom.children()):
+                try:
+                    row, offset = self.affine([atom.arg(0) - atom.arg(1)])
+                except TuplingUnsupported:
+                    continue
+                if self.proves(guard, atom):
+                    equalities.append((row, offset[0]))
+            pending.extend(atom.children())
+        replacements = []
+        for row, offset in equalities:
+            for index, argument in enumerate(self.args):
+                coefficient = int(row[0, index])
+                if abs(coefficient) != 1:
+                    continue
+                rest = int(offset) + sum(int(row[0, j]) * other
+                    for j, other in enumerate(self.args) if j != index)
+                replacements.append((argument, z3.simplify(-coefficient * rest)))
+        candidates, keys = [values], {tuple(v.sexpr() for v in values)}
+        for candidate in candidates:
+            for replacement in replacements:
+                # Rewrite coordinates independently: replacing every coordinate
+                # can leave the map singular even when an affine extension exists.
+                for index, value in enumerate(candidate):
+                    changed = z3.simplify(z3.substitute(value, replacement))
+                    proposal = candidate[:index] + (changed,) + candidate[index + 1:]
+                    key = tuple(v.sexpr() for v in proposal)
+                    if key in keys:
+                        continue
+                    if len(keys) >= 32:
+                        return
+                    keys.add(key)
+                    if not self.equivalent(guard, values, proposal):
+                        continue
+                    yield proposal
+                    candidates.append(proposal)
+        if matrix.det() != 0:
+            return
+        # A tuple call may compute unused components. Retain formal coordinates
+        # to lift a frontier-only call into a child state of the original arity.
+        # No equality to the original call is assumed: every leaf must still
+        # fold to a component at this state, and a common rank must decrease.
+        candidates = [values]
+        for candidate in candidates:
+            for index, argument in enumerate(self.args):
+                proposal = candidate[:index] + (argument,) + candidate[index + 1:]
+                key = tuple(v.sexpr() for v in proposal)
+                if key in keys:
+                    continue
+                if len(keys) >= 32:
+                    return
+                keys.add(key)
+                yield proposal
+                candidates.append(proposal)
+
     def fold(self, guard, expressions, components):
         calls = self.all_calls(expressions)
         if not calls:
             return None, (), expressions
         candidates = []
         for call in calls:
-            anchor = tuple(call.children())
-            try:
-                inverse = self.inverse(anchor)
-            except TuplingUnsupported:
-                continue
-            transformed = [tuple(self.at(v, anchor) for v in t) for t in components]
-            missing, matches = [], []
-            for leaf in calls:
-                match = next((i for i, values in enumerate(transformed)
-                              if self.equivalent(guard, leaf.children(), values)), None)
-                if match is None:
-                    relative = tuple(self.at(v, inverse) for v in leaf.children())
-                    missing.append(relative)
-                else:
-                    matches.append((leaf, match))
-            # Prefer existing folds, then small argument shifts (e.g. n-1 over n-2).
-            matrix, offset = self.affine(anchor)
-            cost = sum(abs(int(c)) for c in matrix - sp.eye(len(self.args)))
-            cost += sum(abs(int(c)) for c in offset)
-            candidates.append((len(missing), cost, call.sexpr(), anchor, missing, matches))
+            for anchor in self.anchor_candidates(guard, tuple(call.children())):
+                try:
+                    inverse = self.inverse(anchor)
+                except TuplingUnsupported:
+                    continue
+                transformed = [tuple(self.at(v, anchor) for v in t) for t in components]
+                missing, matches = [], []
+                for leaf in calls:
+                    match = next((i for i, values in enumerate(transformed)
+                                  if self.equivalent(guard, leaf.children(), values)), None)
+                    if match is None:
+                        relative = tuple(self.at(v, inverse) for v in leaf.children())
+                        missing.append(relative)
+                    else:
+                        matches.append((leaf, match))
+                # Prefer existing folds, then small argument shifts (e.g. n-1 over n-2).
+                matrix, offset = self.affine(anchor)
+                cost = sum(abs(int(c)) for c in matrix - sp.eye(len(self.args)))
+                cost += sum(abs(int(c)) for c in offset)
+                candidates.append((len(missing), cost, call.sexpr(), anchor, missing, matches))
         if not candidates:
             raise TuplingUnsupported("no invertible affine fold anchor")
         _, _, _, anchor, missing, matches = min(candidates, key=lambda c: c[:3])
@@ -252,10 +318,18 @@ class _Tupler:
         raise TuplingUnsupported("no common nonnegative decreasing affine ranking found")
 
     def run(self):
+        try:
+            return self.run_strategy(False)
+        except TuplingUnsupported:
+            # Selective unfolding closes scalar recurrences such as Fibonacci;
+            # array frames can instead need the frontier components unfolded.
+            return self.run_strategy(True)
+
+    def run_strategy(self, unfold_all):
         components = [self.args]
         for round_number in range(1, self.options.max_rounds + 1):
             rows, additions = [], []
-            for guard, expressions in self.unfold(components):
+            for guard, expressions in self.unfold(components, unfold_all):
                 expressions = self.reduce_base_calls(guard, expressions)
                 anchor, missing, matches = self.fold(guard, expressions, components)
                 for relative in missing:
@@ -333,7 +407,13 @@ def solve_tupled_rec(rec, is_array=False, options=None):
             for case in target.get_rec_cases()
         ])
     else:
-        target = tuple_recurrence(rec, options).recurrence
+        result = tuple_recurrence(rec, options)
+        from .tuple_polynomials import solve_polynomial_array_tuple
+        value = solve_polynomial_array_tuple(_Tupler(rec, options), result)
+        if value is not None:
+            certify_closed_form(rec, value, options)
+            return MultiFuncClosedForm(rec.func_sig, value)
+        target = result.recurrence
     from .base_inputs import normalize_base_inputs
     target, restore_inputs = normalize_base_inputs(target, options)
     if not target.get_rec_cases():
